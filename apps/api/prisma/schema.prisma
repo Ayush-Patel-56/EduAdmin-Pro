@@ -1,0 +1,74 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+}
+
+enum MembershipStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  fullName      String
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  memberships SchoolMembership[]
+}
+
+model School {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships SchoolMembership[]
+  joinCodes   SchoolJoinCode[]
+}
+
+// Role lives on the membership, not the user: an admin can belong to many
+// schools, a teacher to one active school at a time.
+model SchoolMembership {
+  id        String           @id @default(uuid())
+  userId    String
+  schoolId  String
+  role      Role
+  status    MembershipStatus @default(PENDING)
+  createdAt DateTime         @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, schoolId])
+  @@index([schoolId])
+}
+
+// Separate codes per role so a teacher code can never grant admin access.
+// Codes can be revoked and regenerated if leaked.
+model SchoolJoinCode {
+  id        String    @id @default(uuid())
+  schoolId  String
+  code      String    @unique
+  role      Role
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId])
+}
