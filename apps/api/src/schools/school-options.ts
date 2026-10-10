@@ -11,14 +11,6 @@ export const STANDARD_BOARDS = [
 
 // Display order matters: it's how class ranges like "6th - 12th" are derived.
 export const CLASS_OPTIONS = [
-  'Nursery',
-  'LKG',
-  'UKG',
-  '1st',
-  '2nd',
-  '3rd',
-  '4th',
-  '5th',
   '6th',
   '7th',
   '8th',
