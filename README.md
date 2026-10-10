@@ -35,10 +35,9 @@ Local development uses the Neon **`dev`** branch, a copy of `production`. Point 
 
 ## Accounts & invite codes
 
-1. **Admin invite code:** required to create an admin account. You (the platform owner) create these; they live in the database, not in code.
+1. **Admin invite code:** required to create an admin account. The permanent code is **`ADMIN123`** (unlimited uses, never expires). A migration creates it in every environment and restores it if it's ever revoked. Extra one-off codes can still be issued:
    ```bash
-   pnpm --filter api invite:create -- "Note" --code ADMIN123              # shared, unlimited
-   pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14 # one-off, random code
+   pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14
    ```
 2. After logging in, an admin either **creates a school** or **joins an existing school** with that school's invite code.
 3. **School invite code:** every school gets a unique code (e.g. `GFCZ-BBYB`), shown on its dashboard.
