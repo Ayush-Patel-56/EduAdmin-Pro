@@ -38,7 +38,7 @@ const router = createBrowserRouter([
 
   { path: '/onboarding', element: adminOnly(<OnboardingPage />) },
   { path: '/onboarding/create', element: adminOnly(<CreateSchoolPage />) },
-  { path: '/onboarding/join', element: adminOnly(<JoinSchoolPage backTo="/onboarding" after="confirm" />) },
+  { path: '/onboarding/join', element: adminOnly(<JoinSchoolPage />) },
   { path: '/onboarding/done', element: adminOnly(<SetupCompletePage />) },
 
   {
@@ -64,7 +64,6 @@ const router = createBrowserRouter([
       })),
     ],
   },
-  { path: '/teacher/join', element: teacherOnly(<JoinSchoolPage backTo="/teacher" after="teacher-portal" />) },
   { path: '*', element: <Navigate to="/" replace /> },
 ])
 

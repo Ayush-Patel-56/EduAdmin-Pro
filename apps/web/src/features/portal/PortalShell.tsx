@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Bell, HelpCircle, LogOut, Menu, Settings, X, type LucideIcon } from 'lucide-react'
+import { useDismiss } from '@/components/ui/useDismiss'
 import { useLogout } from '@/features/auth/session'
 import type { Me } from '@/features/auth/types'
 
@@ -16,13 +17,28 @@ type PortalShellProps = {
   /** School / program / batch pickers above the navigation. */
   selectors: ReactNode
   avatarClassName: string
+  /** When given, the avatar opens this menu (rendered below it). */
+  renderProfileMenu?: (close: () => void) => ReactNode
   children: ReactNode
 }
 
 /** Sidebar + top bar layout shared by the admin dashboard and the faculty portal. */
-export function PortalShell({ me, subtitle, basePath, nav, selectors, avatarClassName, children }: PortalShellProps) {
+export function PortalShell({
+  me,
+  subtitle,
+  basePath,
+  nav,
+  selectors,
+  avatarClassName,
+  renderProfileMenu,
+  children,
+}: PortalShellProps) {
   const logout = useLogout()
   const [navOpen, setNavOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const closeMenu = useCallback(() => setMenuOpen(false), [])
+  useDismiss(menuRef, menuOpen, closeMenu)
   const initial = me.fullName.trim().charAt(0).toUpperCase()
 
   const sidebar = (
@@ -118,12 +134,28 @@ export function PortalShell({ me, subtitle, basePath, nav, selectors, avatarClas
                 <Icon className="size-5" />
               </button>
             ))}
-            <span
-              className={`flex size-9 items-center justify-center rounded-full text-sm font-semibold text-white ${avatarClassName}`}
-              title={`${me.fullName} (${me.email})`}
-            >
-              {initial}
-            </span>
+            {renderProfileMenu ? (
+              <div ref={menuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen((o) => !o)}
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  aria-label="Account menu"
+                  className={`flex size-9 items-center justify-center rounded-full text-sm font-semibold text-white ring-offset-2 transition hover:ring-2 hover:ring-slate-200 focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:outline-none ${avatarClassName}`}
+                >
+                  {initial}
+                </button>
+                {menuOpen && renderProfileMenu(closeMenu)}
+              </div>
+            ) : (
+              <span
+                className={`flex size-9 items-center justify-center rounded-full text-sm font-semibold text-white ${avatarClassName}`}
+                title={`${me.fullName} (${me.email})`}
+              >
+                {initial}
+              </span>
+            )}
           </div>
         </header>
 

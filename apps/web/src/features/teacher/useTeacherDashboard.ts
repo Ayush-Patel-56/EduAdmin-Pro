@@ -41,6 +41,8 @@ export type TeacherContext = {
   dashboard: TeacherDashboard | undefined
   dashboardError: Error | null
   programId: string
+  /** Opens the Switch / Join School dialog. */
+  openSwitchSchool: () => void
 }
 
 export const useTeacherContext = () => useOutletContext<TeacherContext>()

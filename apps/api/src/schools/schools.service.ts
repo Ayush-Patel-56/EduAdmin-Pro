@@ -91,7 +91,8 @@ export class SchoolsService {
 
   /**
    * Join a school with its invite code. Admin accounts join as admins (any
-   * number of schools); teachers join as teachers, one school at a time.
+   * number of schools). Teachers join as teachers and leave any school they
+   * were in, since they belong to one school at a time.
    */
   async joinSchool(auth: AuthContext, inviteCode: string) {
     const { accountType } = await this.prisma.user.findUniqueOrThrow({
@@ -110,18 +111,16 @@ export class SchoolsService {
     if (existing?.status === 'REVOKED') {
       throw new ForbiddenException(`Your access to ${school.name} was removed by its admins`);
     }
-    if (accountType === 'TEACHER') {
-      const current = await this.prisma.schoolMembership.findFirst({
-        where: { userId: auth.userId, status: 'ACTIVE' },
-        include: { school: { select: { name: true } } },
-      });
-      if (current) {
-        throw new ConflictException(`You're already connected to ${current.school.name}`);
-      }
-    }
-
     const role = accountType === 'ADMIN' ? 'ADMIN' : 'TEACHER';
     await this.prisma.$transaction([
+      ...(accountType === 'TEACHER'
+        ? [
+            this.prisma.schoolMembership.updateMany({
+              where: { userId: auth.userId, status: 'ACTIVE', schoolId: { not: school.id } },
+              data: { status: 'LEFT' },
+            }),
+          ]
+        : []),
       this.prisma.schoolMembership.upsert({
         where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
         create: { userId: auth.userId, schoolId: school.id, role, status: 'ACTIVE' },

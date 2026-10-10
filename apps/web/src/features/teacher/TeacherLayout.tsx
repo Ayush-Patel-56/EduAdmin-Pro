@@ -1,16 +1,22 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { useMe } from '@/features/auth/session'
 import { PortalShell } from '@/features/portal/PortalShell'
 import { ALL_PROGRAMS, BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
 import { teacherNav } from './nav'
+import { ProfileMenu } from './ProfileMenu'
+import { SwitchSchoolDialog } from './SwitchSchoolDialog'
 import { useTeacherDashboard, type TeacherContext } from './useTeacherDashboard'
 
 export function TeacherLayout() {
   const { data: me } = useMe()
   const { data: dashboard, error: dashboardError } = useTeacherDashboard()
   const [programId, setProgramId] = useState(ALL_PROGRAMS)
+  const [switchOpen, setSwitchOpen] = useState(false)
+  const openSwitchSchool = useCallback(() => setSwitchOpen(true), [])
+  const closeSwitchSchool = useCallback(() => setSwitchOpen(false), [])
   if (!me) return null
+  const schoolName = dashboard?.school?.name ?? null
 
   return (
     <PortalShell
@@ -19,6 +25,9 @@ export function TeacherLayout() {
       basePath="/teacher"
       nav={teacherNav}
       avatarClassName="bg-ink"
+      renderProfileMenu={(close) => (
+        <ProfileMenu me={me} schoolName={schoolName} onSwitchSchool={openSwitchSchool} onClose={close} />
+      )}
       selectors={
         <>
           <ProgramSelect programs={dashboard?.programs ?? []} value={programId} onChange={setProgramId} />
@@ -26,7 +35,8 @@ export function TeacherLayout() {
         </>
       }
     >
-      <Outlet context={{ me, dashboard, dashboardError, programId } satisfies TeacherContext} />
+      <Outlet context={{ me, dashboard, dashboardError, programId, openSwitchSchool } satisfies TeacherContext} />
+      {switchOpen && <SwitchSchoolDialog currentSchool={schoolName} onClose={closeSwitchSchool} />}
     </PortalShell>
   )
 }

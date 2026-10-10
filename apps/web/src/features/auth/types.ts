@@ -1,7 +1,7 @@
 // Mirrors the API's GET /auth/me response.
 export type AccountType = 'ADMIN' | 'TEACHER'
 export type Role = 'ADMIN' | 'TEACHER'
-export type MembershipStatus = 'PENDING' | 'ACTIVE' | 'REVOKED'
+export type MembershipStatus = 'PENDING' | 'ACTIVE' | 'REVOKED' | 'LEFT'
 
 export type Membership = {
   schoolId: string

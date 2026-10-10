@@ -20,7 +20,7 @@ import { formatDate, formatLongDate } from '@/features/portal/format'
 import { useTeacherContext, type TeacherDashboard } from './useTeacherDashboard'
 
 export function TeacherDashboardPage() {
-  const { me, dashboard, dashboardError } = useTeacherContext()
+  const { me, dashboard, dashboardError, openSwitchSchool } = useTeacherContext()
   const [today] = useState(() => new Date())
 
   if (dashboardError) {
@@ -53,7 +53,7 @@ export function TeacherDashboardPage() {
       </div>
 
       <div className="mt-8 grid gap-4 xl:grid-cols-3">
-        <Institution school={dashboard.school} />
+        <Institution school={dashboard.school} onJoin={openSwitchSchool} />
         <section className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="mb-5 flex items-center gap-2 text-base font-semibold text-slate-900">
             <Bell className="size-5 text-slate-700" /> Announcements
@@ -134,7 +134,7 @@ const mouLabel: Record<MouStatus, { text: string; className: string }> = {
 /** "6th".."12th" → "6".."12"; anything else (e.g. "12th Pass") is kept as is. */
 const shortClass = (c: string) => c.match(/^(\d+)(st|nd|rd|th)$/)?.[1] ?? c
 
-function Institution({ school }: { school: TeacherDashboard['school'] }) {
+function Institution({ school, onJoin }: { school: TeacherDashboard['school']; onJoin: () => void }) {
   const mou = mouLabel[school?.mouStatus ?? 'NOT_SET']
   return (
     <section className="flex flex-col gap-5 rounded-xl border border-slate-300 bg-slate-200/50 p-6 sm:flex-row sm:items-center xl:col-span-2">
@@ -146,9 +146,9 @@ function Institution({ school }: { school: TeacherDashboard['school'] }) {
           <p className="text-xs font-semibold tracking-wide text-slate-700 uppercase">Institution Information</p>
           <p className="text-sm font-bold text-slate-900">{school?.name ?? 'Not set'}</p>
           {!school && (
-            <Link to="/teacher/join" className="text-xs font-medium text-brand-600 hover:underline">
+            <button type="button" onClick={onJoin} className="text-xs font-medium text-brand-600 hover:underline">
               Join your school with its code
-            </Link>
+            </button>
           )}
         </div>
       </div>

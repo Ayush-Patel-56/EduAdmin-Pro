@@ -38,4 +38,5 @@ export const teacherNav: NavItem[] = [
 export const teacherExtraSections = [
   { path: 'class-notes', label: 'Class Notes' },
   { path: 'assignments', label: 'Assignments' },
+  { path: 'profile', label: 'My Profile' },
 ]

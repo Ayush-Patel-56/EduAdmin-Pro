@@ -24,7 +24,8 @@ enum Role {
 enum MembershipStatus {
   PENDING
   ACTIVE
-  REVOKED
+  REVOKED // removed by an admin; cannot rejoin with the invite code
+  LEFT // teacher switched to another school; may rejoin later
 }
 
 enum AnnouncementCategory {
