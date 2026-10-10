@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { User } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
@@ -7,6 +7,7 @@ import { AuthLayout } from './AuthLayout'
 import { AuthCard, AuthPanel } from './AuthPanel'
 
 export function LoginPage() {
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -25,6 +26,7 @@ export function LoginPage() {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       })
+      navigate('/', { replace: true })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
     } finally {

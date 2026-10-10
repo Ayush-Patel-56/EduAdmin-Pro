@@ -20,15 +20,49 @@ enum MembershipStatus {
 }
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
+  id            String   @id @default(uuid())
+  email         String   @unique // stored lower-cased
   passwordHash  String
   fullName      String
-  emailVerified Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  department    String?
+  employeeId    String?
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  memberships SchoolMembership[]
+  memberships        SchoolMembership[]
+  sessions           Session[]
+  verificationTokens EmailVerificationToken[]
+  platformInvites    PlatformInvite[]
+}
+
+// Opaque login sessions. Only a SHA-256 hash of the cookie token is stored,
+// so a database leak does not expose usable sessions.
+model Session {
+  id             String   @id @default(uuid())
+  userId         String
+  tokenHash      String   @unique
+  activeSchoolId String? // school the user is currently working in
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  userAgent      String?
+  ip             String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model School {
@@ -37,8 +71,9 @@ model School {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships SchoolMembership[]
-  joinCodes   SchoolJoinCode[]
+  memberships     SchoolMembership[]
+  joinCodes       SchoolJoinCode[]
+  platformInvites PlatformInvite[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -59,16 +94,36 @@ model SchoolMembership {
 }
 
 // Separate codes per role so a teacher code can never grant admin access.
-// Codes can be revoked and regenerated if leaked.
+// Admin codes are single-use and expire; teacher codes are reusable until
+// revoked. Codes can be regenerated if leaked.
 model SchoolJoinCode {
   id        String    @id @default(uuid())
   schoolId  String
   code      String    @unique
   role      Role
+  maxUses   Int? // null = unlimited
+  uses      Int       @default(0)
+  expiresAt DateTime?
   revokedAt DateTime?
   createdAt DateTime  @default(now())
 
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   @@index([schoolId])
+}
+
+// Issued by the platform owner to onboard a new client school. Redeemed once
+// at admin signup; consumed when that admin creates the school.
+model PlatformInvite {
+  id           String    @id @default(uuid())
+  code         String    @unique
+  note         String? // e.g. which client it was issued to
+  redeemedById String?
+  redeemedAt   DateTime?
+  schoolId     String?   @unique
+  expiresAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  redeemedBy User?   @relation(fields: [redeemedById], references: [id], onDelete: SetNull)
+  school     School? @relation(fields: [schoolId], references: [id], onDelete: SetNull)
 }
