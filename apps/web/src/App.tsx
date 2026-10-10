@@ -5,6 +5,8 @@ import { AdminSignupPage, TeacherSignupPage } from '@/features/auth/SignupPages'
 import { SignupRolePage } from '@/features/auth/SignupRolePage'
 import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { HomePage } from '@/features/home/HomePage'
+import { CreateSchoolPage } from '@/features/schools/CreateSchoolPage'
+import { JoinCodesPage } from '@/features/schools/JoinCodesPage'
 
 const router = createBrowserRouter([
   { path: '/', element: <HomePage /> },
@@ -14,6 +16,8 @@ const router = createBrowserRouter([
   { path: '/signup/admin', element: <AdminSignupPage /> },
   { path: '/verify-email', element: <VerifyEmailPage /> },
   { path: '/forgot-password', element: <PlaceholderPage title="Forgot password" /> },
+  { path: '/schools/new', element: <CreateSchoolPage /> },
+  { path: '/schools/:schoolId/codes', element: <JoinCodesPage /> },
   { path: '*', element: <Navigate to="/login" replace /> },
 ])
 

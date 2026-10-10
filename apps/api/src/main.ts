@@ -10,6 +10,7 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
+      transform: true,
       forbidNonWhitelisted: true,
       // Surface one readable message instead of class-validator's array.
       exceptionFactory: (errors) => {

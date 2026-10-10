@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { KeyRound, Plus } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { AuthLayout } from '@/features/auth/AuthLayout'
 import type { Me } from '@/features/auth/types'
@@ -43,23 +44,36 @@ export function HomePage() {
         <p className="mt-1 text-sm text-slate-500">{me.email}</p>
 
         <h2 className="mt-6 text-xs font-semibold tracking-wide text-slate-400 uppercase">Your schools</h2>
-        {me.memberships.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-600">
-            {me.canCreateSchool
-              ? 'Your invite is ready. Creating your school is the next step (coming soon).'
-              : 'You are not part of any school yet.'}
-          </p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {me.memberships.map((m) => (
-              <li key={m.schoolId} className="rounded-lg bg-slate-100 px-4 py-3">
+        {me.memberships.length === 0 && !me.canCreateSchool && (
+          <p className="mt-2 text-sm text-slate-600">You are not part of any school yet.</p>
+        )}
+        <ul className="mt-2 space-y-2">
+          {me.memberships.map((m) => (
+            <li key={m.schoolId} className="flex items-center gap-3 rounded-lg bg-slate-100 px-4 py-3">
+              <div className="flex-1">
                 <p className="text-sm font-medium text-slate-900">{m.schoolName}</p>
                 <p className="text-xs text-slate-500">
                   {m.role === 'ADMIN' ? 'Administration' : 'Teacher'} · {statusLabel[m.status]}
                 </p>
-              </li>
-            ))}
-          </ul>
+              </div>
+              {m.role === 'ADMIN' && m.status === 'ACTIVE' && (
+                <Link
+                  to={`/schools/${m.schoolId}/codes`}
+                  className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline"
+                >
+                  <KeyRound className="size-3.5" /> Join codes
+                </Link>
+              )}
+            </li>
+          ))}
+        </ul>
+        {me.canCreateSchool && (
+          <Link
+            to="/schools/new"
+            className="mt-3 flex h-10 items-center justify-center gap-2 rounded-lg bg-ink text-sm font-semibold text-white hover:bg-ink-hover"
+          >
+            <Plus className="size-4" /> Create your school
+          </Link>
         )}
 
         <button
