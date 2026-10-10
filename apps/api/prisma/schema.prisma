@@ -8,6 +8,14 @@ datasource db {
   provider = "postgresql"
 }
 
+// What kind of account this is, fixed at signup. Admin accounts can only be
+// created with a platform admin invite code.
+enum AccountType {
+  ADMIN
+  TEACHER
+}
+
+// Role within one school.
 enum Role {
   ADMIN
   TEACHER
@@ -19,21 +27,32 @@ enum MembershipStatus {
   REVOKED
 }
 
-model User {
-  id            String   @id @default(uuid())
-  email         String   @unique // stored lower-cased
-  passwordHash  String
-  fullName      String
-  department    String?
-  employeeId    String?
-  emailVerified Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+enum AnnouncementCategory {
+  GENERAL
+  ACADEMIC
+  EVENT
+  URGENT
+}
 
+model User {
+  id                String      @id @default(uuid())
+  email             String      @unique // stored lower-cased
+  passwordHash      String
+  fullName          String
+  accountType       AccountType
+  department        String?
+  employeeId        String?
+  emailVerified     Boolean     @default(false)
+  adminInviteCodeId String? // which admin invite code created this account
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  adminInviteCode    AdminInviteCode?         @relation(fields: [adminInviteCodeId], references: [id], onDelete: SetNull)
   memberships        SchoolMembership[]
   sessions           Session[]
   verificationTokens EmailVerificationToken[]
-  platformInvites    PlatformInvite[]
+  schoolsCreated     School[]                 @relation("SchoolCreator")
+  announcements      Announcement[]
 }
 
 // Opaque login sessions. Only a SHA-256 hash of the cookie token is stored,
@@ -65,15 +84,43 @@ model EmailVerificationToken {
   @@index([userId])
 }
 
-model School {
-  id        String   @id @default(uuid())
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// Issued by the platform owner (`pnpm --filter api invite:create`). Required
+// to sign up as an admin. May be single-use or shared, and can expire.
+model AdminInviteCode {
+  id        String    @id @default(uuid())
+  code      String    @unique // stored upper-cased
+  note      String?
+  maxUses   Int? // null = unlimited
+  uses      Int       @default(0)
+  expiresAt DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
 
-  memberships     SchoolMembership[]
-  joinCodes       SchoolJoinCode[]
-  platformInvites PlatformInvite[]
+  users User[]
+}
+
+model School {
+  id            String    @id @default(uuid())
+  name          String
+  // Unique per school; shared with staff so they can join.
+  inviteCode    String    @unique
+  board         String
+  classes       String[]  @default([]) // e.g. ["6th", "7th", …], in display order
+  mouStartDate  DateTime? @db.Date
+  mouEndDate    DateTime? @db.Date
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  gstNumber     String?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  createdBy     User?              @relation("SchoolCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  memberships   SchoolMembership[]
+  programs      Program[]
+  announcements Announcement[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -93,37 +140,32 @@ model SchoolMembership {
   @@index([schoolId])
 }
 
-// Separate codes per role so a teacher code can never grant admin access.
-// Admin codes are single-use and expire; teacher codes are reusable until
-// revoked. Codes can be regenerated if leaked.
-model SchoolJoinCode {
-  id        String    @id @default(uuid())
-  schoolId  String
-  code      String    @unique
-  role      Role
-  maxUses   Int? // null = unlimited
-  uses      Int       @default(0)
-  expiresAt DateTime?
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+// Programs such as JEE or NEET. Batches will be created under these.
+model Program {
+  id         String   @id @default(uuid())
+  schoolId   String
+  name       String
+  isStandard Boolean // one of the platform's standard programs vs. added by the school
+  sortOrder  Int
+  createdAt  DateTime @default(now())
 
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
+  @@unique([schoolId, name])
   @@index([schoolId])
 }
 
-// Issued by the platform owner to onboard a new client school. Redeemed once
-// at admin signup; consumed when that admin creates the school.
-model PlatformInvite {
-  id           String    @id @default(uuid())
-  code         String    @unique
-  note         String? // e.g. which client it was issued to
-  redeemedById String?
-  redeemedAt   DateTime?
-  schoolId     String?   @unique
-  expiresAt    DateTime?
-  createdAt    DateTime  @default(now())
+model Announcement {
+  id          String               @id @default(uuid())
+  schoolId    String
+  category    AnnouncementCategory @default(GENERAL)
+  title       String
+  body        String?
+  createdById String?
+  createdAt   DateTime             @default(now())
 
-  redeemedBy User?   @relation(fields: [redeemedById], references: [id], onDelete: SetNull)
-  school     School? @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  school    School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, createdAt])
 }

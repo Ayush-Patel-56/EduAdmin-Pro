@@ -15,6 +15,7 @@ import {
   AdminSignupDto,
   LoginDto,
   ResendVerificationDto,
+  SetActiveSchoolDto,
   TeacherSignupDto,
   VerifyEmailDto,
 } from './auth.dto.js';
@@ -35,14 +36,14 @@ export class AuthController {
   @Throttle(STRICT)
   async signupTeacher(@Body() dto: TeacherSignupDto) {
     await this.auth.signupTeacher(dto);
-    return { message: 'Account created. Check your email to verify it.' };
+    return { message: 'Account created successfully' };
   }
 
   @Post('signup/admin')
   @Throttle(STRICT)
   async signupAdmin(@Body() dto: AdminSignupDto) {
     await this.auth.signupAdmin(dto);
-    return { message: 'Account created. Check your email to verify it.' };
+    return { message: 'Account created successfully' };
   }
 
   @Post('login')
@@ -67,6 +68,14 @@ export class AuthController {
   async logout(@Auth() auth: AuthContext, @Res({ passthrough: true }) res: Response) {
     await this.auth.logout(auth.sessionId);
     res.clearCookie(SESSION_COOKIE, this.cookieOptions());
+    return { ok: true };
+  }
+
+  @Post('active-school')
+  @HttpCode(200)
+  @UseGuards(SessionGuard)
+  async setActiveSchool(@Auth() auth: AuthContext, @Body() dto: SetActiveSchoolDto) {
+    await this.auth.setActiveSchool(auth.userId, auth.sessionId, dto.schoolId);
     return { ok: true };
   }
 

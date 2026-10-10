@@ -1,6 +1,6 @@
-import { useState, type FormEvent, type InputHTMLAttributes } from 'react'
+import { useEffect, useState, type FormEvent, type InputHTMLAttributes } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import type { LucideIcon } from 'lucide-react'
+import { CircleCheck, type LucideIcon } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
 import { AuthLayout } from './AuthLayout'
@@ -26,6 +26,7 @@ type SignupFormProps = {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MIN_PASSWORD_LENGTH = 8
+const REDIRECT_DELAY_MS = 1800
 
 function validate(fields: SignupField[], values: Record<string, string>): string | null {
   const missing = fields.find((f) => f.required && !values[f.name]?.trim())
@@ -49,6 +50,16 @@ export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
   )
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [created, setCreated] = useState(false)
+
+  useEffect(() => {
+    if (!created) return
+    const timer = setTimeout(
+      () => navigate('/login', { replace: true, state: { email: values.email, signedUp: true } }),
+      REDIRECT_DELAY_MS,
+    )
+    return () => clearTimeout(timer)
+  }, [created, navigate, values.email])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -61,7 +72,7 @@ export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
     setSubmitting(true)
     try {
       await api(endpoint, { method: 'POST', body: JSON.stringify(values) })
-      navigate('/verify-email', { state: { email: values.email } })
+      setCreated(true)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
     } finally {
@@ -81,6 +92,15 @@ export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
         />
 
         <section className="flex flex-1 items-center justify-center px-8 py-12 md:px-12">
+          {created ? (
+            <div role="status" className="w-full max-w-[352px] text-center">
+              <span className="mx-auto flex size-14 items-center justify-center rounded-full bg-emerald-100">
+                <CircleCheck className="size-7 text-emerald-600" />
+              </span>
+              <h1 className="mt-4 text-xl font-bold text-slate-900">Account created successfully</h1>
+              <p className="mt-1 text-sm text-slate-500">Redirecting you to login…</p>
+            </div>
+          ) : (
           <form onSubmit={handleSubmit} className="w-full max-w-[352px]" noValidate>
             <Link to="/signup" className="text-xs text-slate-500 hover:text-slate-800">
               ← Back
@@ -111,6 +131,7 @@ export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
             <FormError message={error} />
             <SubmitButton busy={submitting} label="Create Account" busyLabel="Creating account…" />
           </form>
+          )}
         </section>
       </AuthCard>
     </AuthLayout>

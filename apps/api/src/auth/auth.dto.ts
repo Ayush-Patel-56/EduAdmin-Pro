@@ -2,6 +2,7 @@ import {
   IsEmail,
   IsNotEmpty,
   IsOptional,
+  IsUUID,
   IsString,
   MaxLength,
   MinLength,
@@ -67,4 +68,9 @@ export class VerifyEmailDto {
 export class ResendVerificationDto {
   @IsEmail({}, { message: 'Please enter a valid email address' })
   email: string;
+}
+
+export class SetActiveSchoolDto {
+  @IsUUID('4', { message: 'Invalid school' })
+  schoolId: string;
 }

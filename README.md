@@ -31,15 +31,21 @@ The web dev server proxies `/api/*` to the API, so the frontend always calls rel
 
 Create the Neon project in the region closest to your users (e.g. Singapore for India), and deploy the API in the same region.
 
-## Accounts & join codes
+Local development uses the Neon **`dev`** branch, a copy of `production`. Point `.env` at `production` only when deploying.
 
-- **New client school:** issue a platform invite, and give the code to the school's first admin. They enter it as the "Admin invite code" at signup.
-  ```bash
-  pnpm --filter api invite:create -- "Client name" --days 14
-  ```
-- **More admins:** a school admin issues a single-use, expiring admin code.
-- **Teachers:** sign up with the school's teacher join code; they stay *pending* until an admin approves them.
-- Everyone must verify their email before logging in. No email provider is connected yet: in development the verification link is printed in the API console.
+## Accounts & invite codes
+
+1. **Admin invite code:** required to create an admin account. You (the platform owner) create these; they live in the database, not in code.
+   ```bash
+   pnpm --filter api invite:create -- "Note" --code ADMIN123              # shared, unlimited
+   pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14 # one-off, random code
+   ```
+2. After logging in, an admin either **creates a school** or **joins an existing school** with that school's invite code.
+3. **School invite code:** every school gets a unique code (e.g. `GFCZ-BBYB`), shown on its dashboard.
+   - **Admin accounts** that enter it join as admins.
+   - **Teachers** who sign up with it join as *pending* until an admin approves them.
+
+Email verification is recorded but doesn't block login until `REQUIRE_EMAIL_VERIFICATION=true` (set it once an email provider is connected). Until then, verification links are printed in the API console.
 
 ## Scripts
 
@@ -50,4 +56,4 @@ Create the Neon project in the region closest to your users (e.g. Singapore for 
 | `pnpm lint` | Lint all apps |
 | `pnpm --filter api db:migrate` | Create/apply a migration |
 | `pnpm --filter api db:studio` | Browse data in Prisma Studio |
-| `pnpm --filter api invite:create` | Issue a platform invite code |
+| `pnpm --filter api invite:create` | Issue an admin invite code |

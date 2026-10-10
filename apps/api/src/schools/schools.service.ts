@@ -1,131 +1,212 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma, Role } from '../generated/prisma/client.js';
+import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
-
-const ADMIN_CODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+import { normalizeIndianMobile } from '../common/validators.js';
+import type { CreateSchoolDto } from './schools.dto.js';
+import {
+  CLASS_OPTIONS,
+  classesLabel,
+  DEFAULT_SELECTION,
+  orderClasses,
+  STANDARD_BOARDS,
+  STANDARD_PROGRAMS,
+} from './school-options.js';
 
 type Tx = Prisma.TransactionClient;
+export type MouStatus = 'NOT_SET' | 'UPCOMING' | 'ACTIVE' | 'EXPIRED';
 
 @Injectable()
 export class SchoolsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Consumes the admin's redeemed platform invite and makes them the school's first admin. */
-  async createSchool(auth: AuthContext, name: string) {
-    const invite = await this.prisma.platformInvite.findFirst({
-      where: { redeemedById: auth.userId, schoolId: null },
-    });
-    if (!invite) {
-      throw new ForbiddenException('You need a platform invite to create a school');
+  options() {
+    return {
+      boards: STANDARD_BOARDS,
+      classes: CLASS_OPTIONS,
+      programs: STANDARD_PROGRAMS,
+      defaults: DEFAULT_SELECTION,
+    };
+  }
+
+  async createSchool(auth: AuthContext, dto: CreateSchoolDto) {
+    await this.assertAdminAccount(auth.userId);
+
+    const mouStart = dto.mouStartDate ? parseDate(dto.mouStartDate, 'MOU start date') : null;
+    const mouEnd = dto.mouEndDate ? parseDate(dto.mouEndDate, 'MOU end date') : null;
+    if (mouStart && mouEnd && mouEnd < mouStart) {
+      throw new BadRequestException('MOU end date must be on or after the start date');
     }
+    const programs = dedupePrograms(dto.programs);
 
     return this.prisma.$transaction(async (tx) => {
-      const school = await tx.school.create({ data: { name } });
-      const claimed = await tx.platformInvite.updateMany({
-        where: { id: invite.id, schoolId: null },
-        data: { schoolId: school.id },
+      const school = await tx.school.create({
+        data: {
+          name: dto.name,
+          inviteCode: await uniqueSchoolCode(tx),
+          board: dto.board,
+          classes: orderClasses(dto.classes),
+          mouStartDate: mouStart,
+          mouEndDate: mouEnd,
+          contactPerson: dto.contactPerson ?? null,
+          phone: dto.phone ? normalizeIndianMobile(dto.phone) : null,
+          email: dto.email?.toLowerCase() ?? null,
+          address: dto.address ?? null,
+          gstNumber: dto.gstNumber ?? null,
+          createdById: auth.userId,
+        },
       });
-      if (claimed.count === 0) {
-        throw new ConflictException('This invite has already been used to create a school');
+      if (programs.length > 0) {
+        await tx.program.createMany({
+          data: programs.map((name, i) => ({
+            schoolId: school.id,
+            name,
+            isStandard: (STANDARD_PROGRAMS as readonly string[]).includes(name),
+            sortOrder: i,
+          })),
+        });
       }
       await tx.schoolMembership.create({
         data: { userId: auth.userId, schoolId: school.id, role: 'ADMIN', status: 'ACTIVE' },
       });
-      // Every school starts with a teacher code so admins can onboard staff straight away.
-      await issueJoinCode(tx, school.id, 'TEACHER');
-      await tx.session.update({
-        where: { id: auth.sessionId },
-        data: { activeSchoolId: school.id },
+      await tx.announcement.create({
+        data: {
+          schoolId: school.id,
+          category: 'GENERAL',
+          title: `Welcome to ${school.name}!`,
+          createdById: auth.userId,
+        },
       });
+      await tx.session.update({ where: { id: auth.sessionId }, data: { activeSchoolId: school.id } });
       return { id: school.id, name: school.name };
     });
   }
 
-  async listJoinCodes(auth: AuthContext, schoolId: string) {
-    await this.assertAdmin(auth.userId, schoolId);
-    const now = new Date();
-    const [school, codes] = await Promise.all([
-      this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { id: true, name: true } }),
-      this.prisma.schoolJoinCode.findMany({
-        where: { schoolId, revokedAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-        orderBy: { createdAt: 'desc' },
+  /** An admin account joins an existing school with that school's invite code. */
+  async joinSchool(auth: AuthContext, inviteCode: string) {
+    await this.assertAdminAccount(auth.userId);
+    const school = await this.prisma.school.findUnique({ where: { inviteCode } });
+    if (!school) throw new BadRequestException('Invalid invite code');
+
+    const existing = await this.prisma.schoolMembership.findUnique({
+      where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
+    });
+    if (existing?.status === 'ACTIVE') {
+      throw new ConflictException(`You're already an admin of ${school.name}`);
+    }
+    if (existing?.status === 'REVOKED') {
+      throw new ForbiddenException(`Your access to ${school.name} was removed by its admins`);
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.schoolMembership.upsert({
+        where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
+        create: { userId: auth.userId, schoolId: school.id, role: 'ADMIN', status: 'ACTIVE' },
+        update: { role: 'ADMIN', status: 'ACTIVE' },
       }),
+      this.prisma.session.update({ where: { id: auth.sessionId }, data: { activeSchoolId: school.id } }),
     ]);
+    return { id: school.id, name: school.name };
+  }
+
+  async dashboard(auth: AuthContext, schoolId: string) {
+    await this.assertSchoolAdmin(auth.userId, schoolId);
+    const school = await this.prisma.school.findUniqueOrThrow({
+      where: { id: schoolId },
+      include: {
+        programs: { orderBy: { sortOrder: 'asc' }, select: { id: true, name: true } },
+        announcements: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: { id: true, category: true, title: true, createdAt: true },
+        },
+      },
+    });
     return {
-      school,
-      codes: codes
-        .filter((c) => c.maxUses === null || c.uses < c.maxUses)
-        .map(({ id, code, role, uses, maxUses, expiresAt, createdAt }) => ({
-          id, code, role, uses, maxUses, expiresAt, createdAt,
-        })),
+      school: {
+        id: school.id,
+        name: school.name,
+        inviteCode: school.inviteCode,
+        board: school.board,
+        classes: school.classes,
+        classesLabel: classesLabel(school.classes),
+        mouStartDate: toIsoDate(school.mouStartDate),
+        mouEndDate: toIsoDate(school.mouEndDate),
+        mouStatus: mouStatus(school.mouStartDate, school.mouEndDate),
+      },
+      programs: school.programs,
+      announcements: school.announcements,
+      // Populated once timetables exist; kept in the response shape so the UI is final.
+      todaySchedule: [],
     };
   }
 
-  async createJoinCode(auth: AuthContext, schoolId: string, role: Role) {
-    await this.assertAdmin(auth.userId, schoolId);
-    const code = await this.prisma.$transaction((tx) => issueJoinCode(tx, schoolId, role));
-    return { id: code.id, code: code.code, role: code.role, expiresAt: code.expiresAt };
-  }
-
-  async revokeJoinCode(auth: AuthContext, schoolId: string, codeId: string) {
-    await this.assertAdmin(auth.userId, schoolId);
-    const result = await this.prisma.schoolJoinCode.updateMany({
-      where: { id: codeId, schoolId, revokedAt: null },
-      data: { revokedAt: new Date() },
+  private async assertAdminAccount(userId: string) {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { accountType: true },
     });
-    if (result.count === 0) throw new NotFoundException('Join code not found');
+    if (user.accountType !== 'ADMIN') {
+      throw new ForbiddenException('Only administration accounts can do this');
+    }
   }
 
-  private async assertAdmin(userId: string, schoolId: string) {
+  private async assertSchoolAdmin(userId: string, schoolId: string) {
     const membership = await this.prisma.schoolMembership.findUnique({
       where: { userId_schoolId: { userId, schoolId } },
     });
-    if (membership?.role !== 'ADMIN' || membership.status !== 'ACTIVE') {
-      throw new ForbiddenException('Only admins of this school can manage join codes');
+    if (!membership) throw new NotFoundException('School not found');
+    if (membership.role !== 'ADMIN' || membership.status !== 'ACTIVE') {
+      throw new ForbiddenException('Only admins of this school can view this');
     }
   }
 }
 
-/**
- * Teacher codes are reusable, so issuing a new one revokes the old one (that's
- * how a leaked code is rotated). Admin codes are single-use and expire in 7 days.
- */
-async function issueJoinCode(tx: Tx, schoolId: string, role: Role) {
-  if (role === 'TEACHER') {
-    await tx.schoolJoinCode.updateMany({
-      where: { schoolId, role: 'TEACHER', revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-  }
-  return tx.schoolJoinCode.create({
-    data: {
-      schoolId,
-      role,
-      code: await uniqueCode(tx),
-      ...(role === 'ADMIN' && {
-        maxUses: 1,
-        expiresAt: new Date(Date.now() + ADMIN_CODE_TTL_MS),
-      }),
-    },
+/** Case-insensitive dedupe that keeps the first spelling and the user's order. */
+function dedupePrograms(programs: string[]): string[] {
+  const seen = new Set<string>();
+  return programs.filter((p) => {
+    const key = p.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
+}
+
+function parseDate(value: string, label: string): Date {
+  const date = new Date(`${value}T00:00:00Z`);
+  // Rejects impossible dates like 2026-02-30, which Date would roll over.
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    throw new BadRequestException(`${label} is invalid`);
+  }
+  return date;
+}
+
+function toIsoDate(date: Date | null): string | null {
+  return date ? date.toISOString().slice(0, 10) : null;
+}
+
+export function mouStatus(start: Date | null, end: Date | null, now = new Date()): MouStatus {
+  if (!start && !end) return 'NOT_SET';
+  const today = now.toISOString().slice(0, 10);
+  if (start && today < toIsoDate(start)!) return 'UPCOMING';
+  if (end && today > toIsoDate(end)!) return 'EXPIRED';
+  return 'ACTIVE';
 }
 
 // Collisions are astronomically rare, but a failed insert would abort the
 // surrounding transaction, so check first rather than catching the error.
-async function uniqueCode(tx: Tx) {
+async function uniqueSchoolCode(tx: Tx) {
   for (;;) {
     const code = generateJoinCode();
-    const [joinCode, invite] = await Promise.all([
-      tx.schoolJoinCode.findUnique({ where: { code }, select: { id: true } }),
-      tx.platformInvite.findUnique({ where: { code }, select: { id: true } }),
-    ]);
-    if (!joinCode && !invite) return code;
+    const taken = await tx.school.findUnique({ where: { inviteCode: code }, select: { id: true } });
+    if (!taken) return code;
   }
 }

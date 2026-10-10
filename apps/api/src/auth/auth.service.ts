@@ -5,6 +5,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -37,19 +38,19 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
+    private readonly config: ConfigService,
   ) {}
 
   async signupTeacher(dto: TeacherSignupDto) {
     const email = normalizeEmail(dto.email);
     await this.assertEmailFree(email);
-    const passwordHash = await argon2.hash(dto.password);
 
-    const joinCode = await this.prisma.schoolJoinCode.findFirst({
-      where: { code: normalizeCode(dto.schoolCode), role: 'TEACHER', ...activeCodeFilter() },
+    const school = await this.prisma.school.findUnique({
+      where: { inviteCode: normalizeCode(dto.schoolCode) },
+      select: { id: true },
     });
-    if (!joinCode || isExhausted(joinCode)) {
-      throw new BadRequestException('Invalid or expired school join code');
-    }
+    if (!school) throw new BadRequestException('Invalid school join code');
+    const passwordHash = await argon2.hash(dto.password);
 
     const token = await this.createUser(email, async (tx) => {
       const user = await tx.user.create({
@@ -57,13 +58,13 @@ export class AuthService {
           email,
           passwordHash,
           fullName: dto.fullName.trim(),
+          accountType: 'TEACHER',
           department: dto.department?.trim() || null,
         },
       });
-      await consumeJoinCode(tx, joinCode);
       // Teachers wait for an admin of the school to approve them.
       await tx.schoolMembership.create({
-        data: { userId: user.id, schoolId: joinCode.schoolId, role: 'TEACHER', status: 'PENDING' },
+        data: { userId: user.id, schoolId: school.id, role: 'TEACHER', status: 'PENDING' },
       });
       return user.id;
     });
@@ -74,48 +75,42 @@ export class AuthService {
   async signupAdmin(dto: AdminSignupDto) {
     const email = normalizeEmail(dto.email);
     await this.assertEmailFree(email);
-    const passwordHash = await argon2.hash(dto.password);
-    const code = normalizeCode(dto.inviteCode);
-    const now = new Date();
 
-    // An admin code is either a platform invite (onboard a new school) or a
-    // school-issued admin code (join an existing school).
-    const platformInvite = await this.prisma.platformInvite.findFirst({
-      where: { code, redeemedAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+    const now = new Date();
+    const invite = await this.prisma.adminInviteCode.findFirst({
+      where: {
+        code: normalizeCode(dto.inviteCode),
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
     });
-    const joinCode = platformInvite
-      ? null
-      : await this.prisma.schoolJoinCode.findFirst({
-          where: { code, role: 'ADMIN', ...activeCodeFilter() },
-        });
-    if (!platformInvite && (!joinCode || isExhausted(joinCode))) {
-      throw new BadRequestException('Invalid or expired invite code');
+    if (!invite || (invite.maxUses !== null && invite.uses >= invite.maxUses)) {
+      throw new BadRequestException('Invalid or expired admin invite code');
     }
+    const passwordHash = await argon2.hash(dto.password);
 
     const token = await this.createUser(email, async (tx) => {
+      // Re-check the limit atomically so two signups can't share the last use.
+      const claimed = await tx.adminInviteCode.updateMany({
+        where:
+          invite.maxUses === null
+            ? { id: invite.id }
+            : { id: invite.id, uses: { lt: invite.maxUses } },
+        data: { uses: { increment: 1 } },
+      });
+      if (claimed.count === 0) {
+        throw new BadRequestException('Invalid or expired admin invite code');
+      }
       const user = await tx.user.create({
         data: {
           email,
           passwordHash,
           fullName: dto.fullName.trim(),
+          accountType: 'ADMIN',
           employeeId: dto.employeeId?.trim() || null,
+          adminInviteCodeId: invite.id,
         },
       });
-
-      if (platformInvite) {
-        const claimed = await tx.platformInvite.updateMany({
-          where: { id: platformInvite.id, redeemedAt: null },
-          data: { redeemedById: user.id, redeemedAt: new Date() },
-        });
-        if (claimed.count === 0) {
-          throw new BadRequestException('Invalid or expired invite code');
-        }
-      } else if (joinCode) {
-        await consumeJoinCode(tx, joinCode);
-        await tx.schoolMembership.create({
-          data: { userId: user.id, schoolId: joinCode.schoolId, role: 'ADMIN', status: 'ACTIVE' },
-        });
-      }
       return user.id;
     });
 
@@ -131,7 +126,7 @@ export class AuthService {
     if (!user || !valid) {
       throw new UnauthorizedException('Incorrect email or password');
     }
-    if (!user.emailVerified) {
+    if (!user.emailVerified && this.config.get('REQUIRE_EMAIL_VERIFICATION') === 'true') {
       throw new ForbiddenException('Please verify your email before logging in');
     }
 
@@ -151,6 +146,17 @@ export class AuthService {
 
   async logout(sessionId: string) {
     await this.prisma.session.deleteMany({ where: { id: sessionId } });
+  }
+
+  /** Switch which school the session is working in; must be an active member. */
+  async setActiveSchool(userId: string, sessionId: string, schoolId: string) {
+    const membership = await this.prisma.schoolMembership.findUnique({
+      where: { userId_schoolId: { userId, schoolId } },
+    });
+    if (membership?.status !== 'ACTIVE') {
+      throw new ForbiddenException('You do not have access to this school');
+    }
+    await this.prisma.session.update({ where: { id: sessionId }, data: { activeSchoolId: schoolId } });
   }
 
   async verifyEmail(token: string) {
@@ -187,16 +193,15 @@ export class AuthService {
           include: { school: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'asc' },
         },
-        platformInvites: { where: { schoolId: null }, select: { id: true } },
       },
     });
     return {
       id: user.id,
       email: user.email,
       fullName: user.fullName,
+      accountType: user.accountType,
+      emailVerified: user.emailVerified,
       activeSchoolId,
-      // True when the admin redeemed a platform invite but hasn't created the school yet.
-      canCreateSchool: user.platformInvites.length > 0,
       memberships: user.memberships.map((m) => ({
         schoolId: m.school.id,
         schoolName: m.school.name,
@@ -230,29 +235,6 @@ export class AuthService {
 
 function emailTaken() {
   return new ConflictException('An account with this email already exists');
-}
-
-function activeCodeFilter() {
-  const now = new Date();
-  return {
-    revokedAt: null,
-    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-  } satisfies Prisma.SchoolJoinCodeWhereInput;
-}
-
-function isExhausted(code: { maxUses: number | null; uses: number }) {
-  return code.maxUses !== null && code.uses >= code.maxUses;
-}
-
-/** Increments usage, failing if a concurrent signup used the last slot. */
-async function consumeJoinCode(tx: Tx, code: { id: string; maxUses: number | null }) {
-  const result = await tx.schoolJoinCode.updateMany({
-    where: code.maxUses === null ? { id: code.id } : { id: code.id, uses: { lt: code.maxUses } },
-    data: { uses: { increment: 1 } },
-  });
-  if (result.count === 0) {
-    throw new BadRequestException('Invalid or expired join code');
-  }
 }
 
 async function issueVerificationToken(tx: Tx, userId: string) {
