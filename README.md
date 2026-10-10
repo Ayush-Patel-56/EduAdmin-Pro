@@ -44,7 +44,23 @@ Local development uses the Neon **`dev`** branch, a copy of `production`. Point 
    - **Admin accounts** that enter it join as admins.
    - **Teachers** who sign up with it join as *pending* until an admin approves them.
 
-Email verification is recorded but doesn't block login until `REQUIRE_EMAIL_VERIFICATION=true` (set it once an email provider is connected). Until then, verification links are printed in the API console.
+### Teachers
+
+1. Sign up (school join code optional). A **6-digit code** is emailed. It expires in 10 minutes, is locked after 5 wrong tries, and can be re-sent once a minute.
+2. After entering the code, sign in. Teachers can't sign in until their email is verified.
+3. With a school code, the teacher is connected to that school immediately; without one, they can join later from the Faculty Portal. A teacher belongs to one school at a time.
+
+Admins don't need to verify their email unless `REQUIRE_EMAIL_VERIFICATION=true`.
+
+## Email (verification codes)
+
+Codes are sent over SMTP. For Gmail (`academicplanningsystem@gmail.com`):
+
+1. Turn on 2-Step Verification for that Google account.
+2. Create an App Password at <https://myaccount.google.com/apppasswords>.
+3. Put the 16-character password in `apps/api/.env` as `SMTP_PASS` (`SMTP_HOST`, `SMTP_USER` and `MAIL_FROM` are already set in `.env.example`).
+
+If `SMTP_PASS` is empty in development, codes are printed in the API console instead. In production the API refuses to start without SMTP settings.
 
 ## Scripts
 

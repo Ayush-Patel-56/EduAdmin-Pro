@@ -89,9 +89,15 @@ export class SchoolsService {
     });
   }
 
-  /** An admin account joins an existing school with that school's invite code. */
+  /**
+   * Join a school with its invite code. Admin accounts join as admins (any
+   * number of schools); teachers join as teachers, one school at a time.
+   */
   async joinSchool(auth: AuthContext, inviteCode: string) {
-    await this.assertAdminAccount(auth.userId);
+    const { accountType } = await this.prisma.user.findUniqueOrThrow({
+      where: { id: auth.userId },
+      select: { accountType: true },
+    });
     const school = await this.prisma.school.findUnique({ where: { inviteCode } });
     if (!school) throw new BadRequestException('Invalid invite code');
 
@@ -99,21 +105,74 @@ export class SchoolsService {
       where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
     });
     if (existing?.status === 'ACTIVE') {
-      throw new ConflictException(`You're already an admin of ${school.name}`);
+      throw new ConflictException(`You're already a member of ${school.name}`);
     }
     if (existing?.status === 'REVOKED') {
       throw new ForbiddenException(`Your access to ${school.name} was removed by its admins`);
     }
+    if (accountType === 'TEACHER') {
+      const current = await this.prisma.schoolMembership.findFirst({
+        where: { userId: auth.userId, status: 'ACTIVE' },
+        include: { school: { select: { name: true } } },
+      });
+      if (current) {
+        throw new ConflictException(`You're already connected to ${current.school.name}`);
+      }
+    }
 
+    const role = accountType === 'ADMIN' ? 'ADMIN' : 'TEACHER';
     await this.prisma.$transaction([
       this.prisma.schoolMembership.upsert({
         where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
-        create: { userId: auth.userId, schoolId: school.id, role: 'ADMIN', status: 'ACTIVE' },
-        update: { role: 'ADMIN', status: 'ACTIVE' },
+        create: { userId: auth.userId, schoolId: school.id, role, status: 'ACTIVE' },
+        update: { role, status: 'ACTIVE' },
       }),
       this.prisma.session.update({ where: { id: auth.sessionId }, data: { activeSchoolId: school.id } }),
     ]);
     return { id: school.id, name: school.name };
+  }
+
+  /** The signed-in teacher's portal home. `school` is null until they join one. */
+  async teacherDashboard(auth: AuthContext) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId }, select: { accountType: true } });
+    if (user.accountType !== 'TEACHER') throw new ForbiddenException('Only teacher accounts have a faculty portal');
+    const membership = await this.prisma.schoolMembership.findFirst({
+      where: { userId: auth.userId, role: 'TEACHER', status: 'ACTIVE' },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        school: {
+          include: {
+            programs: { orderBy: { sortOrder: 'asc' }, select: { id: true, name: true } },
+            announcements: {
+              orderBy: { createdAt: 'desc' },
+              take: 5,
+              select: { id: true, category: true, title: true, createdAt: true },
+            },
+          },
+        },
+      },
+    });
+    const school = membership?.school;
+    return {
+      school: school
+        ? {
+            id: school.id,
+            name: school.name,
+            board: school.board,
+            classes: school.classes,
+            mouStartDate: toIsoDate(school.mouStartDate),
+            mouEndDate: toIsoDate(school.mouEndDate),
+            mouStatus: mouStatus(school.mouStartDate, school.mouEndDate),
+          }
+        : null,
+      programs: school?.programs ?? [],
+      announcements: school?.announcements ?? [],
+      // The counts, schedule and feedback below are filled in as timetables,
+      // daily reports, assignments, tests and admin feedback are built.
+      stats: { todayClasses: 0, pendingDailyReports: 0, assignmentsToGrade: 0, upcomingTests: 0 },
+      todaySchedule: [],
+      adminFeedback: [],
+    };
   }
 
   async dashboard(auth: AuthContext, schoolId: string) {

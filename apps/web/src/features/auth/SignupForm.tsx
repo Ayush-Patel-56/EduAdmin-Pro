@@ -5,6 +5,7 @@ import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
 import { AuthLayout } from './AuthLayout'
 import { AuthCard, AuthPanel } from './AuthPanel'
+import { OtpVerification } from './OtpVerification'
 
 export type SignupField = {
   name: string
@@ -22,6 +23,8 @@ type SignupFormProps = {
   endpoint: string
   fields: SignupField[]
   hint?: string
+  /** 'verify': show the email code step after signup. 'login': confirm, then go to login. */
+  next?: 'verify' | 'login'
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -43,7 +46,7 @@ function validate(fields: SignupField[], values: Record<string, string>): string
   return null
 }
 
-export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
+export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: SignupFormProps) {
   const navigate = useNavigate()
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(fields.map((f) => [f.name, ''])),
@@ -51,6 +54,8 @@ export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [created, setCreated] = useState(false)
+  // Set once a teacher account exists and is waiting for its email code.
+  const [verifyEmail, setVerifyEmail] = useState<string | null>(null)
 
   useEffect(() => {
     if (!created) return
@@ -71,8 +76,9 @@ export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
     setError(null)
     setSubmitting(true)
     try {
-      await api(endpoint, { method: 'POST', body: JSON.stringify(values) })
-      setCreated(true)
+      const result = await api<{ email: string }>(endpoint, { method: 'POST', body: JSON.stringify(values) })
+      if (next === 'verify') setVerifyEmail(result.email)
+      else setCreated(true)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
     } finally {
@@ -99,6 +105,14 @@ export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
               </span>
               <h1 className="mt-4 text-xl font-bold text-slate-900">Account created successfully</h1>
               <p className="mt-1 text-sm text-slate-500">Redirecting you to login…</p>
+            </div>
+          ) : verifyEmail ? (
+            <div className="w-full max-w-[352px]">
+              <Link to="/signup" className="text-xs text-slate-500 hover:text-slate-800">
+                ← Back
+              </Link>
+              <h1 className="mt-3 mb-4 text-xl font-bold text-slate-900">{title}</h1>
+              <OtpVerification email={verifyEmail} />
             </div>
           ) : (
           <form onSubmit={handleSubmit} className="w-full max-w-[352px]" noValidate>

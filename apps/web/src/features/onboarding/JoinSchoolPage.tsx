@@ -5,9 +5,16 @@ import { Hash } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { FormError } from '@/features/auth/AuthInput'
 import { meQueryKey } from '@/features/auth/session'
+import { teacherDashboardQueryKey } from '@/features/teacher/useTeacherDashboard'
 import { fieldLabelClass, OnboardingCard, OnboardingHeading } from './OnboardingCard'
 
-export function JoinSchoolPage() {
+type JoinSchoolPageProps = {
+  backTo: string
+  /** Admins see the "You're all set" screen; teachers go straight back to their portal. */
+  after: 'confirm' | 'teacher-portal'
+}
+
+export function JoinSchoolPage({ backTo, after }: JoinSchoolPageProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [code, setCode] = useState('')
@@ -28,7 +35,12 @@ export function JoinSchoolPage() {
         body: JSON.stringify({ inviteCode: code }),
       })
       await queryClient.invalidateQueries({ queryKey: meQueryKey })
-      navigate('/onboarding/done', { replace: true, state: { schoolName: school.name } })
+      if (after === 'confirm') {
+        navigate('/onboarding/done', { replace: true, state: { schoolName: school.name } })
+      } else {
+        await queryClient.invalidateQueries({ queryKey: teacherDashboardQueryKey })
+        navigate('/teacher', { replace: true })
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
       setSubmitting(false)
@@ -36,7 +48,7 @@ export function JoinSchoolPage() {
   }
 
   return (
-    <OnboardingCard backTo="/onboarding" className="max-w-[512px]">
+    <OnboardingCard backTo={backTo} className="max-w-[512px]">
       <OnboardingHeading icon={Hash} tone="bg-slate-700">
         Join a School
       </OnboardingHeading>

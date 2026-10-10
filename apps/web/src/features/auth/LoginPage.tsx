@@ -33,6 +33,10 @@ export function LoginPage() {
       await queryClient.invalidateQueries({ queryKey: meQueryKey })
       navigate('/', { replace: true })
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'EMAIL_NOT_VERIFIED') {
+        navigate('/verify-email', { state: { email, autoSend: true } })
+        return
+      }
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
     } finally {
       setSubmitting(false)
@@ -77,7 +81,7 @@ export function LoginPage() {
             </div>
 
             <div className="mt-3 flex justify-between text-xs text-slate-500">
-              <Link to="/verify-email" className="hover:text-slate-800">
+              <Link to="/verify-email" state={{ email }} className="hover:text-slate-800">
                 Verify email
               </Link>
               <Link to="/forgot-password" className="hover:text-slate-800">

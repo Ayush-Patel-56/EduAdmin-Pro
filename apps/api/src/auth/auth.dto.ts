@@ -1,8 +1,10 @@
+import { Transform } from 'class-transformer';
 import {
   IsEmail,
   IsNotEmpty,
   IsOptional,
   IsUUID,
+  Matches,
   IsString,
   MaxLength,
   MinLength,
@@ -30,10 +32,12 @@ export class TeacherSignupDto extends BaseSignupDto {
   @MaxLength(120)
   department?: string;
 
+  // Optional: with a valid code the teacher joins that school straight away.
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || undefined : value))
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'School join code is required' })
   @MaxLength(32)
-  schoolCode: string;
+  schoolCode?: string;
 }
 
 export class AdminSignupDto extends BaseSignupDto {
@@ -59,10 +63,11 @@ export class LoginDto {
 }
 
 export class VerifyEmailDto {
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(128)
-  token: string;
+  @IsEmail({}, { message: 'Please enter a valid email address' })
+  email: string;
+
+  @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code from your email' })
+  code: string;
 }
 
 export class ResendVerificationDto {

@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -14,7 +15,7 @@ import type {
   LoginDto,
   TeacherSignupDto,
 } from './auth.dto.js';
-import { MailService } from './mail.service.js';
+import { EmailVerificationService } from './email-verification.service.js';
 import {
   generateToken,
   hashToken,
@@ -23,7 +24,6 @@ import {
 } from './tokens.js';
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 // Verified against when the email is unknown, so response time does not
 // reveal whether an account exists.
@@ -35,41 +35,56 @@ type Tx = Prisma.TransactionClient;
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
-    private readonly mail: MailService,
+    private readonly verification: EmailVerificationService,
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * Teachers verify their email with a 6-digit code before they can log in.
+   * A valid school code connects them to that school straight away.
+   */
   async signupTeacher(dto: TeacherSignupDto) {
     const email = normalizeEmail(dto.email);
     await this.assertEmailFree(email);
 
-    const school = await this.prisma.school.findUnique({
-      where: { inviteCode: normalizeCode(dto.schoolCode) },
-      select: { id: true },
-    });
-    if (!school) throw new BadRequestException('Invalid school join code');
+    const schoolCode = dto.schoolCode ? normalizeCode(dto.schoolCode) : null;
+    const school = schoolCode
+      ? await this.prisma.school.findUnique({ where: { inviteCode: schoolCode }, select: { id: true } })
+      : null;
+    if (schoolCode && !school) throw new BadRequestException('Invalid school join code');
     const passwordHash = await argon2.hash(dto.password);
+    const fullName = dto.fullName.trim();
 
-    const token = await this.createUser(email, async (tx) => {
+    const code = await this.createUser(async (tx) => {
       const user = await tx.user.create({
         data: {
           email,
           passwordHash,
-          fullName: dto.fullName.trim(),
+          fullName,
           accountType: 'TEACHER',
           department: dto.department?.trim() || null,
         },
       });
-      // Teachers wait for an admin of the school to approve them.
-      await tx.schoolMembership.create({
-        data: { userId: user.id, schoolId: school.id, role: 'TEACHER', status: 'PENDING' },
-      });
-      return user.id;
+      if (school) {
+        await tx.schoolMembership.create({
+          data: { userId: user.id, schoolId: school.id, role: 'TEACHER', status: 'ACTIVE' },
+        });
+      }
+      return this.verification.issue(tx, user.id);
     });
 
-    await this.mail.sendVerificationEmail(email, token);
+    // The account exists either way; if sending fails the user can press "Resend code".
+    try {
+      await this.verification.send(email, fullName, code);
+      return { email, emailSent: true };
+    } catch (err) {
+      this.logger.error(`Could not send verification email to ${email}`, err as Error);
+      return { email, emailSent: false };
+    }
   }
 
   async signupAdmin(dto: AdminSignupDto) {
@@ -89,7 +104,7 @@ export class AuthService {
     }
     const passwordHash = await argon2.hash(dto.password);
 
-    const token = await this.createUser(email, async (tx) => {
+    await this.createUser(async (tx) => {
       // Re-check the limit atomically so two signups can't share the last use.
       const claimed = await tx.adminInviteCode.updateMany({
         where:
@@ -101,7 +116,7 @@ export class AuthService {
       if (claimed.count === 0) {
         throw new BadRequestException('Invalid or expired admin invite code');
       }
-      const user = await tx.user.create({
+      await tx.user.create({
         data: {
           email,
           passwordHash,
@@ -111,10 +126,8 @@ export class AuthService {
           adminInviteCodeId: invite.id,
         },
       });
-      return user.id;
     });
-
-    await this.mail.sendVerificationEmail(email, token);
+    return { email };
   }
 
   async login(dto: LoginDto, client: ClientInfo) {
@@ -126,8 +139,16 @@ export class AuthService {
     if (!user || !valid) {
       throw new UnauthorizedException('Incorrect email or password');
     }
-    if (!user.emailVerified && this.config.get('REQUIRE_EMAIL_VERIFICATION') === 'true') {
-      throw new ForbiddenException('Please verify your email before logging in');
+    const mustVerify =
+      user.accountType === 'TEACHER' || this.config.get('REQUIRE_EMAIL_VERIFICATION') === 'true';
+    if (mustVerify && !user.emailVerified) {
+      // `code` lets the web app send the user to the verification step.
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'Forbidden',
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email before signing in',
+      });
     }
 
     const token = generateToken();
@@ -157,32 +178,6 @@ export class AuthService {
       throw new ForbiddenException('You do not have access to this school');
     }
     await this.prisma.session.update({ where: { id: sessionId }, data: { activeSchoolId: schoolId } });
-  }
-
-  async verifyEmail(token: string) {
-    const record = await this.prisma.emailVerificationToken.findUnique({
-      where: { tokenHash: hashToken(token) },
-    });
-    if (!record || record.expiresAt < new Date()) {
-      throw new BadRequestException('This link is invalid or has expired');
-    }
-    await this.prisma.$transaction([
-      this.prisma.user.update({ where: { id: record.userId }, data: { emailVerified: true } }),
-      this.prisma.emailVerificationToken.deleteMany({ where: { userId: record.userId } }),
-    ]);
-  }
-
-  /** Always succeeds from the caller's view, so it cannot be used to probe for accounts. */
-  async resendVerification(rawEmail: string) {
-    const email = normalizeEmail(rawEmail);
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || user.emailVerified) return;
-
-    const token = await this.prisma.$transaction(async (tx) => {
-      await tx.emailVerificationToken.deleteMany({ where: { userId: user.id } });
-      return issueVerificationToken(tx, user.id);
-    });
-    await this.mail.sendVerificationEmail(email, token);
   }
 
   async profile(userId: string, activeSchoolId: string | null) {
@@ -216,13 +211,9 @@ export class AuthService {
     if (existing) throw emailTaken();
   }
 
-  /** Runs the user-creation steps and issues a verification token in one transaction. */
-  private async createUser(email: string, steps: (tx: Tx) => Promise<string>) {
+  private async createUser<T>(steps: (tx: Tx) => Promise<T>): Promise<T> {
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const userId = await steps(tx);
-        return issueVerificationToken(tx, userId);
-      });
+      return await this.prisma.$transaction(steps);
     } catch (err) {
       // Two signups racing on the same email: the unique index decides.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -235,16 +226,4 @@ export class AuthService {
 
 function emailTaken() {
   return new ConflictException('An account with this email already exists');
-}
-
-async function issueVerificationToken(tx: Tx, userId: string) {
-  const token = generateToken();
-  await tx.emailVerificationToken.create({
-    data: {
-      userId,
-      tokenHash: hashToken(token),
-      expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
-    },
-  });
-  return token;
 }

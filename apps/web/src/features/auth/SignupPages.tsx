@@ -8,7 +8,7 @@ const teacherFields: SignupField[] = [
   { name: 'email', label: 'Institutional email', icon: Mail, type: 'email', autoComplete: 'email', required: true },
   { name: 'password', label: 'Password (min. 8 chars)', type: 'password', autoComplete: 'new-password', required: true },
   { name: 'department', label: 'Department (optional)', icon: Building2 },
-  { name: 'schoolCode', label: 'School join code (e.g. EDUA-4821)', icon: Hash, required: true, transform: toUpper },
+  { name: 'schoolCode', label: 'School join code (e.g. EDUA-4821)', icon: Hash, transform: toUpper },
 ]
 
 const adminFields: SignupField[] = [
@@ -20,7 +20,7 @@ const adminFields: SignupField[] = [
 ]
 
 export function TeacherSignupPage() {
-  return <SignupForm title="Teacher Sign Up" endpoint="/auth/signup/teacher" fields={teacherFields} />
+  return <SignupForm title="Teacher Sign Up" endpoint="/auth/signup/teacher" fields={teacherFields} next="verify" />
 }
 
 export function AdminSignupPage() {

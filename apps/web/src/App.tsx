@@ -9,14 +9,17 @@ import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
 import { adminNav } from '@/features/admin/nav'
-import { SectionPlaceholder } from '@/features/admin/SectionPlaceholder'
+import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
 import { CreateSchoolPage } from '@/features/onboarding/CreateSchoolPage'
 import { JoinSchoolPage } from '@/features/onboarding/JoinSchoolPage'
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage'
 import { SetupCompletePage } from '@/features/onboarding/SetupCompletePage'
-import { TeacherHomePage } from '@/features/teacher/TeacherHomePage'
+import { teacherExtraSections, teacherNav } from '@/features/teacher/nav'
+import { TeacherDashboardPage } from '@/features/teacher/TeacherDashboardPage'
+import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
+const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 
 // Sections reachable from the dashboard that aren't in the sidebar.
 const extraSections = [
@@ -35,7 +38,7 @@ const router = createBrowserRouter([
 
   { path: '/onboarding', element: adminOnly(<OnboardingPage />) },
   { path: '/onboarding/create', element: adminOnly(<CreateSchoolPage />) },
-  { path: '/onboarding/join', element: adminOnly(<JoinSchoolPage />) },
+  { path: '/onboarding/join', element: adminOnly(<JoinSchoolPage backTo="/onboarding" after="confirm" />) },
   { path: '/onboarding/done', element: adminOnly(<SetupCompletePage />) },
 
   {
@@ -50,7 +53,18 @@ const router = createBrowserRouter([
     ],
   },
 
-  { path: '/teacher', element: <RequireAuth accountType="TEACHER"><TeacherHomePage /></RequireAuth> },
+  {
+    path: '/teacher',
+    element: teacherOnly(<TeacherLayout />),
+    children: [
+      { index: true, element: <TeacherDashboardPage /> },
+      ...[...teacherNav.filter((n) => n.path), ...teacherExtraSections].map((n) => ({
+        path: n.path,
+        element: <SectionPlaceholder title={n.label} />,
+      })),
+    ],
+  },
+  { path: '/teacher/join', element: teacherOnly(<JoinSchoolPage backTo="/teacher" after="teacher-portal" />) },
   { path: '*', element: <Navigate to="/" replace /> },
 ])
 

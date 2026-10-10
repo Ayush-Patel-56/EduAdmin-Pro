@@ -72,10 +72,13 @@ model Session {
   @@index([userId])
 }
 
+// One-time 6-digit email verification code. Only a hash is stored, keyed to
+// the user, and a code is locked after too many wrong attempts.
 model EmailVerificationToken {
   id        String   @id @default(uuid())
   userId    String
-  tokenHash String   @unique
+  codeHash  String
+  attempts  Int      @default(0)
   expiresAt DateTime
   createdAt DateTime @default(now())
 

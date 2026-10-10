@@ -20,6 +20,7 @@ import {
   VerifyEmailDto,
 } from './auth.dto.js';
 import { AuthService, SESSION_TTL_MS } from './auth.service.js';
+import { EmailVerificationService } from './email-verification.service.js';
 import { Auth, type AuthContext, SESSION_COOKIE, SessionGuard } from './session.guard.js';
 
 // Tighter limit on endpoints that check passwords or codes, to slow brute force.
@@ -29,14 +30,15 @@ const STRICT = { default: { limit: 10, ttl: 60_000 } };
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
+    private readonly verification: EmailVerificationService,
     private readonly config: ConfigService,
   ) {}
 
   @Post('signup/teacher')
   @Throttle(STRICT)
   async signupTeacher(@Body() dto: TeacherSignupDto) {
-    await this.auth.signupTeacher(dto);
-    return { message: 'Account created successfully' };
+    const result = await this.auth.signupTeacher(dto);
+    return { message: 'Account created. Enter the code sent to your email.', ...result };
   }
 
   @Post('signup/admin')
@@ -89,16 +91,16 @@ export class AuthController {
   @HttpCode(200)
   @Throttle(STRICT)
   async verifyEmail(@Body() dto: VerifyEmailDto) {
-    await this.auth.verifyEmail(dto.token);
-    return { message: 'Email verified. You can now log in.' };
+    await this.verification.verify(dto.email, dto.code);
+    return { message: 'Email verified. You can now sign in.' };
   }
 
   @Post('resend-verification')
   @HttpCode(200)
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   async resendVerification(@Body() dto: ResendVerificationDto) {
-    await this.auth.resendVerification(dto.email);
-    return { message: 'If that account needs verifying, a new link is on its way.' };
+    await this.verification.resend(dto.email);
+    return { message: 'If that account needs verifying, a new code is on its way.' };
   }
 
   private cookieOptions(): CookieOptions {
