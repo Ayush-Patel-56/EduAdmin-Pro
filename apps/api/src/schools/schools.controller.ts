@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
 import { ConfirmNameDto, CreateSchoolDto, JoinSchoolDto, RegenerateCodeDto } from './schools.dto.js';
@@ -38,7 +38,9 @@ export class SchoolsController {
     return this.schools.updateSchool(auth, schoolId, dto);
   }
 
-  @Delete(':schoolId')
+  // POST, not DELETE: some proxies drop a DELETE request's body.
+  @Post(':schoolId/delete')
+  @HttpCode(200)
   remove(@Auth() auth: AuthContext, @SchoolId() schoolId: string, @Body() dto: ConfirmNameDto) {
     return this.schools.deleteSchool(auth, schoolId, dto.confirmName);
   }

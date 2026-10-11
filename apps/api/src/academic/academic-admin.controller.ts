@@ -165,7 +165,9 @@ export class AcademicAdminController {
     return this.faculty.import(schoolId, dto.rows, dto.dryRun);
   }
 
-  @Delete('faculty')
+  // POST, not DELETE: some proxies drop a DELETE request's body.
+  @Post('faculty/delete')
+  @HttpCode(200)
   async deleteFaculty(
     @Auth() auth: AuthContext,
     @Id('schoolId') schoolId: string,
