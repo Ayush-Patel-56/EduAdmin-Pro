@@ -32,14 +32,17 @@ const TX = { timeout: 20_000, maxWait: 10_000 };
 /**
  * Locks one row until the transaction ends, so the state read afterwards is
  * the state this change is applied to: concurrent edits of the same record
- * queue up, and each audit row diffs against what was really there.
+ * queue up, and each audit row diffs against what was really there. Only rows
+ * of the caller's schools are locked: a guessed id from another school locks
+ * nothing (and the read that follows answers 404).
  */
 export async function lockRow(
   tx: Tx,
   table: 'JobRequirement' | 'Candidate' | 'Interview' | 'TeacherAppraisal',
   id: string,
+  schoolIds: string[],
 ) {
-  await tx.$queryRaw`SELECT 1 FROM ${Prisma.raw(`"${table}"`)} WHERE "id" = ${id} FOR UPDATE`;
+  await tx.$queryRaw`SELECT 1 FROM ${Prisma.raw(`"${table}"`)} WHERE "id" = ${id} AND "schoolId" = ANY(${schoolIds}::text[]) FOR UPDATE`;
 }
 
 /** A unique index decided a race: tell the user to refresh, never a 500. */
@@ -331,7 +334,7 @@ export class RecruitmentService {
     const ids = await this.scope(actor.userId);
     const data = requirementData(dto);
     return this.prisma.$transaction(async (tx) => {
-      await lockRow(tx, 'JobRequirement', id);
+      await lockRow(tx, 'JobRequirement', id, ids);
       const before = await tx.jobRequirement.findFirst({
         where: { id, schoolId: { in: ids } },
       });
@@ -359,7 +362,7 @@ export class RecruitmentService {
   async deleteRequirement(actor: Actor, id: string) {
     const ids = await this.scope(actor.userId);
     await this.prisma.$transaction(async (tx) => {
-      await lockRow(tx, 'JobRequirement', id);
+      await lockRow(tx, 'JobRequirement', id, ids);
       const row = await tx.jobRequirement.findFirst({
         where: { id, schoolId: { in: ids } },
       });
@@ -465,7 +468,7 @@ export class RecruitmentService {
   async deleteCandidate(actor: Actor, id: string) {
     const ids = await this.scope(actor.userId);
     await this.prisma.$transaction(async (tx) => {
-      await lockRow(tx, 'Candidate', id);
+      await lockRow(tx, 'Candidate', id, ids);
       const row = await tx.candidate.findFirst({
         where: { id, schoolId: { in: ids } },
       });
@@ -498,7 +501,7 @@ export class RecruitmentService {
     return orConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
-          await lockRow(tx, 'Candidate', id);
+          await lockRow(tx, 'Candidate', id, ids);
           const before = await tx.candidate.findFirst({
             where: { id, schoolId: { in: ids } },
           });
@@ -580,7 +583,7 @@ export class RecruitmentService {
     const data = interviewData(dto);
     return this.prisma.$transaction(async (tx) => {
       // Locked, so the stage we may advance is the stage it really is.
-      await lockRow(tx, 'Candidate', dto.candidateId);
+      await lockRow(tx, 'Candidate', dto.candidateId, ids);
       const candidate = await tx.candidate.findFirst({
         where: { id: dto.candidateId, schoolId: { in: ids } },
       });
@@ -623,7 +626,7 @@ export class RecruitmentService {
     const ids = await this.scope(actor.userId);
     const data = interviewData(dto);
     return this.prisma.$transaction(async (tx) => {
-      await lockRow(tx, 'Interview', id);
+      await lockRow(tx, 'Interview', id, ids);
       const before = await tx.interview.findFirst({
         where: { id, schoolId: { in: ids } },
         include: { candidate: { select: { fullName: true } } },
@@ -652,7 +655,7 @@ export class RecruitmentService {
   async deleteInterview(actor: Actor, id: string) {
     const ids = await this.scope(actor.userId);
     await this.prisma.$transaction(async (tx) => {
-      await lockRow(tx, 'Interview', id);
+      await lockRow(tx, 'Interview', id, ids);
       const row = await tx.interview.findFirst({
         where: { id, schoolId: { in: ids } },
         include: { candidate: { select: { fullName: true } } },
@@ -746,7 +749,7 @@ export class RecruitmentService {
     return orConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
-          await lockRow(tx, 'TeacherAppraisal', id);
+          await lockRow(tx, 'TeacherAppraisal', id, ids);
           const before = await tx.teacherAppraisal.findFirst({
             where: { id, schoolId: { in: ids } },
           });
@@ -780,7 +783,7 @@ export class RecruitmentService {
   async deleteAppraisal(actor: Actor, id: string) {
     const ids = await this.scope(actor.userId);
     await this.prisma.$transaction(async (tx) => {
-      await lockRow(tx, 'TeacherAppraisal', id);
+      await lockRow(tx, 'TeacherAppraisal', id, ids);
       const row = await tx.teacherAppraisal.findFirst({
         where: { id, schoolId: { in: ids } },
         include: { faculty: { select: { name: true } } },

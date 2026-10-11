@@ -16,6 +16,8 @@ import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
 import { parseDate, toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
+import { duplicateAsConflict } from '../common/unique-violation.js';
+import { unlinkProgramChapters } from '../curriculum/unlink-program-chapters.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
   CLASS_OPTIONS,
@@ -286,17 +288,19 @@ export class SchoolsService {
       }
       if (removed.length > 0) {
         const ids = removed.map((p) => p.id);
-        // Curriculum chapters keep existing without a program.
-        await tx.curriculumChapter.updateMany({ where: { schoolId, programId: { in: ids } }, data: { programId: null } });
+        // Curriculum chapters keep existing without a program (409 if that would duplicate one).
+        await unlinkProgramChapters(tx, schoolId, ids);
         await tx.program.deleteMany({ where: { schoolId, id: { in: ids } } });
       }
       const existingKeys = new Set(existing.map((p) => p.name.toLowerCase()));
       const added = wanted.filter((p) => !existingKeys.has(p.toLowerCase()));
       const nextOrder = Math.max(-1, ...existing.map((p) => p.sortOrder)) + 1;
       if (added.length > 0) {
-        await tx.program.createMany({
-          data: added.map((name, i) => newProgram(schoolId, name, nextOrder + i)),
-        });
+        // Another request may add the same program meanwhile; the unique index decides (409, not 500).
+        await duplicateAsConflict(
+          () => tx.program.createMany({ data: added.map((name, i) => newProgram(schoolId, name, nextOrder + i)) }),
+          'A program with one of these names was just added by someone else. Refresh and try again.',
+        );
       }
       const school = await tx.school.update({
         where: { id: schoolId },

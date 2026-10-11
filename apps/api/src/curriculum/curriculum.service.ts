@@ -6,6 +6,10 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import {
+  duplicateAsConflict,
+  isCodeClash,
+} from '../common/unique-violation.js';
 import { CURRICULUM_BOARDS, SUBJECTS } from '../academic/academic-options.js';
 import type { ImportPreview } from '../academic/import-utils.js';
 import { CLASS_OPTIONS } from '../schools/school-options.js';
@@ -112,6 +116,19 @@ function findExistingChapter<T extends ChapterFields>(
   return fits.length === 1
     ? { match: fits[0] }
     : { ambiguous: fits.length > 1 };
+}
+
+/** Two rows of one file describe the same chapter: blank cells on either side match anything. */
+function fitsInFile(a: ChapterFields, b: ChapterFields): boolean {
+  const agree = (x: string | null, y: string | null) =>
+    x === null || y === null || x === y;
+  return (
+    a.subject === b.subject &&
+    a.name.toLowerCase() === b.name.toLowerCase() &&
+    agree(a.board, b.board) &&
+    agree(a.classLevel, b.classLevel) &&
+    agree(a.programId, b.programId)
+  );
 }
 
 @Injectable()
@@ -441,12 +458,26 @@ export class CurriculumService {
           `More than one "${name}" chapter fits this row: fill Board, Class and Program, or use the Chapter Code`,
         );
       }
-      // Rows without a code join a coded row of the same chapter earlier in the file.
-      const key = chapterCode
-        ? `code:${chapterCode}`
-        : found.match
-          ? `id:${found.match.id}`
-          : (planByNatural.get(natural) ?? `key:${natural}`);
+      // Rows without a code join a row of the same chapter earlier in the file:
+      // an exact match, or else the one new chapter whose filled-in cells agree
+      // (blank Board/Class/Program on either row match anything).
+      let key: string;
+      if (chapterCode) key = `code:${chapterCode}`;
+      else if (found.match) key = `id:${found.match.id}`;
+      else {
+        const exact = planByNatural.get(natural);
+        const fits = exact
+          ? []
+          : [...chapterPlans.values()].filter(
+              (p) => !p.existingId && fitsInFile(p.data, data),
+            );
+        if (fits.length > 1) {
+          return fail(
+            `More than one "${name}" chapter in this file fits this row: fill Board, Class and Program, or use the Chapter Code`,
+          );
+        }
+        key = exact ?? fits[0]?.key ?? `key:${natural}`;
+      }
       if (chapterCode) {
         const other = planByNatural.get(natural);
         if (other && other !== key)
@@ -561,7 +592,7 @@ export class CurriculumService {
           .filter((r) => r.action !== 'error')
           .map((r) => ('planKey' in r ? r.planKey : '')),
       );
-      await this.withConflict(
+      await duplicateAsConflict(
         () =>
           this.applyImport(
             schoolId,
@@ -749,41 +780,17 @@ export class CurriculumService {
       );
   }
 
-  /** The database's unique indexes decide duplicates; they surface as a 409, never a 500. */
-  private async withConflict<T>(
-    write: () => Promise<T>,
-    message: string,
-  ): Promise<T> {
-    try {
-      return await write();
-    } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        throw new ConflictException(message);
-      }
-      throw err;
-    }
-  }
-
-  /** A single create/update: the clash is on a code or on a name. */
-  private async withCodeCheck<T>(write: () => Promise<T>): Promise<T> {
-    try {
-      return await write();
-    } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          /code/i.test(JSON.stringify(err.meta ?? {}))
-            ? 'That code is already used in this school'
-            : 'A chapter or concept with that name already exists',
-        );
-      }
-      throw err;
-    }
+  /**
+   * A single create/update: the clash is on a code or on a name. Decided from
+   * the violated index's name (e.g. CurriculumChapter_schoolId_code_key vs
+   * CurriculumChapter_natural_key), not from the error text.
+   */
+  private withCodeCheck<T>(write: () => Promise<T>): Promise<T> {
+    return duplicateAsConflict(write, (names) =>
+      isCodeClash(names)
+        ? 'That code is already used in this school'
+        : 'A chapter or concept with that name already exists',
+    );
   }
 
   private async findChapter(schoolId: string, chapterId: string) {

@@ -21,6 +21,35 @@ No rows means it is safe. If rows come back, merge or rename those accounts firs
 
 The index is created with raw SQL because `schema.prisma` can't express expression indexes. Prisma leaves it alone: replaying every migration into an empty database and diffing it against `schema.prisma` reports no changes, so the next `prisma migrate dev` will not try to drop it.
 
+## Before the unique-names migration (`20261012010000_unique_names_and_chapters`)
+
+The migration adds three unique expression indexes: one syllabus chapter title per batch + subject, one program name per school and one batch name per program (any letter case). Each fails if duplicates already exist, so check first:
+
+```sql
+SELECT "batchId", "subject", lower("title"), count(*) FROM "SyllabusItem" GROUP BY 1, 2, 3 HAVING count(*) > 1;
+SELECT "schoolId", lower("name"), count(*) FROM "Program" GROUP BY 1, 2 HAVING count(*) > 1;
+SELECT "programId", lower("name"), count(*) FROM "Batch" GROUP BY 1, 2 HAVING count(*) > 1;
+```
+
+No rows means it is safe. If rows come back, rename or delete the extras first (the app can do it: edit or delete the chapter, program or batch).
+
+**If it failed anyway:** this migration is not wrapped in a transaction, so the indexes created before the failing one stay behind and a plain re-run fails with "already exists". Recover with:
+
+```sql
+DROP INDEX IF EXISTS "SyllabusItem_batchId_subject_lower_title_key";
+DROP INDEX IF EXISTS "Program_schoolId_lower_name_key";
+DROP INDEX IF EXISTS "Batch_programId_lower_name_key";
+```
+
+then fix the duplicates the error names, and:
+
+```bash
+pnpm --filter api exec prisma migrate resolve --rolled-back 20261012010000_unique_names_and_chapters
+pnpm --filter api exec prisma migrate deploy
+```
+
+After it is applied, two people creating the same program, batch or chapter at the same moment get a 409 ("already exists"), never a 500. A syllabus import that loses such a race reports the affected rows as skipped instead of counting them as created.
+
 ## Before the curriculum-names migration (`20261012030000_curriculum_unique_names`)
 
 The migration adds two unique expression indexes (one concept name per chapter, one chapter per subject + name + board + class + program, any letter case). It fails if duplicates already exist, so check first:
@@ -32,6 +61,22 @@ SELECT "schoolId", "subject", lower("name"), coalesce("board", ''), coalesce("cl
 ```
 
 No rows means it is safe. If rows come back, rename or delete the extras first. Like the email index, these are raw SQL and Prisma leaves them alone.
+
+**If it failed anyway:** the file is not wrapped in a transaction, so the first index may already exist and a plain re-run fails with "already exists". Recover with:
+
+```sql
+DROP INDEX IF EXISTS "CurriculumConcept_chapterId_lower_name_key";
+DROP INDEX IF EXISTS "CurriculumChapter_natural_key";
+```
+
+then remove the duplicates the queries above list, and:
+
+```bash
+pnpm --filter api exec prisma migrate resolve --rolled-back 20261012030000_curriculum_unique_names
+pnpm --filter api exec prisma migrate deploy
+```
+
+With the chapter index in place, removing a program (Delete on the Programs tab, or leaving it out in Edit School) keeps its chapters without a program. If that would duplicate a chapter that already has no program (same subject, name, board and class), the API answers 409 and names the chapters; rename or delete one copy in Curriculum, then remove the program.
 
 Migration folders must sort in the order they were created: use timestamps later than the newest folder in `apps/api/prisma/migrations`.
 
@@ -49,6 +94,22 @@ Migration folders must sort in the order they were created: use timestamps later
   ```sql
   SELECT "facultyId", "period", "academicYear", count(*) FROM "TeacherAppraisal" GROUP BY 1, 2, 3 HAVING count(*) > 1;
   ```
+
+  **Run this on production before `migrate deploy`, and expect no rows.** The file is already applied on the dev branch, so it is left unchanged (editing an applied migration changes its checksum, and `prisma migrate dev` then insists on resetting that database). It is not wrapped in a transaction: with duplicates present, the timestamp conversion, `Candidate.facultyId` and its index apply, and only the appraisal index fails.
+- **If it failed on the appraisal index anyway, don't `migrate resolve --rolled-back` and re-run it.** The re-run fails on `facultyId`, and converting an already converted column again shifts every value by the session's UTC offset. Finish it instead:
+
+  ```bash
+  # remove the duplicate appraisals the query above lists, then:
+  psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -1 <<'SQL'
+  CREATE UNIQUE INDEX "TeacherAppraisal_facultyId_period_academicYear_key" ON "TeacherAppraisal"("facultyId", "period", "academicYear");
+  ALTER TABLE "Candidate" ADD CONSTRAINT "Candidate_facultyId_fkey" FOREIGN KEY ("facultyId") REFERENCES "Faculty"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  SQL
+  pnpm --filter api exec prisma migrate resolve --applied 20261012050000_recruitment_hardening
+  pnpm --filter api exec prisma migrate deploy
+  ```
+
+  If it failed anywhere else (a lost connection, a lock), check which of its statements took effect and run only the remaining ones the same way before `resolve --applied`.
+- The timestamp conversion rewrites each recruitment table under an `ACCESS EXCLUSIVE` lock (reads and writes on it wait until it finishes). The tables are tiny now, but `RecruitmentAuditLog` only ever grows: plan any future type change on it for a quiet moment.
 
 - The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
 
@@ -104,9 +165,18 @@ UPDATE "SchoolMembership" SET "status" = 'REVOKED' WHERE "id" = '<membership id 
 
 A revoked member cannot rejoin with an invite code. Then rotate the school's codes from its dashboard (the refresh button next to each code), since the old teacher code is the one that leaked admin access.
 
-## Admin signup code (`ADMIN123`)
+## Admin signup code (`ADMIN123`) is development-only (`20261012060000_revoke_admin123`)
 
-`ADMIN123` is a permanent, public platform code that lets anyone create an **admin account** (it no longer lets them into an existing school: joining a school needs that school's admin invite code). Issue private codes with `pnpm --filter api invite:create`. Making `ADMIN123` development-only is tracked as a follow-up.
+`ADMIN123` used to be a permanent public code that let anyone create an admin account. The migration revokes it in every environment (a migration can't tell production from development). Accounts already created with it keep working; only new signups with it are refused.
+
+- **Production:** issue a private code per client with `pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14`. After deploying, confirm the revoke:
+
+  ```sql
+  SELECT code, "revokedAt" FROM "AdminInviteCode" WHERE code = 'ADMIN123';  -- revokedAt must be set
+  ```
+
+  Also review admins who signed up with it (`pnpm --filter api admins:audit`, see above).
+- **Development** (local database or the Neon `dev` branch): `NODE_ENV=development pnpm --filter api seed:dev` re-enables it. The script refuses to run when `NODE_ENV` is `production` or unset.
 
 ## Environment
 
