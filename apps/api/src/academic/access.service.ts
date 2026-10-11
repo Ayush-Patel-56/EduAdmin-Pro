@@ -35,6 +35,15 @@ export class AccessService {
     return { isOwner: membership.school.createdById === userId };
   }
 
+  /** Every school the user is an ACTIVE admin of (for views that span schools). */
+  async adminSchoolIds(userId: string) {
+    const memberships = await this.prisma.schoolMembership.findMany({
+      where: { userId, role: 'ADMIN', status: 'ACTIVE' },
+      select: { schoolId: true },
+    });
+    return memberships.map((m) => m.schoolId);
+  }
+
   /** The admin who created the school: needed for edit, delete and Clear All Data. */
   async assertOwner(userId: string, schoolId: string) {
     const { isOwner } = await this.assertAdmin(userId, schoolId);

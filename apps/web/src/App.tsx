@@ -10,6 +10,7 @@ import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
 import { adminExtraSections, adminNav, legacyAdminPaths } from '@/features/admin/nav'
 import { CurriculumPage } from '@/features/admin/curriculum/CurriculumPage'
+import { RecruitmentPage } from '@/features/admin/recruitment/RecruitmentPage'
 import { AcademicPlanningPage } from '@/features/admin/planning/AcademicPlanningPage'
 import { RouteError } from '@/features/portal/RouteError'
 import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
@@ -26,6 +27,7 @@ const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{elem
 const adminPages: Record<string, ReactNode> = {
   'academic-planning': <AcademicPlanningPage />,
   curriculum: <CurriculumPage />,
+  recruitment: <RecruitmentPage />,
 }
 const teacherPages: Record<string, ReactNode> = { 'academic-planning': <TeacherAcademicPlanningPage /> }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>

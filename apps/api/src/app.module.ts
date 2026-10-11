@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { validateEnv } from './config/env.js';
 import { CurriculumModule } from './curriculum/curriculum.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { RecruitmentModule } from './recruitment/recruitment.module.js';
 import { SchoolsModule } from './schools/schools.module.js';
 
 @Module({
@@ -19,6 +20,7 @@ import { SchoolsModule } from './schools/schools.module.js';
     SchoolsModule,
     AcademicModule,
     CurriculumModule,
+    RecruitmentModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

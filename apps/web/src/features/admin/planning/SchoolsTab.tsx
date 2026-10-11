@@ -385,6 +385,10 @@ type ClearPreview = {
   promotionCycles: number
   chapters: number
   concepts: number
+  requirements: number
+  candidates: number
+  interviews: number
+  appraisals: number
 }
 
 function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () => void }) {
@@ -400,6 +404,10 @@ function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () =
     [preview.syllabusItems, 'syllabus chapters'],
     [preview.chapters, 'curriculum chapters'],
     [preview.concepts, 'curriculum concepts'],
+    [preview.requirements, 'job requirements'],
+    [preview.candidates, 'candidates'],
+    [preview.interviews, 'interviews'],
+    [preview.appraisals, 'teacher appraisals'],
     [preview.importedFaculty, 'imported faculty profiles (without a login)'],
     [preview.announcements, 'announcements'],
     [preview.promotionCycles, 'promotion records'],
@@ -411,8 +419,8 @@ function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () =
       action="Clear All Data"
       description={
         <>
-          Removes the academic data of <strong>{school.name}</strong>. The school, its members, their faculty profiles
-          and the invite code stay. This can’t be undone.
+          Removes the academic and recruitment data of <strong>{school.name}</strong>. The school, its members, their
+          faculty profiles, the invite code and the audit trail stay. This can’t be undone.
         </>
       }
       extra={
