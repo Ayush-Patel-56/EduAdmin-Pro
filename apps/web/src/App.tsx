@@ -8,7 +8,7 @@ import { SignupRolePage } from '@/features/auth/SignupRolePage'
 import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
-import { adminExtraSections, adminNav, legacyAdminPaths } from '@/features/admin/nav'
+import { adminExtraSections, adminNav, legacyAdminTarget } from '@/features/admin/nav'
 import { RouteError } from '@/features/portal/RouteError'
 import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
 import { CreateSchoolPage } from '@/features/onboarding/CreateSchoolPage'
@@ -24,9 +24,7 @@ const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{
 
 /** Sends /dashboard/fees → /management/fee-management and the like. */
 function LegacyAdminRedirect() {
-  const [section = '', ...rest] = (useParams()['*'] ?? '').split('/')
-  const to = ['/management', legacyAdminPaths[section] ?? section, ...rest].filter(Boolean).join('/')
-  return <Navigate to={to} replace />
+  return <Navigate to={legacyAdminTarget(useParams()['*'] ?? '')} replace />
 }
 
 const router = createBrowserRouter([

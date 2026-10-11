@@ -120,6 +120,9 @@ model School {
   name                   String
   // Unique per school; shared with staff so they can join.
   inviteCode             String    @unique
+  // Shared only with other admins. Entering it joins as ADMIN; the teacher
+  // inviteCode above can never grant admin rights.
+  adminInviteCode        String    @unique
   board                  String
   classes                String[]  @default([]) // e.g. ["6th", "7th", …], in display order
   academicYearStartMonth Int       @default(4) // 1-12; April by default

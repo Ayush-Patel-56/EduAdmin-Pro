@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Navigate, Outlet, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Building2 } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { Select } from '@/components/ui/Select'
 import { meQueryKey, useMe } from '@/features/auth/session'
 import { adminSchools, type Me } from '@/features/auth/types'
@@ -31,12 +31,22 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
   const queryClient = useQueryClient()
   const { data: dashboard, error: dashboardError } = useDashboard(schoolId)
   const [programId, setProgramId] = useState(ALL_PROGRAMS)
+  const [switchError, setSwitchError] = useState<string | null>(null)
   const schools = adminSchools(me)
   const schoolName = schools.find((s) => s.schoolId === schoolId)?.schoolName ?? null
 
   async function switchSchool(id: string) {
     if (id === schoolId) return
-    await api('/auth/active-school', { method: 'POST', body: JSON.stringify({ schoolId: id }) })
+    setSwitchError(null)
+    try {
+      await api('/auth/active-school', { method: 'POST', body: JSON.stringify({ schoolId: id }) })
+    } catch (err) {
+      // Stay on the current school and say why, instead of leaving an unhandled rejection.
+      setSwitchError(err instanceof ApiError ? err.message : 'Unable to reach the server')
+      return
+    }
+    // Nothing cached for the school we're leaving should outlive the switch.
+    queryClient.removeQueries({ predicate: (q) => q.queryKey.includes(schoolId) })
     queryClient.setQueryData<Me>(meQueryKey, (old) => (old ? { ...old, activeSchoolId: id } : old))
     navigate('/management')
   }
@@ -86,6 +96,14 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
         </>
       }
     >
+      {switchError && (
+        <p role="alert" className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>Couldn’t switch school: {switchError}</span>
+          <button type="button" onClick={() => setSwitchError(null)} aria-label="Dismiss" className="font-semibold">
+            ×
+          </button>
+        </p>
+      )}
       <Outlet context={{ me, schoolId, dashboard, dashboardError, programId } satisfies AdminContext} />
     </PortalShell>
   )

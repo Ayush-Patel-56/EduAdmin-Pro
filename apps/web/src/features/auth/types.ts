@@ -27,7 +27,8 @@ export type Me = {
   fullName: string
   accountType: AccountType
   emailVerified: boolean
-  preferences: Preferences
+  /** Absent when talking to an API that predates Account Preferences. */
+  preferences?: Preferences
   activeSchoolId: string | null
   memberships: Membership[]
 }
@@ -36,3 +37,15 @@ export const firstName = (me: Pick<Me, 'fullName'>) => me.fullName.trim().split(
 
 export const adminSchools = (me: Me) =>
   me.memberships.filter((m) => m.role === 'ADMIN' && m.status === 'ACTIVE')
+
+export const DEFAULT_PREFERENCES: Preferences = {
+  emailNotifications: true,
+  syllabusUpdates: true,
+  accentTheme: null,
+}
+
+/** The user's preferences, falling back to defaults if the API didn't send any. */
+export const preferencesOf = (me: Pick<Me, 'preferences'>): Preferences => ({
+  ...DEFAULT_PREFERENCES,
+  ...me.preferences,
+})

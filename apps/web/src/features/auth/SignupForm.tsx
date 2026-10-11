@@ -76,8 +76,12 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
     setError(null)
     setSubmitting(true)
     try {
-      const result = await api<{ email: string }>(endpoint, { method: 'POST', body: JSON.stringify(values) })
-      if (next === 'verify') setVerifyEmail(result.email)
+      const result = await api<{ email: string; verificationRequired?: boolean }>(endpoint, {
+        method: 'POST',
+        body: JSON.stringify(values),
+      })
+      // Admins verify too when the server requires it (always in production).
+      if (next === 'verify' || result.verificationRequired) setVerifyEmail(result.email)
       else setCreated(true)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
