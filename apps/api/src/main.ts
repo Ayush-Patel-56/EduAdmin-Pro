@@ -1,10 +1,18 @@
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Behind a load balancer or reverse proxy, trust exactly that many hops so
+  // req.ip (stored on sessions and used by the rate limiter) is the real
+  // client, without letting clients spoof X-Forwarded-For.
+  const proxyHops = Number(process.env.TRUST_PROXY ?? 0);
+  if (proxyHops > 0) app.set('trust proxy', proxyHops);
+  app.use(helmet());
   app.setGlobalPrefix('api');
   app.use(cookieParser());
   app.useGlobalPipes(
@@ -23,6 +31,9 @@ async function bootstrap() {
     origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
     credentials: true,
   });
+  // On SIGTERM (deploys), stop accepting requests, let in-flight ones finish
+  // and disconnect Prisma via onModuleDestroy.
+  app.enableShutdownHooks();
   await app.listen(process.env.PORT ?? 3000);
 }
 await bootstrap();

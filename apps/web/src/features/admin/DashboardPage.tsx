@@ -11,18 +11,20 @@ import {
   Clock,
   Copy,
   Loader2,
+  RefreshCw,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { AnnouncementList } from '@/features/portal/Announcements'
 import { formatDate } from '@/features/portal/format'
+import { RegenerateCodeDialog } from './RegenerateCodeDialog'
 import { useAdminContext } from './adminContext'
 import type { Dashboard, MouStatus } from './useDashboard'
 
 const CURRENT_YEAR = new Date().getFullYear()
 
 export function DashboardPage() {
-  const { dashboard, dashboardError } = useAdminContext()
+  const { dashboard, dashboardError, schoolId } = useAdminContext()
 
   if (dashboardError) {
     return <p className="rounded-lg bg-red-50 p-4 text-sm text-red-700">{dashboardError.message}</p>
@@ -47,12 +49,12 @@ export function DashboardPage() {
 
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-12">
         <Card icon={Building2} title="School Background" className="md:col-span-2 xl:col-span-7">
-          <SchoolBackground dashboard={dashboard} />
+          <SchoolBackground dashboard={dashboard} schoolId={schoolId} />
         </Card>
 
         <Card icon={Zap} title="Quick Actions" className="xl:col-span-3">
           <Link
-            to="/dashboard/academic-planning"
+            to="/management/academic-planning"
             className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 transition hover:bg-slate-50"
           >
             <span className="flex size-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
@@ -64,7 +66,7 @@ export function DashboardPage() {
         </Card>
 
         <Card icon={Bell} title="Announcements" className="flex flex-col xl:col-span-2">
-          <AnnouncementList items={dashboard.announcements} manageTo="/dashboard/announcements" />
+          <AnnouncementList items={dashboard.announcements} manageTo="/management/announcements" />
         </Card>
       </div>
 
@@ -84,7 +86,7 @@ function Card({ icon: Icon, title, className = '', children }: { icon: LucideIco
   )
 }
 
-function SchoolBackground({ dashboard }: { dashboard: Dashboard }) {
+function SchoolBackground({ dashboard, schoolId }: { dashboard: Dashboard; schoolId: string }) {
   const { school, programs } = dashboard
   return (
     <>
@@ -94,7 +96,22 @@ function SchoolBackground({ dashboard }: { dashboard: Dashboard }) {
         <Tile label="Programs Offered" value={programs.map((p) => p.name).join(', ') || 'None yet'} />
         <MouTile status={school.mouStatus} start={school.mouStartDate} end={school.mouEndDate} />
       </div>
-      <InviteCode code={school.inviteCode} />
+      <InviteCode
+        code={school.inviteCode}
+        title="Teacher Invite Code"
+        hint="Share with teachers & staff. It joins them as teachers only."
+        tone="teacher"
+        schoolId={schoolId}
+        kind="TEACHER"
+      />
+      <InviteCode
+        code={school.adminInviteCode}
+        title="Admin Invite Code"
+        hint="Share only with other administrators. It joins them as admins."
+        tone="admin"
+        schoolId={schoolId}
+        kind="ADMIN"
+      />
     </>
   )
 }
@@ -154,28 +171,66 @@ function MouTile({ status, start, end }: { status: MouStatus; start: string | nu
   )
 }
 
-function InviteCode({ code }: { code: string }) {
+type InviteCodeProps = {
+  code: string
+  title: string
+  hint: string
+  tone: 'teacher' | 'admin'
+  schoolId: string
+  kind: 'ADMIN' | 'TEACHER'
+}
+
+const INVITE_TONES = {
+  teacher: {
+    box: 'border-amber-300 bg-amber-50/70',
+    title: 'text-amber-700',
+    code: 'text-amber-900',
+    hint: 'text-amber-600',
+    button: 'bg-amber-100 text-amber-800 hover:bg-amber-200',
+  },
+  admin: {
+    box: 'border-indigo-200 bg-indigo-50/60',
+    title: 'text-indigo-700',
+    code: 'text-indigo-900',
+    hint: 'text-indigo-600',
+    button: 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200',
+  },
+} as const
+
+function InviteCode({ code, title, hint, tone, schoolId, kind }: InviteCodeProps) {
   const [copied, setCopied] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
+  const t = INVITE_TONES[tone]
   async function copy() {
     await navigator.clipboard.writeText(code)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <div className="mt-4 flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50/70 p-4">
+    <div className={`mt-4 flex items-center gap-3 rounded-lg border p-4 ${t.box}`}>
       <div className="flex-1">
-        <p className="text-[10px] font-bold tracking-wider text-amber-700 uppercase">School Invite Code</p>
-        <p className="mt-1 font-mono text-base font-bold tracking-[0.25em] text-amber-900">{code}</p>
-        <p className="mt-1 text-[11px] text-amber-600">Share this code with teachers &amp; staff to join your school</p>
+        <p className={`text-[10px] font-bold tracking-wider uppercase ${t.title}`}>{title}</p>
+        <p className={`mt-1 font-mono text-base font-bold tracking-[0.25em] ${t.code}`}>{code}</p>
+        <p className={`mt-1 text-[11px] ${t.hint}`}>{hint}</p>
       </div>
       <button
         type="button"
         onClick={copy}
-        className="flex items-center gap-1.5 rounded-md bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-200"
+        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${t.button}`}
       >
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         {copied ? 'Copied' : 'Copy'}
       </button>
+      <button
+        type="button"
+        onClick={() => setRegenerating(true)}
+        aria-label={`Regenerate ${title}`}
+        title="Regenerate (the old code stops working)"
+        className={`flex items-center rounded-md p-1.5 transition ${t.button}`}
+      >
+        <RefreshCw className="size-3.5" />
+      </button>
+      {regenerating && <RegenerateCodeDialog schoolId={schoolId} kind={kind} onClose={() => setRegenerating(false)} />}
     </div>
   )
 }
@@ -188,7 +243,7 @@ function Schedule({ rows }: { rows: Dashboard['todaySchedule'] }) {
         <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
           <CalendarClock className="size-5 text-slate-700" /> Today's Class Schedule
         </h2>
-        <Link to="/dashboard/schedule" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
+        <Link to="/management/schedule" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
           Manage Schedule
         </Link>
       </div>

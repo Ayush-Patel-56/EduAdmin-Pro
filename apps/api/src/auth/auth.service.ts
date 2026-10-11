@@ -8,12 +8,13 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
-import { Prisma } from '../generated/prisma/client.js';
+import { Prisma, type User } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type {
   AdminSignupDto,
   LoginDto,
   TeacherSignupDto,
+  UpdatePreferencesDto,
 } from './auth.dto.js';
 import { EmailVerificationService } from './email-verification.service.js';
 import {
@@ -104,7 +105,8 @@ export class AuthService {
     }
     const passwordHash = await argon2.hash(dto.password);
 
-    await this.createUser(async (tx) => {
+    const fullName = dto.fullName.trim();
+    const code = await this.createUser(async (tx) => {
       // Re-check the limit atomically so two signups can't share the last use.
       const claimed = await tx.adminInviteCode.updateMany({
         where:
@@ -116,18 +118,27 @@ export class AuthService {
       if (claimed.count === 0) {
         throw new BadRequestException('Invalid or expired admin invite code');
       }
-      await tx.user.create({
+      const user = await tx.user.create({
         data: {
           email,
           passwordHash,
-          fullName: dto.fullName.trim(),
+          fullName,
           accountType: 'ADMIN',
           employeeId: dto.employeeId?.trim() || null,
           adminInviteCodeId: invite.id,
         },
       });
+      return this.requiresVerification('ADMIN') ? this.verification.issue(tx, user.id) : null;
     });
-    return { email };
+    if (code) {
+      // The account exists either way; if sending fails the user can press "Resend code".
+      try {
+        await this.verification.send(email, fullName, code);
+      } catch (err) {
+        this.logger.error(`Could not send verification email to ${email}`, err as Error);
+      }
+    }
+    return { email, verificationRequired: code !== null };
   }
 
   async login(dto: LoginDto, client: ClientInfo) {
@@ -139,9 +150,7 @@ export class AuthService {
     if (!user || !valid) {
       throw new UnauthorizedException('Incorrect email or password');
     }
-    const mustVerify =
-      user.accountType === 'TEACHER' || this.config.get('REQUIRE_EMAIL_VERIFICATION') === 'true';
-    if (mustVerify && !user.emailVerified) {
+    if (this.requiresVerification(user.accountType) && !user.emailVerified) {
       // `code` lets the web app send the user to the verification step.
       throw new ForbiddenException({
         statusCode: 403,
@@ -163,6 +172,19 @@ export class AuthService {
       },
     });
     return token;
+  }
+
+  /**
+   * Teachers always verify their email. Admins do too in production, or
+   * wherever REQUIRE_EMAIL_VERIFICATION=true (env validation refuses `false`
+   * in production).
+   */
+  requiresVerification(accountType: 'ADMIN' | 'TEACHER') {
+    return (
+      accountType === 'TEACHER' ||
+      this.config.get('NODE_ENV') === 'production' ||
+      this.config.get('REQUIRE_EMAIL_VERIFICATION') === 'true'
+    );
   }
 
   async logout(sessionId: string) {
@@ -196,6 +218,7 @@ export class AuthService {
       fullName: user.fullName,
       accountType: user.accountType,
       emailVerified: user.emailVerified,
+      preferences: toPreferences(user),
       activeSchoolId,
       memberships: user.memberships.map((m) => ({
         schoolId: m.school.id,
@@ -204,6 +227,18 @@ export class AuthService {
         status: m.status,
       })),
     };
+  }
+
+  async updatePreferences(userId: string, dto: UpdatePreferencesDto) {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        emailNotifications: dto.emailNotifications,
+        syllabusUpdates: dto.syllabusUpdates,
+        accentTheme: dto.accentTheme,
+      },
+    });
+    return toPreferences(user);
   }
 
   private async assertEmailFree(email: string) {
@@ -226,4 +261,12 @@ export class AuthService {
 
 function emailTaken() {
   return new ConflictException('An account with this email already exists');
+}
+
+function toPreferences(user: Pick<User, 'emailNotifications' | 'syllabusUpdates' | 'accentTheme'>) {
+  return {
+    emailNotifications: user.emailNotifications,
+    syllabusUpdates: user.syllabusUpdates,
+    accentTheme: user.accentTheme,
+  };
 }

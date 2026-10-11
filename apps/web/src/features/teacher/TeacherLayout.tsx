@@ -3,7 +3,7 @@ import { Outlet } from 'react-router-dom'
 import { useMe } from '@/features/auth/session'
 import { PortalShell } from '@/features/portal/PortalShell'
 import { ALL_PROGRAMS, BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
-import { teacherNav } from './nav'
+import { teacherExtraSections, teacherNav } from './nav'
 import { ProfileMenu } from './ProfileMenu'
 import { SwitchSchoolDialog } from './SwitchSchoolDialog'
 import { useTeacherDashboard, type TeacherContext } from './useTeacherDashboard'
@@ -22,11 +22,20 @@ export function TeacherLayout() {
     <PortalShell
       me={me}
       subtitle="Faculty Portal"
+      roleLabel="Teacher"
+      defaultAccent="BLUE"
       basePath="/teacher"
       nav={teacherNav}
+      extraPages={teacherExtraSections}
       avatarClassName="bg-ink"
-      renderProfileMenu={(close) => (
-        <ProfileMenu me={me} schoolName={schoolName} onSwitchSchool={openSwitchSchool} onClose={close} />
+      renderProfileMenu={({ close, openPreferences }) => (
+        <ProfileMenu
+          me={me}
+          schoolName={schoolName}
+          onSwitchSchool={openSwitchSchool}
+          onPreferences={openPreferences}
+          onClose={close}
+        />
       )}
       selectors={
         <>

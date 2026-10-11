@@ -22,5 +22,5 @@ export function useLogout() {
 /** Where a signed-in user belongs right now. */
 export function homePath(me: Me) {
   if (me.accountType === 'TEACHER') return '/teacher'
-  return adminSchools(me).length > 0 ? '/dashboard' : '/onboarding'
+  return adminSchools(me).length > 0 ? '/management' : '/onboarding'
 }

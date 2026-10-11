@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -15,6 +16,7 @@ import {
   CLASS_OPTIONS,
   classesLabel,
   DEFAULT_SELECTION,
+  MONTHS,
   orderClasses,
   STANDARD_BOARDS,
   STANDARD_PROGRAMS,
@@ -25,6 +27,8 @@ export type MouStatus = 'NOT_SET' | 'UPCOMING' | 'ACTIVE' | 'EXPIRED';
 
 @Injectable()
 export class SchoolsService {
+  private readonly logger = new Logger(SchoolsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   options() {
@@ -32,6 +36,7 @@ export class SchoolsService {
       boards: STANDARD_BOARDS,
       classes: CLASS_OPTIONS,
       programs: STANDARD_PROGRAMS,
+      months: MONTHS,
       defaults: DEFAULT_SELECTION,
     };
   }
@@ -47,12 +52,17 @@ export class SchoolsService {
     const programs = dedupePrograms(dto.programs);
 
     return this.prisma.$transaction(async (tx) => {
+      const inviteCode = await uniqueSchoolCode(tx);
+      let adminInviteCode = await uniqueSchoolCode(tx);
+      while (adminInviteCode === inviteCode) adminInviteCode = await uniqueSchoolCode(tx);
       const school = await tx.school.create({
         data: {
           name: dto.name,
-          inviteCode: await uniqueSchoolCode(tx),
+          inviteCode,
+          adminInviteCode,
           board: dto.board,
           classes: orderClasses(dto.classes),
+          academicYearStartMonth: dto.academicYearStartMonth ?? DEFAULT_SELECTION.academicYearStartMonth,
           mouStartDate: mouStart,
           mouEndDate: mouEnd,
           contactPerson: dto.contactPerson ?? null,
@@ -90,17 +100,30 @@ export class SchoolsService {
   }
 
   /**
-   * Join a school with its invite code. Admin accounts join as admins (any
-   * number of schools). Teachers join as teachers and leave any school they
-   * were in, since they belong to one school at a time.
+   * Join a school with one of its two invite codes. The role comes from the
+   * code, never from the account alone:
+   *  - the teacher code joins a teacher account as a teacher (and leaves any
+   *    school they were in, since teachers belong to one school at a time);
+   *  - the admin code joins an admin account as an admin (any number of schools).
+   * A code of the wrong kind is refused, so sharing the teacher code with
+   * staff can never hand out admin rights.
    */
   async joinSchool(auth: AuthContext, inviteCode: string) {
     const { accountType } = await this.prisma.user.findUniqueOrThrow({
       where: { id: auth.userId },
       select: { accountType: true },
     });
-    const school = await this.prisma.school.findUnique({ where: { inviteCode } });
+    const school = await this.prisma.school.findFirst({
+      where: { OR: [{ inviteCode }, { adminInviteCode: inviteCode }] },
+    });
     if (!school) throw new BadRequestException('Invalid invite code');
+    const isAdminCode = school.adminInviteCode === inviteCode;
+    if (isAdminCode && accountType !== 'ADMIN') {
+      throw new ForbiddenException('That code is for school administrators. Ask your school for the teacher code.');
+    }
+    if (!isAdminCode && accountType === 'ADMIN') {
+      throw new ForbiddenException('That is the teacher code. Ask the school owner for the school’s admin invite code.');
+    }
 
     const existing = await this.prisma.schoolMembership.findUnique({
       where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
@@ -192,9 +215,11 @@ export class SchoolsService {
         id: school.id,
         name: school.name,
         inviteCode: school.inviteCode,
+        adminInviteCode: school.adminInviteCode,
         board: school.board,
         classes: school.classes,
         classesLabel: classesLabel(school.classes),
+        academicYearStartMonth: school.academicYearStartMonth,
         mouStartDate: toIsoDate(school.mouStartDate),
         mouEndDate: toIsoDate(school.mouEndDate),
         mouStatus: mouStatus(school.mouStartDate, school.mouEndDate),
@@ -204,6 +229,25 @@ export class SchoolsService {
       // Populated once timetables exist; kept in the response shape so the UI is final.
       todaySchedule: [],
     };
+  }
+
+  /**
+   * Replaces one of the school's invite codes with a fresh one; the old code
+   * stops working immediately. Existing members keep their access: only new
+   * joins are affected. Any admin of the school may rotate either code.
+   */
+  async regenerateCode(auth: AuthContext, schoolId: string, kind: 'ADMIN' | 'TEACHER') {
+    await this.assertSchoolAdmin(auth.userId, schoolId);
+    const school = await this.prisma.$transaction(async (tx) => {
+      const code = await uniqueSchoolCode(tx);
+      return tx.school.update({
+        where: { id: schoolId },
+        data: kind === 'ADMIN' ? { adminInviteCode: code } : { inviteCode: code },
+        select: { inviteCode: true, adminInviteCode: true },
+      });
+    });
+    this.logger.warn(`${kind} invite code of school ${schoolId} regenerated by user ${auth.userId}`);
+    return school;
   }
 
   private async assertAdminAccount(userId: string) {
@@ -264,7 +308,11 @@ export function mouStatus(start: Date | null, end: Date | null, now = new Date()
 async function uniqueSchoolCode(tx: Tx) {
   for (;;) {
     const code = generateJoinCode();
-    const taken = await tx.school.findUnique({ where: { inviteCode: code }, select: { id: true } });
+    // A code is unique across both columns, so one code never means two things.
+    const taken = await tx.school.findFirst({
+      where: { OR: [{ inviteCode: code }, { adminInviteCode: code }] },
+      select: { id: true },
+    });
     if (!taken) return code;
   }
 }

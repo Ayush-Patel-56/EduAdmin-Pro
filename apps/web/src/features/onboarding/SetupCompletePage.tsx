@@ -11,12 +11,12 @@ export function SetupCompletePage() {
 
   useEffect(() => {
     if (!schoolName) return
-    const timer = setTimeout(() => navigate('/dashboard', { replace: true }), REDIRECT_DELAY_MS)
+    const timer = setTimeout(() => navigate('/management', { replace: true }), REDIRECT_DELAY_MS)
     return () => clearTimeout(timer)
   }, [navigate, schoolName])
 
   // Reached by refreshing or typing the URL: nothing to confirm, go straight on.
-  if (!schoolName) return <Navigate to="/dashboard" replace />
+  if (!schoolName) return <Navigate to="/management" replace />
 
   return (
     <OnboardingCard>

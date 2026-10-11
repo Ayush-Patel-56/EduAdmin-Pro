@@ -19,7 +19,7 @@ import {
 
 export type NavItem = { path: string; label: string; icon: LucideIcon }
 
-// `path` is relative to /dashboard; '' is the dashboard home.
+// `path` is relative to /management; '' is the dashboard home.
 export const adminNav: NavItem[] = [
   { path: '', label: 'Dashboard', icon: LayoutGrid },
   { path: 'academic-planning', label: 'Academic Planning', icon: BookOpen },
@@ -29,11 +29,29 @@ export const adminNav: NavItem[] = [
   { path: 'students', label: 'Students', icon: GraduationCap },
   { path: 'teacher-portal', label: 'Teacher Portal', icon: UserCircle },
   { path: 'daily-reports', label: 'Daily Reports', icon: ClipboardList },
-  { path: 'fees', label: 'Fee Management', icon: CreditCard },
-  { path: 'tests', label: 'Tests & Question Bank', icon: FileQuestion },
+  { path: 'fee-management', label: 'Fee Management', icon: CreditCard },
+  { path: 'tests-bank', label: 'Tests & Question Bank', icon: FileQuestion },
   { path: 'attendance', label: 'Attendance', icon: CalendarCheck },
   { path: 'feedback', label: 'Feedback', icon: MessageSquare },
   { path: 'counseling', label: 'Counseling', icon: HeartHandshake },
   { path: 'meetings', label: 'Meetings', icon: Users },
   { path: 'calendar', label: 'Calendar', icon: CalendarDays },
 ]
+
+// Reachable from the dashboard but not listed in the sidebar.
+export const adminExtraSections = [
+  { path: 'announcements', label: 'Announcements' },
+  { path: 'schedule', label: 'Class Schedule' },
+]
+
+// Admin paths before the PRD route names; old links redirect to the new ones.
+export const legacyAdminPaths: Record<string, string> = {
+  fees: 'fee-management',
+  tests: 'tests-bank',
+}
+
+/** Where an old /dashboard/<splat> URL now lives under /management. */
+export function legacyAdminTarget(splat: string): string {
+  const [section = '', ...rest] = splat.split('/')
+  return ['/management', legacyAdminPaths[section] ?? section, ...rest].filter(Boolean).join('/')
+}

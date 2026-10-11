@@ -45,7 +45,7 @@ export function TeacherDashboardPage() {
           </p>
         </div>
         <Link
-          to="/teacher/class-notes"
+          to="/teacher/daily-report"
           className="flex h-10 items-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-white transition hover:bg-ink-hover"
         >
           <Plus className="size-4" /> Add Class Note
@@ -90,8 +90,8 @@ export function TeacherDashboardPage() {
           <section className="rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="mb-4 text-base font-bold text-slate-900">Quick Actions</h2>
             <div className="space-y-3">
-              <QuickAction to="/teacher/daily-class-report" icon={ClipboardList} iconClass="text-slate-700" label="Submit Daily Report" />
-              <QuickAction to="/teacher/study-material" icon={BookOpen} iconClass="text-emerald-600" label="Upload Material" />
+              <QuickAction to="/teacher/daily-report" icon={ClipboardList} iconClass="text-slate-700" label="Submit Daily Report" />
+              <QuickAction to="/teacher/courses" icon={BookOpen} iconClass="text-emerald-600" label="Upload Material" />
               <QuickAction to="/teacher/assignments" icon={Plus} iconClass="text-amber-500" label="Create Assignment" />
             </div>
           </section>

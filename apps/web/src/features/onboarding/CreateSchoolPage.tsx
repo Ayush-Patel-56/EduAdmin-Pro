@@ -15,12 +15,15 @@ type SchoolOptions = {
   boards: string[]
   classes: string[]
   programs: string[]
-  defaults: { board: string; classes: string[]; programs: string[] }
+  /** January … December; the form sends 1-12. */
+  months: string[]
+  defaults: { board: string; classes: string[]; programs: string[]; academicYearStartMonth: number }
 }
 
 type FormValues = {
   name: string
   board: string
+  academicYearStartMonth: number
   classes: string[]
   mouStartDate: string
   mouEndDate: string
@@ -91,6 +94,7 @@ function CreateSchoolForm({ options }: { options: SchoolOptions }) {
   const [values, setValues] = useState<FormValues>({
     name: '',
     board: options.defaults.board,
+    academicYearStartMonth: options.defaults.academicYearStartMonth,
     classes: options.defaults.classes,
     mouStartDate: '',
     mouEndDate: '',
@@ -195,6 +199,15 @@ function CreateSchoolForm({ options }: { options: SchoolOptions }) {
               ]}
             />
           )}
+        </Field>
+
+        <Field id="school-academicYearStartMonth" label="Academic year starts in">
+          <Select
+            id="school-academicYearStartMonth"
+            value={String(values.academicYearStartMonth)}
+            options={options.months.map((m, i) => ({ value: String(i + 1), label: m }))}
+            onChange={(m) => set('academicYearStartMonth', Number(m))}
+          />
         </Field>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] sm:gap-3">

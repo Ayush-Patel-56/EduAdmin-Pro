@@ -1,6 +1,8 @@
 import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsUUID,
@@ -78,4 +80,21 @@ export class ResendVerificationDto {
 export class SetActiveSchoolDto {
   @IsUUID('4', { message: 'Invalid school' })
   schoolId: string;
+}
+
+export const ACCENT_THEMES = ['INDIGO', 'BLUE', 'EMERALD', 'SLATE'] as const;
+
+export class UpdatePreferencesDto {
+  @IsOptional()
+  @IsBoolean()
+  emailNotifications?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  syllabusUpdates?: boolean;
+
+  // null resets to the portal's default accent.
+  @IsOptional()
+  @IsIn([...ACCENT_THEMES, null], { message: 'Unknown accent theme' })
+  accentTheme?: (typeof ACCENT_THEMES)[number] | null;
 }
