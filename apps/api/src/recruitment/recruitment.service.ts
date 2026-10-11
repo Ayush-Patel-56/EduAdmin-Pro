@@ -1,13 +1,20 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { AccessService } from '../academic/access.service.js';
-import { parseDate, toIsoDate } from '../common/dates.js';
+import {
+  formatIst,
+  istToday,
+  istYearStart,
+  parseDate,
+  toIsoDate,
+} from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
-import type { CandidateStage, Prisma } from '../generated/prisma/client.js';
+import { type CandidateStage, Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { type Actor, diff, snapshot, writeAudit } from './audit.js';
 import type {
@@ -21,6 +28,38 @@ import { ACTIVE_STAGES, PIPELINE_STAGES } from './recruitment-options.js';
 type Tx = Prisma.TransactionClient;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const TX = { timeout: 20_000, maxWait: 10_000 };
+
+/**
+ * Locks one row until the transaction ends, so the state read afterwards is
+ * the state this change is applied to: concurrent edits of the same record
+ * queue up, and each audit row diffs against what was really there.
+ */
+export async function lockRow(
+  tx: Tx,
+  table: 'JobRequirement' | 'Candidate' | 'Interview' | 'TeacherAppraisal',
+  id: string,
+) {
+  await tx.$queryRaw`SELECT 1 FROM ${Prisma.raw(`"${table}"`)} WHERE "id" = ${id} FOR UPDATE`;
+}
+
+/** A unique index decided a race: tell the user to refresh, never a 500. */
+async function orConflict<T>(write: () => Promise<T>, message: string) {
+  try {
+    return await write();
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      throw new ConflictException(message);
+    }
+    throw err;
+  }
+}
+const APPRAISAL_EXISTS =
+  'This teacher already has an appraisal for that period and academic year. Open it instead.';
+const SIMULTANEOUS =
+  'This was changed at the same time by someone else (for example a teacher with the same email was just added). Refresh and try again.';
 
 const REQUIREMENT_FIELDS = [
   'title',
@@ -143,7 +182,7 @@ export class RecruitmentService {
     const inAll = { schoolId: { in: all } };
     const now = new Date();
     const weekAgo = new Date(now.getTime() - WEEK_MS);
-    const yearStart = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+    const yearStart = istYearStart(now);
 
     const [
       openReqs,
@@ -290,16 +329,17 @@ export class RecruitmentService {
 
   async updateRequirement(actor: Actor, id: string, dto: JobRequirementDto) {
     const ids = await this.scope(actor.userId);
-    const before = await this.prisma.jobRequirement.findFirst({
-      where: { id, schoolId: { in: ids } },
-    });
-    if (!before) throw new NotFoundException('Job requirement not found');
-    if (dto.schoolId !== before.schoolId)
-      throw new BadRequestException(
-        'A requirement can’t be moved to another school',
-      );
     const data = requirementData(dto);
     return this.prisma.$transaction(async (tx) => {
+      await lockRow(tx, 'JobRequirement', id);
+      const before = await tx.jobRequirement.findFirst({
+        where: { id, schoolId: { in: ids } },
+      });
+      if (!before) throw new NotFoundException('Job requirement not found');
+      if (dto.schoolId !== before.schoolId)
+        throw new BadRequestException(
+          'A requirement can’t be moved to another school',
+        );
       const after = await tx.jobRequirement.update({ where: { id }, data });
       const changes = diff(before, after, [...REQUIREMENT_FIELDS]);
       if (Object.keys(changes).length > 0) {
@@ -318,11 +358,12 @@ export class RecruitmentService {
 
   async deleteRequirement(actor: Actor, id: string) {
     const ids = await this.scope(actor.userId);
-    const row = await this.prisma.jobRequirement.findFirst({
-      where: { id, schoolId: { in: ids } },
-    });
-    if (!row) throw new NotFoundException('Job requirement not found');
     await this.prisma.$transaction(async (tx) => {
+      await lockRow(tx, 'JobRequirement', id);
+      const row = await tx.jobRequirement.findFirst({
+        where: { id, schoolId: { in: ids } },
+      });
+      if (!row) throw new NotFoundException('Job requirement not found');
       await tx.jobRequirement.delete({ where: { id } });
       await writeAudit(tx, actor, {
         schoolId: row.schoolId,
@@ -385,47 +426,50 @@ export class RecruitmentService {
   async createCandidate(actor: Actor, dto: CandidateDto) {
     await this.scope(actor.userId, dto.schoolId);
     const data = candidateData(dto);
-    return this.prisma.$transaction(async (tx) => {
-      const row = await tx.candidate.create({
-        data: {
-          schoolId: dto.schoolId,
-          ...data,
-          hiredAt: data.stage === 'HIRED' ? new Date() : null,
-          createdById: actor.userId,
-        },
-      });
-      await writeAudit(tx, actor, {
-        schoolId: row.schoolId,
-        action: 'CREATE',
-        entity: 'Candidate',
-        recordId: row.id,
-        summary: `Added candidate ${row.fullName} for ${row.roleApplied} (${STAGE_LABEL[row.stage]})`,
-        changes: snapshot(row, [...CANDIDATE_FIELDS]),
-      });
-      const faculty =
-        row.stage === 'HIRED' ? await onboard(tx, actor, row) : null;
-      return { id: row.id, facultyCreated: faculty };
-    }, TX);
+    return orConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const row = await tx.candidate.create({
+            data: {
+              schoolId: dto.schoolId,
+              ...data,
+              hiredAt: data.stage === 'HIRED' ? new Date() : null,
+              createdById: actor.userId,
+            },
+          });
+          await writeAudit(tx, actor, {
+            schoolId: row.schoolId,
+            action: 'CREATE',
+            entity: 'Candidate',
+            recordId: row.id,
+            summary: `Added candidate ${row.fullName} for ${row.roleApplied} (${STAGE_LABEL[row.stage]})`,
+            changes: snapshot(row, [...CANDIDATE_FIELDS]),
+          });
+          const faculty =
+            row.stage === 'HIRED' ? await onboard(tx, actor, row) : null;
+          return { id: row.id, facultyCreated: faculty };
+        }, TX),
+      SIMULTANEOUS,
+    );
   }
 
   async updateCandidate(actor: Actor, id: string, dto: CandidateDto) {
-    const before = await this.findCandidate(actor.userId, id);
-    if (dto.schoolId !== before.schoolId)
-      throw new BadRequestException(
-        'A candidate can’t be moved to another school',
-      );
-    return this.saveCandidate(actor, before, candidateData(dto));
+    return this.saveCandidate(actor, id, candidateData(dto), dto.schoolId);
   }
 
   /** Moving a card on the pipeline board. */
   async setStage(actor: Actor, id: string, stage: CandidateStage) {
-    const before = await this.findCandidate(actor.userId, id);
-    return this.saveCandidate(actor, before, { stage });
+    return this.saveCandidate(actor, id, { stage });
   }
 
   async deleteCandidate(actor: Actor, id: string) {
-    const row = await this.findCandidate(actor.userId, id);
+    const ids = await this.scope(actor.userId);
     await this.prisma.$transaction(async (tx) => {
+      await lockRow(tx, 'Candidate', id);
+      const row = await tx.candidate.findFirst({
+        where: { id, schoolId: { in: ids } },
+      });
+      if (!row) throw new NotFoundException('Candidate not found');
       await tx.candidate.delete({ where: { id } });
       await writeAudit(tx, actor, {
         schoolId: row.schoolId,
@@ -439,52 +483,63 @@ export class RecruitmentService {
     return { ok: true };
   }
 
+  /**
+   * Every candidate change goes through here. The row is locked first, so the
+   * stage "before" is the real one: three simultaneous "move to Hired" calls
+   * hire once (the others find the stage already Hired and change nothing).
+   */
   private async saveCandidate(
     actor: Actor,
-    before: Awaited<ReturnType<RecruitmentService['findCandidate']>>,
+    id: string,
     data: Partial<ReturnType<typeof candidateData>>,
+    schoolId?: string,
   ) {
-    const stageChanged =
-      data.stage !== undefined && data.stage !== before.stage;
-    return this.prisma.$transaction(async (tx) => {
-      const after = await tx.candidate.update({
-        where: { id: before.id },
-        data: {
-          ...data,
-          ...(stageChanged && {
-            stageChangedAt: new Date(),
-            hiredAt: data.stage === 'HIRED' ? new Date() : null,
-          }),
-        },
-      });
-      const changes = diff(before, after, [...CANDIDATE_FIELDS]);
-      if (Object.keys(changes).length > 0) {
-        await writeAudit(tx, actor, {
-          schoolId: after.schoolId,
-          action: 'UPDATE',
-          entity: 'Candidate',
-          recordId: after.id,
-          summary: stageChanged
-            ? `${after.fullName}: ${STAGE_LABEL[before.stage]} → ${STAGE_LABEL[after.stage]}`
-            : `Updated ${after.fullName}: ${Object.keys(changes).join(', ')}`,
-          changes,
-        });
-      }
-      const faculty =
-        stageChanged && after.stage === 'HIRED'
-          ? await onboard(tx, actor, after)
-          : null;
-      return { id: after.id, facultyCreated: faculty };
-    }, TX);
-  }
-
-  private async findCandidate(userId: string, id: string) {
-    const ids = await this.scope(userId);
-    const row = await this.prisma.candidate.findFirst({
-      where: { id, schoolId: { in: ids } },
-    });
-    if (!row) throw new NotFoundException('Candidate not found');
-    return row;
+    const ids = await this.scope(actor.userId);
+    return orConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          await lockRow(tx, 'Candidate', id);
+          const before = await tx.candidate.findFirst({
+            where: { id, schoolId: { in: ids } },
+          });
+          if (!before) throw new NotFoundException('Candidate not found');
+          if (schoolId && schoolId !== before.schoolId)
+            throw new BadRequestException(
+              'A candidate can’t be moved to another school',
+            );
+          const stageChanged =
+            data.stage !== undefined && data.stage !== before.stage;
+          const after = await tx.candidate.update({
+            where: { id },
+            data: {
+              ...data,
+              ...(stageChanged && {
+                stageChangedAt: new Date(),
+                hiredAt: data.stage === 'HIRED' ? new Date() : null,
+              }),
+            },
+          });
+          const changes = diff(before, after, [...CANDIDATE_FIELDS]);
+          if (Object.keys(changes).length > 0) {
+            await writeAudit(tx, actor, {
+              schoolId: after.schoolId,
+              action: 'UPDATE',
+              entity: 'Candidate',
+              recordId: after.id,
+              summary: stageChanged
+                ? `${after.fullName}: ${STAGE_LABEL[before.stage]} → ${STAGE_LABEL[after.stage]}`
+                : `Updated ${after.fullName}: ${Object.keys(changes).join(', ')}`,
+              changes,
+            });
+          }
+          const faculty =
+            stageChanged && after.stage === 'HIRED'
+              ? await onboard(tx, actor, after)
+              : null;
+          return { id: after.id, facultyCreated: faculty };
+        }, TX),
+      SIMULTANEOUS,
+    );
   }
 
   // Interviews
@@ -521,9 +576,15 @@ export class RecruitmentService {
    * Interview Scheduled, so the board reflects the booking.
    */
   async createInterview(actor: Actor, dto: InterviewDto) {
-    const candidate = await this.findCandidate(actor.userId, dto.candidateId);
+    const ids = await this.scope(actor.userId);
     const data = interviewData(dto);
     return this.prisma.$transaction(async (tx) => {
+      // Locked, so the stage we may advance is the stage it really is.
+      await lockRow(tx, 'Candidate', dto.candidateId);
+      const candidate = await tx.candidate.findFirst({
+        where: { id: dto.candidateId, schoolId: { in: ids } },
+      });
+      if (!candidate) throw new NotFoundException('Candidate not found');
       const row = await tx.interview.create({
         data: {
           schoolId: candidate.schoolId,
@@ -537,7 +598,7 @@ export class RecruitmentService {
         action: 'CREATE',
         entity: 'Interview',
         recordId: row.id,
-        summary: `Interview for ${candidate.fullName} on ${row.scheduledAt.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+        summary: `Interview for ${candidate.fullName} on ${formatIst(row.scheduledAt)}`,
         changes: snapshot(row, [...INTERVIEW_FIELDS]),
       });
       if (candidate.stage === 'APPLIED' || candidate.stage === 'SHORTLISTED') {
@@ -560,17 +621,18 @@ export class RecruitmentService {
 
   async updateInterview(actor: Actor, id: string, dto: InterviewDto) {
     const ids = await this.scope(actor.userId);
-    const before = await this.prisma.interview.findFirst({
-      where: { id, schoolId: { in: ids } },
-      include: { candidate: { select: { fullName: true } } },
-    });
-    if (!before) throw new NotFoundException('Interview not found');
-    if (dto.candidateId !== before.candidateId)
-      throw new BadRequestException(
-        'An interview can’t be moved to another candidate',
-      );
     const data = interviewData(dto);
     return this.prisma.$transaction(async (tx) => {
+      await lockRow(tx, 'Interview', id);
+      const before = await tx.interview.findFirst({
+        where: { id, schoolId: { in: ids } },
+        include: { candidate: { select: { fullName: true } } },
+      });
+      if (!before) throw new NotFoundException('Interview not found');
+      if (dto.candidateId !== before.candidateId)
+        throw new BadRequestException(
+          'An interview can’t be moved to another candidate',
+        );
       const after = await tx.interview.update({ where: { id }, data });
       const changes = diff(before, after, [...INTERVIEW_FIELDS]);
       if (Object.keys(changes).length > 0) {
@@ -589,12 +651,13 @@ export class RecruitmentService {
 
   async deleteInterview(actor: Actor, id: string) {
     const ids = await this.scope(actor.userId);
-    const row = await this.prisma.interview.findFirst({
-      where: { id, schoolId: { in: ids } },
-      include: { candidate: { select: { fullName: true } } },
-    });
-    if (!row) throw new NotFoundException('Interview not found');
     await this.prisma.$transaction(async (tx) => {
+      await lockRow(tx, 'Interview', id);
+      const row = await tx.interview.findFirst({
+        where: { id, schoolId: { in: ids } },
+        include: { candidate: { select: { fullName: true } } },
+      });
+      if (!row) throw new NotFoundException('Interview not found');
       await tx.interview.delete({ where: { id } });
       await writeAudit(tx, actor, {
         schoolId: row.schoolId,
@@ -653,66 +716,76 @@ export class RecruitmentService {
   async createAppraisal(actor: Actor, dto: AppraisalDto) {
     await this.scope(actor.userId, dto.schoolId);
     const faculty = await this.findFaculty(dto.schoolId, dto.facultyId);
-    return this.prisma.$transaction(async (tx) => {
-      const row = await tx.teacherAppraisal.create({
-        data: {
-          schoolId: dto.schoolId,
-          ...appraisalData(dto),
-          appraiserId: actor.userId,
-          appraiserName: actor.name,
-        },
-      });
-      await writeAudit(tx, actor, {
-        schoolId: row.schoolId,
-        action: 'CREATE',
-        entity: 'TeacherAppraisal',
-        recordId: row.id,
-        summary: `Started ${row.period.replace('_', ' ').toLowerCase()} appraisal of ${faculty.name} (${row.academicYear})`,
-        changes: snapshot(row, [...APPRAISAL_FIELDS]),
-      });
-      return { id: row.id };
-    }, TX);
+    return orConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const row = await tx.teacherAppraisal.create({
+            data: {
+              schoolId: dto.schoolId,
+              ...appraisalData(dto),
+              appraiserId: actor.userId,
+              appraiserName: actor.name,
+            },
+          });
+          await writeAudit(tx, actor, {
+            schoolId: row.schoolId,
+            action: 'CREATE',
+            entity: 'TeacherAppraisal',
+            recordId: row.id,
+            summary: `Started ${row.period.replace('_', ' ').toLowerCase()} appraisal of ${faculty.name} (${row.academicYear})`,
+            changes: snapshot(row, [...APPRAISAL_FIELDS]),
+          });
+          return { id: row.id };
+        }, TX),
+      APPRAISAL_EXISTS,
+    );
   }
 
   async updateAppraisal(actor: Actor, id: string, dto: AppraisalDto) {
     const ids = await this.scope(actor.userId);
-    const before = await this.prisma.teacherAppraisal.findFirst({
-      where: { id, schoolId: { in: ids } },
-    });
-    if (!before) throw new NotFoundException('Appraisal not found');
-    if (dto.schoolId !== before.schoolId)
-      throw new BadRequestException(
-        'An appraisal can’t be moved to another school',
-      );
-    const faculty = await this.findFaculty(before.schoolId, dto.facultyId);
-    return this.prisma.$transaction(async (tx) => {
-      const after = await tx.teacherAppraisal.update({
-        where: { id },
-        data: appraisalData(dto),
-      });
-      const changes = diff(before, after, [...APPRAISAL_FIELDS]);
-      if (Object.keys(changes).length > 0) {
-        await writeAudit(tx, actor, {
-          schoolId: after.schoolId,
-          action: 'UPDATE',
-          entity: 'TeacherAppraisal',
-          recordId: id,
-          summary: `Updated appraisal of ${faculty.name}: ${Object.keys(changes).join(', ')}`,
-          changes,
-        });
-      }
-      return { id };
-    }, TX);
+    return orConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          await lockRow(tx, 'TeacherAppraisal', id);
+          const before = await tx.teacherAppraisal.findFirst({
+            where: { id, schoolId: { in: ids } },
+          });
+          if (!before) throw new NotFoundException('Appraisal not found');
+          if (dto.schoolId !== before.schoolId)
+            throw new BadRequestException(
+              'An appraisal can’t be moved to another school',
+            );
+          const faculty = await this.findFaculty(before.schoolId, dto.facultyId);
+          const after = await tx.teacherAppraisal.update({
+            where: { id },
+            data: appraisalData(dto),
+          });
+          const changes = diff(before, after, [...APPRAISAL_FIELDS]);
+          if (Object.keys(changes).length > 0) {
+            await writeAudit(tx, actor, {
+              schoolId: after.schoolId,
+              action: 'UPDATE',
+              entity: 'TeacherAppraisal',
+              recordId: id,
+              summary: `Updated appraisal of ${faculty.name}: ${Object.keys(changes).join(', ')}`,
+              changes,
+            });
+          }
+          return { id };
+        }, TX),
+      APPRAISAL_EXISTS,
+    );
   }
 
   async deleteAppraisal(actor: Actor, id: string) {
     const ids = await this.scope(actor.userId);
-    const row = await this.prisma.teacherAppraisal.findFirst({
-      where: { id, schoolId: { in: ids } },
-      include: { faculty: { select: { name: true } } },
-    });
-    if (!row) throw new NotFoundException('Appraisal not found');
     await this.prisma.$transaction(async (tx) => {
+      await lockRow(tx, 'TeacherAppraisal', id);
+      const row = await tx.teacherAppraisal.findFirst({
+        where: { id, schoolId: { in: ids } },
+        include: { faculty: { select: { name: true } } },
+      });
+      if (!row) throw new NotFoundException('Appraisal not found');
       await tx.teacherAppraisal.delete({ where: { id } });
       await writeAudit(tx, actor, {
         schoolId: row.schoolId,
@@ -776,8 +849,11 @@ export class RecruitmentService {
 }
 
 /**
- * A hired candidate becomes a faculty profile in the school (unless one with
- * the same email already exists), so onboarding continues in Academic Planning.
+ * A hired candidate becomes a faculty profile in the school, once: not if the
+ * candidate already has one (hire -> reject -> hire), nor if a profile with the
+ * same email exists. The created profile is linked to the candidate. Callers
+ * hold the candidate row's lock, and the email is guarded by an advisory lock,
+ * so two simultaneous hires can't both create it.
  */
 async function onboard(
   tx: Tx,
@@ -785,6 +861,7 @@ async function onboard(
   c: {
     schoolId: string;
     id: string;
+    facultyId?: string | null;
     fullName: string;
     email: string | null;
     phone: string | null;
@@ -793,14 +870,16 @@ async function onboard(
     experienceYears: number | null;
   },
 ) {
+  if (c.facultyId) return null;
   if (c.email) {
+    // $executeRaw: the function returns void, which $queryRaw can't read back.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`faculty:${c.schoolId}:${c.email}`}))`;
     const existing = await tx.faculty.findUnique({
       where: { schoolId_email: { schoolId: c.schoolId, email: c.email } },
       select: { id: true },
     });
     if (existing) return null;
   }
-  const today = new Date();
   const faculty = await tx.faculty.create({
     data: {
       schoolId: c.schoolId,
@@ -810,15 +889,14 @@ async function onboard(
       qualification: c.qualification,
       experienceYears: c.experienceYears,
       subjects: c.department ? [c.department] : [],
-      joiningDate: new Date(
-        Date.UTC(
-          today.getUTCFullYear(),
-          today.getUTCMonth(),
-          today.getUTCDate(),
-        ),
-      ),
+      joiningDate: istToday(),
       status: 'ACTIVE',
     },
+  });
+  await tx.candidate.update({
+    where: { id: c.id },
+    data: { facultyId: faculty.id },
+    select: { id: true },
   });
   await writeAudit(tx, actor, {
     schoolId: c.schoolId,

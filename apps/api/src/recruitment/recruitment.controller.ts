@@ -70,7 +70,8 @@ export class RecruitmentController {
   }
 
   @Get('options')
-  options() {
+  async options(@Auth() auth: AuthContext) {
+    await this.recruitment.scope(auth.userId);
     return {
       departments: DEPARTMENTS,
       jobStatuses: JOB_STATUSES,

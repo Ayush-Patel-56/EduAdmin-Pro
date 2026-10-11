@@ -166,6 +166,10 @@ export class InterviewDto {
   candidateId: string;
 
   @IsISO8601({ strict: true }, { message: 'Date & time is required' })
+  // A time without a zone would be read in the server's zone, not the school's.
+  @Matches(/T[\d:.]+(Z|[+-]\d{2}:?\d{2})$/, {
+    message: 'Date & time needs a time zone, e.g. 2026-10-20T10:00:00+05:30',
+  })
   scheduledAt: string;
 
   @IsIn(INTERVIEW_MODES, { message: 'Unknown mode' })

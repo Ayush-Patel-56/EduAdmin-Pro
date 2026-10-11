@@ -379,19 +379,19 @@ export class SchoolsService {
         recordId: schoolId,
         summary: `Clear All Data: removed ${removed[0]} requirements, ${removed[1]} candidates (with interviews), ${removed[2]} appraisals`,
       });
-    }, { timeout: 30_000 });
-    await this.prisma.$transaction([
-      this.prisma.syllabusItem.deleteMany({ where: { schoolId } }),
-      this.prisma.curriculumConcept.deleteMany({ where: { schoolId } }),
-      this.prisma.curriculumChapter.deleteMany({ where: { schoolId } }),
-      this.prisma.facultyBatch.deleteMany({ where: { schoolId } }),
-      this.prisma.facultyProgram.deleteMany({ where: { schoolId } }),
-      this.prisma.batch.deleteMany({ where: { schoolId } }),
-      this.prisma.program.deleteMany({ where: { schoolId } }),
-      this.prisma.promotionCycle.deleteMany({ where: { schoolId } }),
-      this.prisma.announcement.deleteMany({ where: { schoolId } }),
-      this.prisma.faculty.deleteMany({ where: { schoolId, userId: null } }),
-    ]);
+      // Same transaction as the recruitment wipe above: either everything is
+      // cleared (and audited) or nothing is.
+      await tx.syllabusItem.deleteMany({ where: { schoolId } });
+      await tx.curriculumConcept.deleteMany({ where: { schoolId } });
+      await tx.curriculumChapter.deleteMany({ where: { schoolId } });
+      await tx.facultyBatch.deleteMany({ where: { schoolId } });
+      await tx.facultyProgram.deleteMany({ where: { schoolId } });
+      await tx.batch.deleteMany({ where: { schoolId } });
+      await tx.program.deleteMany({ where: { schoolId } });
+      await tx.promotionCycle.deleteMany({ where: { schoolId } });
+      await tx.announcement.deleteMany({ where: { schoolId } });
+      await tx.faculty.deleteMany({ where: { schoolId, userId: null } });
+    }, { timeout: 60_000, maxWait: 10_000 });
     return { ok: true };
   }
 

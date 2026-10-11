@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Building2, Lightbulb } from 'lucide-react'
 import { api } from '@/lib/api'
+import { todayIst } from '@/lib/dates'
 import { isValidIndianMobile, EMAIL_PATTERN } from '@/lib/validators'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
@@ -110,7 +111,7 @@ export function RequirementDialog({ item, defaultSchoolId, onClose }: { item?: R
     status: item?.status ?? 'OPEN',
     experience: item?.experience ?? '',
     qualification: item?.qualification ?? '',
-    postingDate: item?.postingDate ?? new Date().toISOString().slice(0, 10),
+    postingDate: item?.postingDate ?? todayIst(),
     closingDate: item?.closingDate ?? '',
   }))
   const set = (k: keyof typeof v, value: string) => {

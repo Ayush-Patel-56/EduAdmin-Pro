@@ -358,6 +358,7 @@ model Faculty {
   programAssignments FacultyProgram[]
   coordinatedBatches Batch[]            @relation("BatchCoordinator")
   appraisals         TeacherAppraisal[]
+  candidate          Candidate?
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -511,8 +512,8 @@ model JobRequirement {
   postingDate   DateTime? @db.Date
   closingDate   DateTime? @db.Date
   createdById   String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
 
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
@@ -533,13 +534,19 @@ model Candidate {
   currentOrganization String?
   expectedSalary      Int? // rupees per year
   resumeUrl           String?
-  stageChangedAt      DateTime       @default(now())
-  hiredAt             DateTime?
+  stageChangedAt      DateTime       @default(now()) @db.Timestamptz(3)
+  hiredAt             DateTime?      @db.Timestamptz(3)
+  // The faculty profile created when this candidate was hired; it stops a
+  // second hire (or hire -> reject -> hire) from onboarding them twice. A plain
+  // FK, not composite, so deleting the profile can clear it; the profile is
+  // always created in the candidate's own school.
+  facultyId           String?        @unique
   createdById         String?
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
 
   school     School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  faculty    Faculty?    @relation(fields: [facultyId], references: [id], onDelete: SetNull)
   interviews Interview[]
 
   @@unique([id, schoolId])
@@ -550,7 +557,7 @@ model Interview {
   id          String          @id @default(uuid())
   schoolId    String
   candidateId String
-  scheduledAt DateTime
+  scheduledAt DateTime        @db.Timestamptz(3)
   mode        InterviewMode   @default(IN_PERSON)
   location    String? // room or meeting link
   panel       String? // interviewer names
@@ -558,8 +565,8 @@ model Interview {
   result      InterviewResult @default(PENDING)
   feedback    String?
   createdById String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt   DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime        @updatedAt @db.Timestamptz(3)
 
   school    School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   candidate Candidate @relation(fields: [candidateId, schoolId], references: [id, schoolId], onDelete: Cascade)
@@ -584,12 +591,13 @@ model TeacherAppraisal {
   improvementAreas String?
   appraiserId      String?
   appraiserName    String?
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  createdAt        DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime        @updatedAt @db.Timestamptz(3)
 
   school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   faculty Faculty @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: Cascade)
 
+  @@unique([facultyId, period, academicYear])
   @@index([schoolId, status])
 }
 
@@ -608,7 +616,7 @@ model RecruitmentAuditLog {
   actorName String
   ip        String?
   userAgent String?
-  createdAt DateTime    @default(now())
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
 
   @@index([schoolId, createdAt])
 }

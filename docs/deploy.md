@@ -35,6 +35,23 @@ No rows means it is safe. If rows come back, rename or delete the extras first. 
 
 Migration folders must sort in the order they were created: use timestamps later than the newest folder in `apps/api/prisma/migrations`.
 
+## Recruitment migrations (`20261012040000_recruitment`, `20261012050000_recruitment_hardening`)
+
+- `20261012040000_recruitment` was renamed from `20261011200000_recruitment` so migration folders sort in the order they were created. A database that already applied it under the old name needs the record renamed once (the file's content, and so its checksum, is unchanged):
+
+  ```sql
+  UPDATE "_prisma_migrations" SET migration_name = '20261012040000_recruitment' WHERE migration_name = '20261011200000_recruitment';
+  ```
+
+  A database that has not applied it yet needs nothing.
+- The hardening migration turns the recruitment tables' timestamps into `timestamptz` (existing values are read as UTC), adds `Candidate.facultyId` and adds a unique index on `TeacherAppraisal (facultyId, period, academicYear)`. The index fails if duplicates exist, so check first:
+
+  ```sql
+  SELECT "facultyId", "period", "academicYear", count(*) FROM "TeacherAppraisal" GROUP BY 1, 2, 3 HAVING count(*) > 1;
+  ```
+
+- The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
+
 ## After deploying the invite-code change: review existing admins
 
 Before this change, any admin account that entered a school's invite code, the same code teachers use, became an ADMIN of that school. Nothing records which code was used, so review every admin who is not the school's owner:
