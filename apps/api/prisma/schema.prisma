@@ -43,6 +43,10 @@ enum AnnouncementCategory {
   URGENT
 }
 
+// Email uniqueness is enforced case-insensitively by a unique expression index,
+// "User_email_lower_key" ON lower("email"), created in migration
+// 20261011210000. Prisma can't express expression indexes in this file, but it
+// also leaves them alone: `prisma migrate diff` does not try to drop it.
 model User {
   id                 String       @id @default(uuid())
   email              String       @unique // stored lower-cased
@@ -122,7 +126,7 @@ model School {
   inviteCode             String    @unique
   // Shared only with other admins. Entering it joins as ADMIN; the teacher
   // inviteCode above can never grant admin rights.
-  adminInviteCode        String    @unique
+  adminInviteCode        String    @unique @default(dbgenerated("generate_school_invite_code()"))
   board                  String
   classes                String[]  @default([]) // e.g. ["6th", "7th", …], in display order
   academicYearStartMonth Int       @default(4) // 1-12; April by default

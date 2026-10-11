@@ -110,3 +110,8 @@ export class JoinSchoolDto {
   @MaxLength(32)
   inviteCode: string;
 }
+
+export class RegenerateCodeDto {
+  @IsIn(['ADMIN', 'TEACHER'], { message: 'Choose which code to regenerate' })
+  kind: 'ADMIN' | 'TEACHER';
+}
