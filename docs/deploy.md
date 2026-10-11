@@ -56,13 +56,22 @@ Migration folders must sort in the order they were created: use timestamps later
 
 Converts the remaining 28 `timestamp without time zone` columns (users, sessions, schools, programs, batches, faculty, syllabus, curriculum, ...) to `timestamptz(3)`. Calendar dates (`@db.Date`: MOU dates, joining date, batch start/end, ...) are untouched. Existing values are read as UTC explicitly (`USING ... AT TIME ZONE 'UTC'`), so nothing shifts whatever the session time zone of the migration.
 
-- **Preflight:** the database's session time zone must be UTC. On Neon it is `GMT` by default:
+- **What it changes, and the trade-off.** Prisma's pg adapter sends `DateTime` values as UTC wall-clock text without an offset and reads `timestamptz` values back assuming they are UTC.
+  - With plain `timestamp` columns (today) Prisma reads and writes correctly whatever the session time zone, but SQL, BI tools and exports see values with no zone attached. Server-side `now()` / `CURRENT_TIMESTAMP` in a non-UTC session also stores local wall-clock time.
+  - With `timestamptz` columns every instant is unambiguous for SQL, BI and exports, **but only if the session time zone is UTC**. In an Asia/Kolkata session Prisma would store `10:00Z` as `04:30Z`. The app wouldn't notice, because it reads its own values back the same way, but every other reader would. The recruitment tables (converted by `20261012050000`) already behave this way today.
+- **Before deploying, check the time zone on dev and prod, over both the pooled (`DATABASE_URL`) and direct (`DIRECT_URL`) connections:**
 
   ```sql
-  SHOW timezone;  -- must be UTC, GMT or Etc/UTC
+  SHOW timezone;  -- must be UTC, GMT or Etc/UTC (Neon's default is GMT)
   ```
 
-  Prisma's pg adapter sends and reads timestamps as UTC without an offset, so with `timestamptz` columns a non-UTC session would store every instant shifted (5:30 early in Asia/Kolkata). The API now checks this at startup and refuses to boot otherwise. Fix with `ALTER DATABASE <db> SET timezone TO 'UTC';`.
+  If it isn't, set it **on the database or on the API's role**, never per session (a pooled connection doesn't keep session settings), then reconnect:
+
+  ```sql
+  ALTER DATABASE <db> SET timezone TO 'UTC';   -- or: ALTER ROLE <api user> SET timezone TO 'UTC';
+  ```
+
+- **Startup guard:** the API checks the time zone of its connection once, at startup, and refuses to boot if it isn't UTC. It does not check every pooled connection or later sessions, so it catches a database or role that is set wrong, but not a client that changes `timezone` on its own connection. Keep the setting on the database or role, as above, and nobody's session needs to set it.
 - **Locking:** each table is rewritten once under an `ACCESS EXCLUSIVE` lock (reads and writes on it wait). The tables are small, so this takes well under a second today. The migration sets `lock_timeout = 10s`: if a long-running query holds a table, it fails instead of queueing every request behind it.
 - **If it fails** (e.g. lock timeout), it is wrapped in `BEGIN; ... COMMIT;`, so nothing was converted. Mark it rolled back and deploy again:
 
@@ -71,7 +80,7 @@ Converts the remaining 28 `timestamp without time zone` columns (users, sessions
   pnpm --filter api exec prisma migrate deploy
   ```
 
-- The previous API release keeps working against the converted tables (verified on a UTC session), so the usual order applies: migration → API → web.
+- The previous API release keeps working against the converted tables (verified on a UTC session), so the usual order applies: migration → API → web. Roll back the API alone if needed: the previous release works with either column type.
 - Verify afterwards (expect 0):
 
   ```sql
