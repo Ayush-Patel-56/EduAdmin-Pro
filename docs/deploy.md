@@ -21,6 +21,35 @@ No rows means it is safe. If rows come back, merge or rename those accounts firs
 
 The index is created with raw SQL because `schema.prisma` can't express expression indexes. Prisma leaves it alone: replaying every migration into an empty database and diffing it against `schema.prisma` reports no changes, so the next `prisma migrate dev` will not try to drop it.
 
+## Before the unique-names migration (`20261012010000_unique_names_and_chapters`)
+
+The migration adds three unique expression indexes: one syllabus chapter title per batch + subject, one program name per school and one batch name per program (any letter case). Each fails if duplicates already exist, so check first:
+
+```sql
+SELECT "batchId", "subject", lower("title"), count(*) FROM "SyllabusItem" GROUP BY 1, 2, 3 HAVING count(*) > 1;
+SELECT "schoolId", lower("name"), count(*) FROM "Program" GROUP BY 1, 2 HAVING count(*) > 1;
+SELECT "programId", lower("name"), count(*) FROM "Batch" GROUP BY 1, 2 HAVING count(*) > 1;
+```
+
+No rows means it is safe. If rows come back, rename or delete the extras first (the app can do it: edit or delete the chapter, program or batch).
+
+**If it failed anyway:** this migration is not wrapped in a transaction, so the indexes created before the failing one stay behind and a plain re-run fails with "already exists". Recover with:
+
+```sql
+DROP INDEX IF EXISTS "SyllabusItem_batchId_subject_lower_title_key";
+DROP INDEX IF EXISTS "Program_schoolId_lower_name_key";
+DROP INDEX IF EXISTS "Batch_programId_lower_name_key";
+```
+
+then fix the duplicates the error names, and:
+
+```bash
+pnpm --filter api exec prisma migrate resolve --rolled-back 20261012010000_unique_names_and_chapters
+pnpm --filter api exec prisma migrate deploy
+```
+
+After it is applied, two people creating the same program, batch or chapter at the same moment get a 409 ("already exists"), never a 500. A syllabus import that loses such a race reports the affected rows as skipped instead of counting them as created.
+
 ## Before the curriculum-names migration (`20261012030000_curriculum_unique_names`)
 
 The migration adds two unique expression indexes (one concept name per chapter, one chapter per subject + name + board + class + program, any letter case). It fails if duplicates already exist, so check first:

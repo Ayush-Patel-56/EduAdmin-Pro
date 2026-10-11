@@ -8,6 +8,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { parseDate, toIsoDate } from '../common/dates.js';
 import type { BatchDto } from './academic.dto.js';
+import { duplicateAsConflict } from '../common/unique-violation.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -41,58 +42,69 @@ export class BatchesService {
 
   async create(schoolId: string, dto: BatchDto) {
     const data = await this.validate(schoolId, dto);
-    return this.prisma.$transaction(async (tx) => {
-      const batch = await tx.batch.create({ data: { schoolId, ...data } });
-      if (data.coordinatorId)
-        await assignFaculty(
-          tx,
-          schoolId,
-          data.coordinatorId,
-          batch.id,
-          data.programId,
-        );
-      return { id: batch.id };
-    });
+    return duplicateAsConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const batch = await tx.batch.create({ data: { schoolId, ...data } });
+          if (data.coordinatorId)
+            await assignFaculty(
+              tx,
+              schoolId,
+              data.coordinatorId,
+              batch.id,
+              data.programId,
+            );
+          return { id: batch.id };
+        }),
+      batchClash(dto),
+    );
   }
 
   async update(schoolId: string, batchId: string, dto: BatchDto) {
     const current = await this.find(schoolId, batchId);
     const data = await this.validate(schoolId, dto, batchId);
-    return this.prisma.$transaction(async (tx) => {
-      await tx.batch.update({ where: { id: batchId }, data });
-      if (data.coordinatorId && data.coordinatorId !== current.coordinatorId) {
-        await assignFaculty(
-          tx,
-          schoolId,
-          data.coordinatorId,
-          batchId,
-          data.programId,
-        );
-      }
-      if (data.programId !== current.programId) {
-        // Teachers of a moved batch now teach in its new program as well.
-        const teachers = await tx.facultyBatch.findMany({
-          where: { batchId },
-          select: { facultyId: true },
-        });
-        await tx.facultyProgram.createMany({
-          data: teachers.map((t) => ({
-            facultyId: t.facultyId,
-            programId: data.programId,
-            schoolId,
-          })),
-          skipDuplicates: true,
-        });
-        // ...and no longer in the old one unless another batch keeps them there.
-        await pruneFacultyPrograms(
-          tx,
-          schoolId,
-          current.programId,
-          teachers.map((t) => t.facultyId),
-        );
-      }
-      return { id: batchId };
-    });
+    return duplicateAsConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.batch.update({ where: { id: batchId }, data });
+          if (
+            data.coordinatorId &&
+            data.coordinatorId !== current.coordinatorId
+          ) {
+            await assignFaculty(
+              tx,
+              schoolId,
+              data.coordinatorId,
+              batchId,
+              data.programId,
+            );
+          }
+          if (data.programId !== current.programId) {
+            // Teachers of a moved batch now teach in its new program as well.
+            const teachers = await tx.facultyBatch.findMany({
+              where: { batchId },
+              select: { facultyId: true },
+            });
+            await tx.facultyProgram.createMany({
+              data: teachers.map((t) => ({
+                facultyId: t.facultyId,
+                programId: data.programId,
+                schoolId,
+              })),
+              skipDuplicates: true,
+            });
+            // ...and no longer in the old one unless another batch keeps them there.
+            await pruneFacultyPrograms(
+              tx,
+              schoolId,
+              current.programId,
+              teachers.map((t) => t.facultyId),
+            );
+          }
+          return { id: batchId };
+        }),
+      batchClash(dto),
+    );
   }
 
   /** Deleting a batch also removes its syllabus chapters and teacher assignments. */
@@ -218,4 +230,12 @@ export async function pruneFacultyPrograms(
   await tx.facultyProgram.deleteMany({
     where: { schoolId, programId, facultyId: { in: drop } },
   });
+}
+
+/** 409 message for a unique-index violation while saving a batch. */
+export function batchClash(dto: { name: string }) {
+  return (names: string[]) =>
+    names.some((n) => n === 'name' || n.startsWith('Batch_'))
+      ? `This program already has a batch named ${dto.name}`
+      : 'Someone else changed this batch at the same time. Refresh and try again.';
 }

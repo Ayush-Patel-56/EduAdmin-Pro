@@ -16,6 +16,7 @@ import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
 import { parseDate, toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
+import { duplicateAsConflict } from '../common/unique-violation.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
   CLASS_OPTIONS,
@@ -294,9 +295,11 @@ export class SchoolsService {
       const added = wanted.filter((p) => !existingKeys.has(p.toLowerCase()));
       const nextOrder = Math.max(-1, ...existing.map((p) => p.sortOrder)) + 1;
       if (added.length > 0) {
-        await tx.program.createMany({
-          data: added.map((name, i) => newProgram(schoolId, name, nextOrder + i)),
-        });
+        // Another request may add the same program meanwhile; the unique index decides (409, not 500).
+        await duplicateAsConflict(
+          () => tx.program.createMany({ data: added.map((name, i) => newProgram(schoolId, name, nextOrder + i)) }),
+          'A program with one of these names was just added by someone else. Refresh and try again.',
+        );
       }
       const school = await tx.school.update({
         where: { id: schoolId },
