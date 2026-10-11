@@ -81,6 +81,39 @@ const naturalKey = (c: {
     c.programId ?? '',
   ].join('|');
 
+type ChapterFields = {
+  subject: string;
+  name: string;
+  board: string | null;
+  classLevel: string | null;
+  programId: string | null;
+};
+
+/**
+ * The existing chapter a row refers to. An exact match on subject, name, board,
+ * class and program wins; otherwise cells the row leaves blank match anything,
+ * as long as exactly one chapter fits.
+ */
+function findExistingChapter<T extends ChapterFields>(
+  byKey: Map<string, T>,
+  chapters: T[],
+  row: ChapterFields,
+): { match?: T; ambiguous?: boolean } {
+  const exact = byKey.get(naturalKey(row));
+  if (exact) return { match: exact };
+  const fits = chapters.filter(
+    (c) =>
+      c.subject === row.subject &&
+      c.name.toLowerCase() === row.name.toLowerCase() &&
+      (row.board === null || c.board === row.board) &&
+      (row.classLevel === null || c.classLevel === row.classLevel) &&
+      (row.programId === null || c.programId === row.programId),
+  );
+  return fits.length === 1
+    ? { match: fits[0] }
+    : { ambiguous: fits.length > 1 };
+}
+
 @Injectable()
 export class CurriculumService {
   constructor(private readonly prisma: PrismaService) {}
@@ -392,16 +425,28 @@ export class CurriculumService {
         expectedHours: hours,
       };
       const natural = naturalKey(data);
-      // Rows without a code join a coded row of the same chapter earlier in the file.
-      const key = chapterCode
-        ? `code:${chapterCode}`
-        : (planByNatural.get(natural) ?? `key:${natural}`);
       const fail = (message: string) => ({
         row,
         label,
         action: 'error' as const,
         errors: [message],
       });
+      // A row without a code refers to the existing chapter it fits (blank
+      // board/class/program match anything when only one chapter fits).
+      const found = chapterCode
+        ? {}
+        : findExistingChapter(chapterByKey, existingChapters, data);
+      if (found.ambiguous) {
+        return fail(
+          `More than one "${name}" chapter fits this row: fill Board, Class and Program, or use the Chapter Code`,
+        );
+      }
+      // Rows without a code join a coded row of the same chapter earlier in the file.
+      const key = chapterCode
+        ? `code:${chapterCode}`
+        : found.match
+          ? `id:${found.match.id}`
+          : (planByNatural.get(natural) ?? `key:${natural}`);
       if (chapterCode) {
         const other = planByNatural.get(natural);
         if (other && other !== key)
@@ -410,15 +455,24 @@ export class CurriculumService {
 
       let plan = chapterPlans.get(key);
       if (!plan) {
-        let match = chapterCode
-          ? chapterByCode.get(chapterCode)
-          : chapterByKey.get(natural);
+        let match = chapterCode ? chapterByCode.get(chapterCode) : found.match;
         if (chapterCode && !match) {
           // A chapter that exists without a code adopts the code from the file.
-          const byKey = chapterByKey.get(natural);
-          if (byKey?.code)
-            return fail(`This chapter already exists with code ${byKey.code}`);
-          match = byKey;
+          const byName = findExistingChapter(
+            chapterByKey,
+            existingChapters,
+            data,
+          );
+          if (byName.ambiguous) {
+            return fail(
+              `More than one "${name}" chapter fits this row: fill Board, Class and Program`,
+            );
+          }
+          if (byName.match?.code)
+            return fail(
+              `This chapter already exists with code ${byName.match.code}`,
+            );
+          match = byName.match;
         }
         if (match && match.subject !== data.subject) {
           return fail(
@@ -428,6 +482,16 @@ export class CurriculumService {
         plan = { key, existingId: match?.id, data };
         chapterPlans.set(key, plan);
         if (!planByNatural.has(natural)) planByNatural.set(natural, key);
+      } else {
+        // A later row of the same chapter fills in cells the first one left blank.
+        for (const field of [
+          'board',
+          'classLevel',
+          'programId',
+          'expectedHours',
+        ] as const) {
+          plan.data[field] ??= data[field] as never;
+        }
       }
 
       if (!conceptName) {
@@ -463,11 +527,18 @@ export class CurriculumService {
       const existingChapter = existingChapters.find(
         (c) => c.id === plan.existingId,
       );
-      const existingConcept = existingChapter?.concepts.find(
-        (k) =>
-          (conceptCode && k.code === conceptCode) ||
-          k.name.toLowerCase() === conceptName.toLowerCase(),
+      const byCode = conceptCode
+        ? existingChapter?.concepts.find((k) => k.code === conceptCode)
+        : undefined;
+      const byName = existingChapter?.concepts.find(
+        (k) => k.name.toLowerCase() === conceptName.toLowerCase(),
       );
+      if (byCode && byName && byCode.id !== byName.id) {
+        return fail(
+          `Concept Code ${conceptCode} belongs to "${byCode.name}", but "${byName.name}" is already a concept of this chapter`,
+        );
+      }
+      const existingConcept = byCode ?? byName;
       return {
         row,
         label,
@@ -490,10 +561,14 @@ export class CurriculumService {
           .filter((r) => r.action !== 'error')
           .map((r) => ('planKey' in r ? r.planKey : '')),
       );
-      await this.applyImport(
-        schoolId,
-        [...chapterPlans.values()].filter((p) => usedKeys.has(p.key)),
-        rows,
+      await this.withConflict(
+        () =>
+          this.applyImport(
+            schoolId,
+            [...chapterPlans.values()].filter((p) => usedKeys.has(p.key)),
+            rows,
+          ),
+        'The curriculum changed while importing (another import or edit added the same chapter, concept or code). Nothing was imported; preview and try again.',
       );
     }
 
@@ -674,7 +749,25 @@ export class CurriculumService {
       );
   }
 
-  /** Codes are unique per school; turn the database's unique error into a clear message. */
+  /** The database's unique indexes decide duplicates; they surface as a 409, never a 500. */
+  private async withConflict<T>(
+    write: () => Promise<T>,
+    message: string,
+  ): Promise<T> {
+    try {
+      return await write();
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException(message);
+      }
+      throw err;
+    }
+  }
+
+  /** A single create/update: the clash is on a code or on a name. */
   private async withCodeCheck<T>(write: () => Promise<T>): Promise<T> {
     try {
       return await write();
@@ -683,7 +776,11 @@ export class CurriculumService {
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
-        throw new ConflictException('That code is already used in this school');
+        throw new ConflictException(
+          /code/i.test(JSON.stringify(err.meta ?? {}))
+            ? 'That code is already used in this school'
+            : 'A chapter or concept with that name already exists',
+        );
       }
       throw err;
     }

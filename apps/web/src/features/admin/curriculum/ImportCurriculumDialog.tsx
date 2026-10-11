@@ -132,7 +132,9 @@ export function ImportCurriculumDialog({ schoolId, options, defaultSubject, onCl
             <p className="font-semibold text-slate-800">Columns</p>
             <p className="mt-0.5">
               {['Subject', ...MASTER_FIELDS].join(', ')}. Program must match one of this school’s programs (any case) or be
-              blank. Class must be one the school offers ({options.classes.join(', ') || 'none set'}).
+              blank. Class must be one the school offers ({options.classes.join(', ') || 'none set'}). To update chapters you
+              imported before, keep the same Chapter Code; without one, a chapter is matched by name, and blank Board, Class or Program
+              match it only if one chapter fits.
             </p>
           </div>
           <button type="button" onClick={downloadTemplate} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:opacity-90">
