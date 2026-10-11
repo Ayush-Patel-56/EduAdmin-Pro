@@ -8,8 +8,12 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { AccessService } from '../academic/access.service.js';
+import { standardProgramDefaults } from '../academic/academic-options.js';
+import { deactivateFacultyProfiles, linkFacultyProfile } from '../academic/faculty-link.js';
 import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
+import { parseDate, toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
@@ -29,7 +33,10 @@ export type MouStatus = 'NOT_SET' | 'UPCOMING' | 'ACTIVE' | 'EXPIRED';
 export class SchoolsService {
   private readonly logger = new Logger(SchoolsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: AccessService,
+  ) {}
 
   options() {
     return {
@@ -44,11 +51,7 @@ export class SchoolsService {
   async createSchool(auth: AuthContext, dto: CreateSchoolDto) {
     await this.assertAdminAccount(auth.userId);
 
-    const mouStart = dto.mouStartDate ? parseDate(dto.mouStartDate, 'MOU start date') : null;
-    const mouEnd = dto.mouEndDate ? parseDate(dto.mouEndDate, 'MOU end date') : null;
-    if (mouStart && mouEnd && mouEnd < mouStart) {
-      throw new BadRequestException('MOU end date must be on or after the start date');
-    }
+    const { mouStart, mouEnd } = mouRange(dto);
     const programs = dedupePrograms(dto.programs);
 
     return this.prisma.$transaction(async (tx) => {
@@ -75,12 +78,7 @@ export class SchoolsService {
       });
       if (programs.length > 0) {
         await tx.program.createMany({
-          data: programs.map((name, i) => ({
-            schoolId: school.id,
-            name,
-            isStandard: (STANDARD_PROGRAMS as readonly string[]).includes(name),
-            sortOrder: i,
-          })),
+          data: programs.map((name, i) => newProgram(school.id, name, i)),
         });
       }
       await tx.schoolMembership.create({
@@ -109,10 +107,11 @@ export class SchoolsService {
    * staff can never hand out admin rights.
    */
   async joinSchool(auth: AuthContext, inviteCode: string) {
-    const { accountType } = await this.prisma.user.findUniqueOrThrow({
+    const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: auth.userId },
-      select: { accountType: true },
+      select: { id: true, accountType: true, email: true, fullName: true, department: true },
     });
+    const { accountType } = user;
     const school = await this.prisma.school.findFirst({
       where: { OR: [{ inviteCode }, { adminInviteCode: inviteCode }] },
     });
@@ -135,22 +134,22 @@ export class SchoolsService {
       throw new ForbiddenException(`Your access to ${school.name} was removed by its admins`);
     }
     const role = accountType === 'ADMIN' ? 'ADMIN' : 'TEACHER';
-    await this.prisma.$transaction([
-      ...(accountType === 'TEACHER'
-        ? [
-            this.prisma.schoolMembership.updateMany({
-              where: { userId: auth.userId, status: 'ACTIVE', schoolId: { not: school.id } },
-              data: { status: 'LEFT' },
-            }),
-          ]
-        : []),
-      this.prisma.schoolMembership.upsert({
+    await this.prisma.$transaction(async (tx) => {
+      if (accountType === 'TEACHER') {
+        await tx.schoolMembership.updateMany({
+          where: { userId: auth.userId, status: 'ACTIVE', schoolId: { not: school.id } },
+          data: { status: 'LEFT' },
+        });
+        await deactivateFacultyProfiles(tx, auth.userId, school.id);
+      }
+      await tx.schoolMembership.upsert({
         where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
         create: { userId: auth.userId, schoolId: school.id, role, status: 'ACTIVE' },
         update: { role, status: 'ACTIVE' },
-      }),
-      this.prisma.session.update({ where: { id: auth.sessionId }, data: { activeSchoolId: school.id } }),
-    ]);
+      });
+      if (accountType === 'TEACHER') await linkFacultyProfile(tx, school.id, user);
+      await tx.session.update({ where: { id: auth.sessionId }, data: { activeSchoolId: school.id } });
+    });
     return { id: school.id, name: school.name };
   }
 
@@ -231,6 +230,144 @@ export class SchoolsService {
     };
   }
 
+  /** Every school the user administers, with what the Schools tab cards and edit form need. */
+  async mySchools(auth: AuthContext) {
+    const memberships = await this.prisma.schoolMembership.findMany({
+      where: { userId: auth.userId, role: 'ADMIN', status: 'ACTIVE' },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        school: { include: { programs: { orderBy: { sortOrder: 'asc' }, select: { name: true } } } },
+      },
+    });
+    return memberships.map(({ school }) => ({
+      id: school.id,
+      name: school.name,
+      inviteCode: school.inviteCode,
+      adminInviteCode: school.adminInviteCode,
+      board: school.board,
+      classes: school.classes,
+      classesLabel: classesLabel(school.classes),
+      academicYearStartMonth: school.academicYearStartMonth,
+      programs: school.programs.map((p) => p.name),
+      mouStartDate: toIsoDate(school.mouStartDate),
+      mouEndDate: toIsoDate(school.mouEndDate),
+      mouStatus: mouStatus(school.mouStartDate, school.mouEndDate),
+      contactPerson: school.contactPerson,
+      phone: school.phone,
+      email: school.email,
+      address: school.address,
+      gstNumber: school.gstNumber,
+      isOwner: school.createdById === auth.userId,
+    }));
+  }
+
+  /**
+   * Owner edits the school. Programs listed in the form are kept or added;
+   * a program left out is removed, but only if it has no batches.
+   */
+  async updateSchool(auth: AuthContext, schoolId: string, dto: CreateSchoolDto) {
+    await this.access.assertOwner(auth.userId, schoolId);
+    const { mouStart, mouEnd } = mouRange(dto);
+    const wanted = dedupePrograms(dto.programs);
+    const wantedKeys = new Set(wanted.map((p) => p.toLowerCase()));
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.program.findMany({
+        where: { schoolId },
+        select: { id: true, name: true, sortOrder: true, _count: { select: { batches: true } } },
+      });
+      const removed = existing.filter((p) => !wantedKeys.has(p.name.toLowerCase()));
+      const blocked = removed.find((p) => p._count.batches > 0);
+      if (blocked) {
+        throw new ConflictException(
+          `${blocked.name} still has ${blocked._count.batches} batch(es). Delete or move them before removing the program.`,
+        );
+      }
+      if (removed.length > 0) {
+        await tx.program.deleteMany({ where: { schoolId, id: { in: removed.map((p) => p.id) } } });
+      }
+      const existingKeys = new Set(existing.map((p) => p.name.toLowerCase()));
+      const added = wanted.filter((p) => !existingKeys.has(p.toLowerCase()));
+      const nextOrder = Math.max(-1, ...existing.map((p) => p.sortOrder)) + 1;
+      if (added.length > 0) {
+        await tx.program.createMany({
+          data: added.map((name, i) => newProgram(schoolId, name, nextOrder + i)),
+        });
+      }
+      const school = await tx.school.update({
+        where: { id: schoolId },
+        data: {
+          name: dto.name,
+          board: dto.board,
+          classes: orderClasses(dto.classes),
+          academicYearStartMonth: dto.academicYearStartMonth ?? DEFAULT_SELECTION.academicYearStartMonth,
+          mouStartDate: mouStart,
+          mouEndDate: mouEnd,
+          contactPerson: dto.contactPerson ?? null,
+          phone: dto.phone ? normalizeIndianMobile(dto.phone) : null,
+          email: dto.email?.toLowerCase() ?? null,
+          address: dto.address ?? null,
+          gstNumber: dto.gstNumber ?? null,
+        },
+      });
+      return { id: school.id, name: school.name };
+    });
+  }
+
+  /** What Clear All Data would remove, shown before the owner confirms. */
+  async clearPreview(auth: AuthContext, schoolId: string) {
+    await this.access.assertOwner(auth.userId, schoolId);
+    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles] = await Promise.all([
+      this.prisma.program.count({ where: { schoolId } }),
+      this.prisma.batch.count({ where: { schoolId } }),
+      this.prisma.syllabusItem.count({ where: { schoolId } }),
+      this.prisma.faculty.count({ where: { schoolId, userId: null } }),
+      this.prisma.announcement.count({ where: { schoolId } }),
+      this.prisma.promotionCycle.count({ where: { schoolId } }),
+    ]);
+    return { programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles };
+  }
+
+  /**
+   * Wipes the school's academic data but keeps the school, its members, their
+   * faculty profiles and the invite code. Requires the exact school name.
+   */
+  async clearAllData(auth: AuthContext, schoolId: string, confirmName: string) {
+    await this.access.assertOwner(auth.userId, schoolId);
+    await this.assertConfirmName(schoolId, confirmName);
+    await this.prisma.$transaction([
+      this.prisma.syllabusItem.deleteMany({ where: { schoolId } }),
+      this.prisma.facultyBatch.deleteMany({ where: { schoolId } }),
+      this.prisma.facultyProgram.deleteMany({ where: { schoolId } }),
+      this.prisma.batch.deleteMany({ where: { schoolId } }),
+      this.prisma.program.deleteMany({ where: { schoolId } }),
+      this.prisma.promotionCycle.deleteMany({ where: { schoolId } }),
+      this.prisma.announcement.deleteMany({ where: { schoolId } }),
+      this.prisma.faculty.deleteMany({ where: { schoolId, userId: null } }),
+    ]);
+    return { ok: true };
+  }
+
+  /** Permanently deletes the school and everything in it. Owner only, name-confirmed. */
+  async deleteSchool(auth: AuthContext, schoolId: string, confirmName: string) {
+    await this.access.assertOwner(auth.userId, schoolId);
+    await this.assertConfirmName(schoolId, confirmName);
+    await this.prisma.$transaction([
+      // Sessions only hold the id as a preference; drop it so nobody is left
+      // pointing at a deleted school.
+      this.prisma.session.updateMany({ where: { activeSchoolId: schoolId }, data: { activeSchoolId: null } }),
+      this.prisma.school.delete({ where: { id: schoolId } }),
+    ]);
+    return { ok: true };
+  }
+
+  private async assertConfirmName(schoolId: string, confirmName: string) {
+    const school = await this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { name: true } });
+    if (confirmName.trim() !== school.name) {
+      throw new BadRequestException('Type the school name exactly to confirm');
+    }
+  }
+
   /**
    * Replaces one of the school's invite codes with a fresh one; the old code
    * stops working immediately. Existing members keep their access: only new
@@ -282,17 +419,26 @@ function dedupePrograms(programs: string[]): string[] {
   });
 }
 
-function parseDate(value: string, label: string): Date {
-  const date = new Date(`${value}T00:00:00Z`);
-  // Rejects impossible dates like 2026-02-30, which Date would roll over.
-  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
-    throw new BadRequestException(`${label} is invalid`);
-  }
-  return date;
+function newProgram(schoolId: string, name: string, sortOrder: number) {
+  const defaults = standardProgramDefaults(name);
+  return {
+    schoolId,
+    name,
+    type: defaults.type,
+    targetExams: [...defaults.targetExams],
+    themeColor: defaults.themeColor,
+    isStandard: (STANDARD_PROGRAMS as readonly string[]).includes(name),
+    sortOrder,
+  };
 }
 
-function toIsoDate(date: Date | null): string | null {
-  return date ? date.toISOString().slice(0, 10) : null;
+function mouRange(dto: { mouStartDate?: string; mouEndDate?: string }) {
+  const mouStart = dto.mouStartDate ? parseDate(dto.mouStartDate, 'MOU start date') : null;
+  const mouEnd = dto.mouEndDate ? parseDate(dto.mouEndDate, 'MOU end date') : null;
+  if (mouStart && mouEnd && mouEnd < mouStart) {
+    throw new BadRequestException('MOU end date must be on or after the start date');
+  }
+  return { mouStart, mouEnd };
 }
 
 export function mouStatus(start: Date | null, end: Date | null, now = new Date()): MouStatus {

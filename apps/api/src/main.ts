@@ -12,6 +12,9 @@ async function bootstrap() {
   // client, without letting clients spoof X-Forwarded-For.
   const proxyHops = Number(process.env.TRUST_PROXY ?? 0);
   if (proxyHops > 0) app.set('trust proxy', proxyHops);
+  // Bulk imports post up to 1,000 spreadsheet rows as JSON (about 300 KB);
+  // Nest's default 100 KB limit would answer those with a 413.
+  app.useBodyParser('json', { limit: '2mb' });
   app.use(helmet());
   app.setGlobalPrefix('api');
   app.use(cookieParser());

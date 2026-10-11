@@ -1,8 +1,8 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { PlaceholderPage } from '@/features/auth/PlaceholderPage'
-import { HomeRedirect, RequireAuth } from '@/features/auth/guards'
+import { HomeRedirect, PageSpinner, RequireAuth } from '@/features/auth/guards'
 import { AdminSignupPage, TeacherSignupPage } from '@/features/auth/SignupPages'
 import { SignupRolePage } from '@/features/auth/SignupRolePage'
 import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
@@ -19,7 +19,18 @@ import { legacyTeacherPaths, teacherExtraSections, teacherNav } from '@/features
 import { TeacherDashboardPage } from '@/features/teacher/TeacherDashboardPage'
 import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
+// Heavy pages load on first visit instead of in the initial bundle.
+const AcademicPlanningPage = lazy(() =>
+  import('@/features/admin/planning/AcademicPlanningPage').then((m) => ({ default: m.AcademicPlanningPage })),
+)
+const TeacherAcademicPlanningPage = lazy(() =>
+  import('@/features/teacher/TeacherAcademicPlanningPage').then((m) => ({ default: m.TeacherAcademicPlanningPage })),
+)
+const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
+
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
+const adminPages: Record<string, ReactNode> = { 'academic-planning': lazyPage(<AcademicPlanningPage />) }
+const teacherPages: Record<string, ReactNode> = { 'academic-planning': lazyPage(<TeacherAcademicPlanningPage />) }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 
 /** Sends /dashboard/fees → /management/fee-management and the like. */
@@ -52,7 +63,7 @@ const router = createBrowserRouter([
           { index: true, element: <DashboardPage /> },
           ...[...adminNav.filter((n) => n.path), ...adminExtraSections].map((n) => ({
             path: n.path,
-            element: <SectionPlaceholder title={n.label} />,
+            element: adminPages[n.path] ?? <SectionPlaceholder title={n.label} />,
           })),
         ],
       },
@@ -65,7 +76,7 @@ const router = createBrowserRouter([
           { index: true, element: <TeacherDashboardPage /> },
           ...[...teacherNav.filter((n) => n.path), ...teacherExtraSections].map((n) => ({
             path: n.path,
-            element: <SectionPlaceholder title={n.label} />,
+            element: teacherPages[n.path] ?? <SectionPlaceholder title={n.label} />,
           })),
           ...Object.entries(legacyTeacherPaths).map(([from, to]) => ({
             path: from,

@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useOutletContext } from 'react-router-dom'
 import { api } from '@/lib/api'
+import type { Structure } from '@/features/academic/api'
+import type { AcademicFilters } from '@/features/academic/filters'
 import type { Me } from '@/features/auth/types'
 import type { MouStatus } from '@/features/admin/useDashboard'
 import type { Announcement } from '@/features/portal/Announcements'
@@ -40,7 +42,11 @@ export type TeacherContext = {
   me: Me
   dashboard: TeacherDashboard | undefined
   dashboardError: Error | null
-  programId: string
+  /** The teacher's assigned programs and batches. */
+  structure: Structure | undefined
+  /** Set when the teacher's programs and batches couldn't be loaded. */
+  structureError: Error | null
+  filters: AcademicFilters
   /** Opens the Switch / Join School dialog. */
   openSwitchSchool: () => void
 }

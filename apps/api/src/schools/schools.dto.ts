@@ -111,6 +111,13 @@ export class JoinSchoolDto {
   inviteCode: string;
 }
 
+export class ConfirmNameDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Type the school name to confirm' })
+  @MaxLength(150)
+  confirmName: string;
+}
+
 export class RegenerateCodeDto {
   @IsIn(['ADMIN', 'TEACHER'], { message: 'Choose which code to regenerate' })
   kind: 'ADMIN' | 'TEACHER';

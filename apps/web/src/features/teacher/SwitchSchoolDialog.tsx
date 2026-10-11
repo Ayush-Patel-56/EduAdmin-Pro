@@ -40,6 +40,8 @@ export function SwitchSchoolDialog({ currentSchool, onClose }: SwitchSchoolDialo
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: meQueryKey }),
         queryClient.invalidateQueries({ queryKey: teacherDashboardQueryKey }),
+        // Programs, batches and syllabus belong to the old school now.
+        queryClient.resetQueries({ queryKey: ['teacher'] }),
       ])
       onClose()
     } catch (err) {
