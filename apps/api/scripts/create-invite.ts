@@ -1,7 +1,7 @@
 // Issue an admin invite code. Anyone signing up with it gets an admin account.
 //
 // Usage:
-//   pnpm --filter api invite:create -- [note] [--code ADMIN123] [--max-uses 5] [--days 14]
+//   pnpm --filter api invite:create -- [note] [--code CLIENT-2026] [--max-uses 5] [--days 14]
 //
 //   --code      custom code (4-32 letters, digits or "-"); random if omitted
 //   --max-uses  how many admins can sign up with it; unlimited if omitted

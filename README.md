@@ -35,10 +35,11 @@ Local development uses the Neon **`dev`** branch, a copy of `production`. Point 
 
 ## Accounts & invite codes
 
-1. **Admin invite code:** required to create an admin account. The permanent code is **`ADMIN123`** (unlimited uses, never expires). A migration creates it in every environment and restores it if it's ever revoked. Extra one-off codes can still be issued:
+1. **Admin invite code:** required to create an admin account. Issue one per client with:
    ```bash
    pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14
    ```
+   For **local development only**, `NODE_ENV=development pnpm --filter api seed:dev` enables a shared dev code (printed by the script). It refuses to run when `NODE_ENV` is `production` or not set, and the code is revoked by a migration in every environment, so it never works in production.
 2. After logging in, an admin either **creates a school** or **joins an existing school** with that school's **admin** invite code.
 3. **Every school has two invite codes** (e.g. `GFCZ-BBYB`), both shown on its admin dashboard. The code, not the account, decides the role:
    - **Teacher code:** share with teachers and staff. Teachers who enter it (at signup or later) join that school straight away. A teacher belongs to one school at a time. It can **never** grant admin rights: an admin account entering it is refused.
@@ -90,3 +91,4 @@ If `SMTP_HOST`, `SMTP_USER` or `SMTP_PASS` is empty in development, codes are pr
 | `pnpm --filter api db:migrate` | Create/apply a migration |
 | `pnpm --filter api db:studio` | Browse data in Prisma Studio |
 | `pnpm --filter api invite:create` | Issue an admin invite code |
+| `NODE_ENV=development pnpm --filter api seed:dev` | Development only: enable the shared dev admin code |

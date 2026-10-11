@@ -25,6 +25,7 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "invite:create": "tsx scripts/create-invite.ts",
+    "seed:dev": "tsx scripts/seed-dev.ts",
     "admins:audit": "tsx scripts/audit-admins.ts"
   },
   "dependencies": {
