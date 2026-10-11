@@ -95,6 +95,22 @@ Migration folders must sort in the order they were created: use timestamps later
   SELECT "facultyId", "period", "academicYear", count(*) FROM "TeacherAppraisal" GROUP BY 1, 2, 3 HAVING count(*) > 1;
   ```
 
+  **Run this on production before `migrate deploy`, and expect no rows.** The file is already applied on the dev branch, so it is left unchanged (editing an applied migration changes its checksum, and `prisma migrate dev` then insists on resetting that database). It is not wrapped in a transaction: with duplicates present, the timestamp conversion, `Candidate.facultyId` and its index apply, and only the appraisal index fails.
+- **If it failed on the appraisal index anyway, don't `migrate resolve --rolled-back` and re-run it.** The re-run fails on `facultyId`, and converting an already converted column again shifts every value by the session's UTC offset. Finish it instead:
+
+  ```bash
+  # remove the duplicate appraisals the query above lists, then:
+  psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -1 <<'SQL'
+  CREATE UNIQUE INDEX "TeacherAppraisal_facultyId_period_academicYear_key" ON "TeacherAppraisal"("facultyId", "period", "academicYear");
+  ALTER TABLE "Candidate" ADD CONSTRAINT "Candidate_facultyId_fkey" FOREIGN KEY ("facultyId") REFERENCES "Faculty"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  SQL
+  pnpm --filter api exec prisma migrate resolve --applied 20261012050000_recruitment_hardening
+  pnpm --filter api exec prisma migrate deploy
+  ```
+
+  If it failed anywhere else (a lost connection, a lock), check which of its statements took effect and run only the remaining ones the same way before `resolve --applied`.
+- The timestamp conversion rewrites each recruitment table under an `ACCESS EXCLUSIVE` lock (reads and writes on it wait until it finishes). The tables are tiny now, but `RecruitmentAuditLog` only ever grows: plan any future type change on it for a quiet moment.
+
 - The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
 
 ## After deploying the invite-code change: review existing admins
