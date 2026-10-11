@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { STANDARD_PROGRAMS } from '../schools/school-options.js';
 import type { ProgramDto } from './academic.dto.js';
+import { unlinkProgramChapters } from '../curriculum/unlink-program-chapters.js';
 import {
   duplicateAsConflict,
   isCodeClash,
@@ -85,14 +86,12 @@ export class ProgramsService {
         `${program.name} has ${batches} batch${batches === 1 ? '' : 'es'}. Delete or move them first.`,
       );
     }
-    // Curriculum chapters may name a program optionally; they stay, unlinked.
-    await this.prisma.$transaction([
-      this.prisma.curriculumChapter.updateMany({
-        where: { schoolId, programId },
-        data: { programId: null },
-      }),
-      this.prisma.program.delete({ where: { id: programId } }),
-    ]);
+    // Curriculum chapters may name a program optionally; they stay, unlinked
+    // (or a 409 names the ones that would become duplicates).
+    await this.prisma.$transaction(async (tx) => {
+      await unlinkProgramChapters(tx, schoolId, [programId]);
+      await tx.program.delete({ where: { id: programId } });
+    });
     return { ok: true };
   }
 

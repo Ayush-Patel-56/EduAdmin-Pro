@@ -62,6 +62,22 @@ SELECT "schoolId", "subject", lower("name"), coalesce("board", ''), coalesce("cl
 
 No rows means it is safe. If rows come back, rename or delete the extras first. Like the email index, these are raw SQL and Prisma leaves them alone.
 
+**If it failed anyway:** the file is not wrapped in a transaction, so the first index may already exist and a plain re-run fails with "already exists". Recover with:
+
+```sql
+DROP INDEX IF EXISTS "CurriculumConcept_chapterId_lower_name_key";
+DROP INDEX IF EXISTS "CurriculumChapter_natural_key";
+```
+
+then remove the duplicates the queries above list, and:
+
+```bash
+pnpm --filter api exec prisma migrate resolve --rolled-back 20261012030000_curriculum_unique_names
+pnpm --filter api exec prisma migrate deploy
+```
+
+With the chapter index in place, removing a program (Delete on the Programs tab, or leaving it out in Edit School) keeps its chapters without a program. If that would duplicate a chapter that already has no program (same subject, name, board and class), the API answers 409 and names the chapters; rename or delete one copy in Curriculum, then remove the program.
+
 Migration folders must sort in the order they were created: use timestamps later than the newest folder in `apps/api/prisma/migrations`.
 
 ## Recruitment migrations (`20261012040000_recruitment`, `20261012050000_recruitment_hardening`)
