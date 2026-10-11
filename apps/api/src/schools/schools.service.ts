@@ -16,6 +16,7 @@ import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
 import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
+import { unlinkProgramChapters } from '../curriculum/unlink-program-chapters.js';
 import { normalizeIndianMobile } from '../common/validators.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
@@ -287,8 +288,8 @@ export class SchoolsService {
       }
       if (removed.length > 0) {
         const ids = removed.map((p) => p.id);
-        // Curriculum chapters keep existing without a program.
-        await tx.curriculumChapter.updateMany({ where: { schoolId, programId: { in: ids } }, data: { programId: null } });
+        // Curriculum chapters keep existing without a program (409 if that would duplicate one).
+        await unlinkProgramChapters(tx, schoolId, ids);
         await tx.program.deleteMany({ where: { schoolId, id: { in: ids } } });
       }
       const existingKeys = new Set(existing.map((p) => p.name.toLowerCase()));
