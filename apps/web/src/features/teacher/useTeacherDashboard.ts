@@ -44,6 +44,8 @@ export type TeacherContext = {
   dashboardError: Error | null
   /** The teacher's assigned programs and batches. */
   structure: Structure | undefined
+  /** Set when the teacher's programs and batches couldn't be loaded. */
+  structureError: Error | null
   filters: AcademicFilters
   /** Opens the Switch / Join School dialog. */
   openSwitchSchool: () => void

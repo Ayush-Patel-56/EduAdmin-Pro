@@ -159,8 +159,8 @@ export function FacultyTab() {
           }
           confirmLabel="Delete"
           onConfirm={async () => {
-            const result = await api<{ deleted: number; keptLinked: string[] }>(`/schools/${schoolId}/faculty`, {
-              method: 'DELETE',
+            const result = await api<{ deleted: number; keptLinked: string[] }>(`/schools/${schoolId}/faculty/delete`, {
+              method: 'POST',
               body: JSON.stringify({ ids: [...selected] }),
             })
             setSelected(new Set())

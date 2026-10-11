@@ -15,7 +15,7 @@ export function TeacherLayout() {
   const { data: dashboard, error: dashboardError } = useTeacherDashboard()
   const schoolId = dashboard?.school?.id ?? null
   // Only fetched once the teacher is in a school; the API answers 403 otherwise.
-  const { data: structure } = useStructure({ kind: 'teacher' }, !!schoolId)
+  const { data: structure, error: structureError } = useStructure({ kind: 'teacher' }, !!schoolId)
   const filters = useAcademicFilters(structure, `filters:teacher:${schoolId ?? 'none'}`)
   const [switchOpen, setSwitchOpen] = useState(false)
   const openSwitchSchool = useCallback(() => setSwitchOpen(true), [])
@@ -49,7 +49,7 @@ export function TeacherLayout() {
         </>
       }
     >
-      <Outlet context={{ me, dashboard, dashboardError, structure, filters, openSwitchSchool } satisfies TeacherContext} />
+      <Outlet context={{ me, dashboard, dashboardError, structure, structureError, filters, openSwitchSchool } satisfies TeacherContext} />
       {switchOpen && <SwitchSchoolDialog currentSchool={schoolName} onClose={closeSwitchSchool} />}
     </PortalShell>
   )

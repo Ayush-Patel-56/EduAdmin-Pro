@@ -83,6 +83,13 @@ export class BatchesService {
           })),
           skipDuplicates: true,
         });
+        // ...and no longer in the old one unless another batch keeps them there.
+        await pruneFacultyPrograms(
+          tx,
+          schoolId,
+          current.programId,
+          teachers.map((t) => t.facultyId),
+        );
       }
       return { id: batchId };
     });
@@ -90,8 +97,20 @@ export class BatchesService {
 
   /** Deleting a batch also removes its syllabus chapters and teacher assignments. */
   async remove(schoolId: string, batchId: string) {
-    await this.find(schoolId, batchId);
-    await this.prisma.batch.delete({ where: { id: batchId } });
+    const batch = await this.find(schoolId, batchId);
+    await this.prisma.$transaction(async (tx) => {
+      const teachers = await tx.facultyBatch.findMany({
+        where: { batchId },
+        select: { facultyId: true },
+      });
+      await tx.batch.delete({ where: { id: batchId } });
+      await pruneFacultyPrograms(
+        tx,
+        schoolId,
+        batch.programId,
+        teachers.map((t) => t.facultyId),
+      );
+    });
     return { ok: true };
   }
 
@@ -174,5 +193,29 @@ export async function assignFaculty(
     where: { facultyId_programId: { facultyId, programId } },
     create: { facultyId, programId, schoolId },
     update: {},
+  });
+}
+
+/**
+ * Teachers get access to a program through its batches. Once none of a
+ * teacher's batches is in `programId` any more, drop that program from them,
+ * so access doesn't pile up as batches move or close.
+ */
+export async function pruneFacultyPrograms(
+  tx: Tx,
+  schoolId: string,
+  programId: string,
+  facultyIds: string[],
+) {
+  if (facultyIds.length === 0) return;
+  const stillThere = await tx.facultyBatch.findMany({
+    where: { facultyId: { in: facultyIds }, batch: { programId } },
+    select: { facultyId: true },
+  });
+  const keep = new Set(stillThere.map((r) => r.facultyId));
+  const drop = facultyIds.filter((id) => !keep.has(id));
+  if (drop.length === 0) return;
+  await tx.facultyProgram.deleteMany({
+    where: { schoolId, programId, facultyId: { in: drop } },
   });
 }

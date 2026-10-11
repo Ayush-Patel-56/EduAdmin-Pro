@@ -12,6 +12,15 @@ export function FullPageSpinner() {
   )
 }
 
+/** Inline spinner for a page that is still loading (inside the portal layout). */
+export function PageSpinner() {
+  return (
+    <div className="flex h-64 items-center justify-center">
+      <Loader2 className="size-6 animate-spin text-slate-400" aria-label="Loading" />
+    </div>
+  )
+}
+
 /** Renders children only for a signed-in user (optionally of one account type). */
 export function RequireAuth({ accountType, children }: { accountType?: AccountType; children: ReactNode }) {
   const { data: me, error, isPending } = useMe()

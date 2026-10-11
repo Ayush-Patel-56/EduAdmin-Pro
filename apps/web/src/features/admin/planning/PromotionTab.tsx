@@ -69,13 +69,19 @@ export function PromotionTab() {
             </table>
             {!pending.studentsTracked && (
               <p className="mt-3 text-xs text-slate-500">
-                Student records arrive with the Students module; until then there is nobody to move, and confirming only records this year’s cycle.
+                There are no student records yet, so there is nobody to promote. Each year can only be decided once, so Confirm unlocks when students exist; you can dismiss this cycle in the meantime.
               </p>
             )}
             <p className="mt-3 text-xs text-slate-600">{pending.heldNewAdmissions} new admissions held to next year.</p>
             <p className="text-xs text-slate-600">{pending.class12Excluded} Class 12 students excluded — handle manually.</p>
             <div className="mt-5 flex gap-3">
-              <button type="button" onClick={() => setDecision('confirm')} className={btnPrimary}>
+              <button
+                type="button"
+                onClick={() => setDecision('confirm')}
+                disabled={!pending.studentsTracked}
+                title={pending.studentsTracked ? undefined : 'Available once student records exist'}
+                className={`${btnPrimary} disabled:cursor-not-allowed`}
+              >
                 <CircleCheck className="size-4" /> Confirm Promotion
               </button>
               <button type="button" onClick={() => setDecision('dismiss')} className={btnSecondary}>

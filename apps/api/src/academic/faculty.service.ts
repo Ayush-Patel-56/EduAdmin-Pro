@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
-import type { FacultyStatus } from '../generated/prisma/client.js';
+import { Prisma, type FacultyStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { actorFromUser, writeAudit } from '../recruitment/audit.js';
 import type { FacultyImportRow } from './academic.dto.js';
@@ -138,34 +138,36 @@ export class FacultyService {
     const planned = await this.plan(schoolId, rows);
     if (!dryRun) {
       const valid = planned.filter((p) => p.action !== 'error');
-      await this.prisma.$transaction(
-        async (tx) => {
-          for (const p of valid) {
-            const fields = p.fields!;
-            const faculty = p.existingId
-              ? await tx.faculty.update({
-                  where: { id: p.existingId },
-                  data: updateData(fields, !!p.linked),
-                })
-              : await tx.faculty.create({
-                  data: {
-                    schoolId,
-                    ...fields,
-                    status: fields.status ?? 'ACTIVE',
-                  },
-                });
-            for (const batch of p.batches ?? []) {
-              await assignFaculty(
-                tx,
-                schoolId,
-                faculty.id,
-                batch.id,
-                batch.programId,
-              );
+      await changedUnderUsAsConflict(() =>
+        this.prisma.$transaction(
+          async (tx) => {
+            for (const p of valid) {
+              const fields = p.fields!;
+              const faculty = p.existingId
+                ? await tx.faculty.update({
+                    where: { id: p.existingId },
+                    data: updateData(fields, !!p.linked),
+                  })
+                : await tx.faculty.create({
+                    data: {
+                      schoolId,
+                      ...fields,
+                      status: fields.status ?? 'ACTIVE',
+                    },
+                  });
+              for (const batch of p.batches ?? []) {
+                await assignFaculty(
+                  tx,
+                  schoolId,
+                  faculty.id,
+                  batch.id,
+                  batch.programId,
+                );
+              }
             }
-          }
-        },
-        { timeout: 120_000, maxWait: 10_000 },
+          },
+          { timeout: 120_000, maxWait: 10_000 },
+        ),
       );
     }
     return summarize(planned, dryRun);
@@ -272,10 +274,19 @@ export class FacultyService {
         else matchedBatches.push(matches[0]);
       }
 
-      const match =
-        (email && byEmail.get(email)) ||
-        (employeeId && byEmployeeId.get(employeeId.toLowerCase())) ||
-        null;
+      // Resolve the two keys separately: a row whose email points at one
+      // profile and whose employee ID points at another is ambiguous, and
+      // updating either would collide with the other on a unique key.
+      const emailMatch = email ? byEmail.get(email) : undefined;
+      const idMatch = employeeId
+        ? byEmployeeId.get(employeeId.toLowerCase())
+        : undefined;
+      if (emailMatch && idMatch && emailMatch.id !== idMatch.id) {
+        errors.push(
+          'Email and Employee ID belong to two different faculty profiles',
+        );
+      }
+      const match = emailMatch ?? idMatch ?? null;
       if (
         match &&
         email &&
@@ -286,14 +297,6 @@ export class FacultyService {
         errors.push(
           'Employee ID belongs to a teacher with a different login email',
         );
-      }
-      if (
-        match &&
-        email &&
-        byEmail.get(email) &&
-        byEmail.get(email)!.id !== match.id
-      ) {
-        errors.push('Email belongs to a different faculty profile');
       }
 
       const row = i + 2; // spreadsheet row number: 1 is the header
@@ -379,4 +382,27 @@ function summarize(planned: PlannedRow[], dryRun: boolean): ImportPreview {
       errors,
     })),
   };
+}
+
+/**
+ * The import is planned from a snapshot and then applied in a transaction. If
+ * someone else changes faculty in between, the database's unique keys catch it:
+ * report that as a 409 asking for a retry, not a 500.
+ */
+async function changedUnderUsAsConflict<T>(
+  write: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      throw new ConflictException(
+        'Faculty changed while the import was running (a duplicate email or employee ID appeared). Preview the file again and retry.',
+      );
+    }
+    throw err;
+  }
 }

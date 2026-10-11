@@ -14,7 +14,8 @@ describe('currentAcademicYear', () => {
 
   it('is still last year before the boundary', () => {
     expect(
-      currentAcademicYear(4, new Date('2026-03-31T23:00:00Z')).academicYear,
+      // 22:30 IST on 31 March: the new year hasn't started yet in India.
+      currentAcademicYear(4, new Date('2026-03-31T17:00:00Z')).academicYear,
     ).toBe('2025-2026');
     expect(
       currentAcademicYear(6, new Date('2026-05-15T00:00:00Z')).academicYear,
