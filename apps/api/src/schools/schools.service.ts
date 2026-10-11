@@ -14,7 +14,7 @@ import { deactivateFacultyProfiles, linkFacultyProfile } from '../academic/facul
 import { actorFromUser, writeAudit } from '../recruitment/audit.js';
 import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
-import { parseDate, toIsoDate } from '../common/dates.js';
+import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
@@ -497,7 +497,8 @@ function mouRange(dto: { mouStartDate?: string; mouEndDate?: string }) {
 
 export function mouStatus(start: Date | null, end: Date | null, now = new Date()): MouStatus {
   if (!start && !end) return 'NOT_SET';
-  const today = now.toISOString().slice(0, 10);
+  // Schools run on Indian time: an MOU ending today is still active until midnight IST.
+  const today = toIsoDate(istToday(now))!;
   if (start && today < toIsoDate(start)!) return 'UPCOMING';
   if (end && today > toIsoDate(end)!) return 'EXPIRED';
   return 'ACTIVE';
