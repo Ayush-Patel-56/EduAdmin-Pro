@@ -179,13 +179,15 @@ model School {
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
-  createdBy       User?              @relation("SchoolCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy       User?               @relation("SchoolCreator", fields: [createdById], references: [id], onDelete: SetNull)
   memberships     SchoolMembership[]
   programs        Program[]
   batches         Batch[]
   faculty         Faculty[]
   syllabusItems   SyllabusItem[]
   promotionCycles PromotionCycle[]
+  chapters        CurriculumChapter[]
+  concepts        CurriculumConcept[]
   announcements   Announcement[]
 }
 
@@ -222,9 +224,10 @@ model Program {
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @default(now()) @updatedAt
 
-  school          School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school          School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   batches         Batch[]
   facultyPrograms FacultyProgram[]
+  chapters        CurriculumChapter[]
 
   @@unique([schoolId, name])
   @@unique([schoolId, code])
@@ -385,4 +388,51 @@ model Announcement {
   createdBy User?  @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([schoolId, createdAt])
+}
+
+// The school's curriculum: Subject -> Chapter -> Concept. It is the reference
+// taxonomy (board, class, program) that question banks and tests pick from.
+// Names are unique by expression indexes that Prisma can't express (it leaves
+// them alone): "CurriculumConcept_chapterId_lower_name_key" and
+// "CurriculumChapter_natural_key", both from migration 20261012030000.
+model CurriculumChapter {
+  id            String   @id @default(uuid())
+  schoolId      String
+  programId     String? // optional; must be a program of the same school
+  subject       String
+  name          String
+  code          String? // e.g. "PHY-11-CH03", unique per school; stored upper-cased
+  board         String? // CBSE / ICSE / ISC / State Board
+  classLevel    String? // one of the school's classes, e.g. "11th"
+  expectedHours Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  school   School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // NoAction (checked at end of statement) lets a school delete cascade; the
+  // programs service unlinks chapters before deleting a single program.
+  program  Program?            @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  concepts CurriculumConcept[]
+
+  @@unique([schoolId, code])
+  @@unique([id, schoolId])
+  @@index([schoolId, subject])
+  @@index([programId])
+}
+
+model CurriculumConcept {
+  id        String   @id @default(uuid())
+  schoolId  String
+  chapterId String
+  name      String
+  code      String? // e.g. "PHY-11-CH03-CP02", unique per school; stored upper-cased
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school  School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  chapter CurriculumChapter @relation(fields: [chapterId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@unique([schoolId, code])
+  @@index([chapterId])
 }

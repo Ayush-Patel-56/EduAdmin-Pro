@@ -5,6 +5,7 @@ import { SchoolsService } from '../schools/schools.service.js';
 import { AcademicAdminController } from './academic-admin.controller.js';
 import { AcademicTeacherController } from './academic-teacher.controller.js';
 import { AccessService } from './access.service.js';
+import { CurriculumController } from '../curriculum/curriculum.controller.js';
 
 const auth = { userId: 'user-1', sessionId: 's', activeSchoolId: null };
 
@@ -84,6 +85,58 @@ describe('AcademicAdminController: /schools/:schoolId/*', () => {
       await expect(
         handler.call(controller, auth, 'foreign-school', 'x', 'y', {}),
       ).rejects.toBeInstanceOf(NotFoundException);
+    },
+  );
+});
+
+describe('CurriculumController: /schools/:schoolId/curriculum/*', () => {
+  const assertAdmin = vi.fn();
+  const curriculum = new Proxy(
+    {},
+    {
+      get: () =>
+        vi.fn(() => {
+          throw new Error('a service was called before the permission check');
+        }),
+    },
+  );
+  const controller = new CurriculumController(
+    { assertAdmin } as unknown as AccessService,
+    curriculum as never,
+  );
+  const names = handlers(controller);
+  const call = (name: string, schoolId: string) =>
+    (
+      controller as unknown as Record<
+        string,
+        (...args: unknown[]) => Promise<unknown>
+      >
+    )[name].call(controller, auth, schoolId, 'x', 'y', {});
+
+  it('covers every route (guards against a new route being added without a check)', () => {
+    expect(names.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it.each(names)(
+    '%s refuses a non-admin before touching any data',
+    async (name) => {
+      assertAdmin.mockRejectedValue(
+        new ForbiddenException('Only admins of this school can do this'),
+      );
+      await expect(call(name, 'school-1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(assertAdmin).toHaveBeenCalledWith('user-1', 'school-1');
+    },
+  );
+
+  it.each(names)(
+    '%s answers 404 for a school the caller is not in',
+    async (name) => {
+      assertAdmin.mockRejectedValue(new NotFoundException('School not found'));
+      await expect(call(name, 'foreign-school')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     },
   );
 });

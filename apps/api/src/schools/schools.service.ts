@@ -284,7 +284,10 @@ export class SchoolsService {
         );
       }
       if (removed.length > 0) {
-        await tx.program.deleteMany({ where: { schoolId, id: { in: removed.map((p) => p.id) } } });
+        const ids = removed.map((p) => p.id);
+        // Curriculum chapters keep existing without a program.
+        await tx.curriculumChapter.updateMany({ where: { schoolId, programId: { in: ids } }, data: { programId: null } });
+        await tx.program.deleteMany({ where: { schoolId, id: { in: ids } } });
       }
       const existingKeys = new Set(existing.map((p) => p.name.toLowerCase()));
       const added = wanted.filter((p) => !existingKeys.has(p.toLowerCase()));
@@ -317,15 +320,17 @@ export class SchoolsService {
   /** What Clear All Data would remove, shown before the owner confirms. */
   async clearPreview(auth: AuthContext, schoolId: string) {
     await this.access.assertOwner(auth.userId, schoolId);
-    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles] = await Promise.all([
+    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts] = await Promise.all([
       this.prisma.program.count({ where: { schoolId } }),
       this.prisma.batch.count({ where: { schoolId } }),
       this.prisma.syllabusItem.count({ where: { schoolId } }),
       this.prisma.faculty.count({ where: { schoolId, userId: null } }),
       this.prisma.announcement.count({ where: { schoolId } }),
       this.prisma.promotionCycle.count({ where: { schoolId } }),
+      this.prisma.curriculumChapter.count({ where: { schoolId } }),
+      this.prisma.curriculumConcept.count({ where: { schoolId } }),
     ]);
-    return { programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles };
+    return { programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts };
   }
 
   /**
@@ -337,6 +342,8 @@ export class SchoolsService {
     await this.assertConfirmName(schoolId, confirmName);
     await this.prisma.$transaction([
       this.prisma.syllabusItem.deleteMany({ where: { schoolId } }),
+      this.prisma.curriculumConcept.deleteMany({ where: { schoolId } }),
+      this.prisma.curriculumChapter.deleteMany({ where: { schoolId } }),
       this.prisma.facultyBatch.deleteMany({ where: { schoolId } }),
       this.prisma.facultyProgram.deleteMany({ where: { schoolId } }),
       this.prisma.batch.deleteMany({ where: { schoolId } }),

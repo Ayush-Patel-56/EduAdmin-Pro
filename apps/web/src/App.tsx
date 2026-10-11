@@ -23,13 +23,19 @@ import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 const AcademicPlanningPage = lazy(() =>
   import('@/features/admin/planning/AcademicPlanningPage').then((m) => ({ default: m.AcademicPlanningPage })),
 )
+const CurriculumPage = lazy(() =>
+  import('@/features/admin/curriculum/CurriculumPage').then((m) => ({ default: m.CurriculumPage })),
+)
 const TeacherAcademicPlanningPage = lazy(() =>
   import('@/features/teacher/TeacherAcademicPlanningPage').then((m) => ({ default: m.TeacherAcademicPlanningPage })),
 )
 const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
-const adminPages: Record<string, ReactNode> = { 'academic-planning': lazyPage(<AcademicPlanningPage />) }
+const adminPages: Record<string, ReactNode> = {
+  'academic-planning': lazyPage(<AcademicPlanningPage />),
+  curriculum: lazyPage(<CurriculumPage />),
+}
 const teacherPages: Record<string, ReactNode> = { 'academic-planning': lazyPage(<TeacherAcademicPlanningPage />) }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 

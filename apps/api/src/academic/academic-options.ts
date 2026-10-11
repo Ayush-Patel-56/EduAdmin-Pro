@@ -29,6 +29,9 @@ export const TARGET_EXAMS = [
 
 export const CLASS_LEVELS = [6, 7, 8, 9, 10, 11, 12] as const;
 
+/** Boards a curriculum chapter can be tagged with (PRD §4.3). */
+export const CURRICULUM_BOARDS = ['CBSE', 'ICSE', 'ISC', 'State Board'] as const;
+
 export const SYLLABUS_STATUSES = [
   'NOT_STARTED',
   'IN_PROGRESS',
