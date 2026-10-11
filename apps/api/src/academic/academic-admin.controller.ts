@@ -174,7 +174,7 @@ export class AcademicAdminController {
     @Body() dto: DeleteFacultyDto,
   ) {
     await this.access.assertAdmin(auth.userId, schoolId);
-    return this.faculty.remove(schoolId, dto.ids);
+    return this.faculty.remove(schoolId, dto.ids, auth.userId);
   }
 
   // Syllabus tracker (admins see every batch: scope null)

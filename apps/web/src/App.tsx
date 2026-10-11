@@ -26,6 +26,9 @@ const AcademicPlanningPage = lazy(() =>
 const CurriculumPage = lazy(() =>
   import('@/features/admin/curriculum/CurriculumPage').then((m) => ({ default: m.CurriculumPage })),
 )
+const RecruitmentPage = lazy(() =>
+  import('@/features/admin/recruitment/RecruitmentPage').then((m) => ({ default: m.RecruitmentPage })),
+)
 const TeacherAcademicPlanningPage = lazy(() =>
   import('@/features/teacher/TeacherAcademicPlanningPage').then((m) => ({ default: m.TeacherAcademicPlanningPage })),
 )
@@ -35,6 +38,7 @@ const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{elem
 const adminPages: Record<string, ReactNode> = {
   'academic-planning': lazyPage(<AcademicPlanningPage />),
   curriculum: lazyPage(<CurriculumPage />),
+  recruitment: lazyPage(<RecruitmentPage />),
 }
 const teacherPages: Record<string, ReactNode> = { 'academic-planning': lazyPage(<TeacherAcademicPlanningPage />) }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>

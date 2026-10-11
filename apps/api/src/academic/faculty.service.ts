@@ -3,6 +3,7 @@ import { toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
 import { Prisma, type FacultyStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { actorFromUser, writeAudit } from '../recruitment/audit.js';
 import type { FacultyImportRow } from './academic.dto.js';
 import { assignFaculty } from './batches.service.js';
 import {
@@ -88,16 +89,36 @@ export class FacultyService {
    * Removes imported faculty profiles. Profiles linked to a login belong to a
    * member of the school and are left alone (they leave by switching schools).
    */
-  async remove(schoolId: string, ids: string[]) {
+  async remove(schoolId: string, ids: string[], userId: string) {
     const targets = await this.prisma.faculty.findMany({
       where: { schoolId, id: { in: ids } },
       select: { id: true, name: true, userId: true },
     });
     const deletable = targets.filter((f) => !f.userId).map((f) => f.id);
-    if (deletable.length > 0)
-      await this.prisma.faculty.deleteMany({
-        where: { schoolId, id: { in: deletable } },
+    if (deletable.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        // Deleting a profile cascades to its appraisals; those deletions are audited.
+        const appraisals = await tx.teacherAppraisal.findMany({
+          where: { schoolId, facultyId: { in: deletable } },
+          include: { faculty: { select: { name: true } } },
+        });
+        if (appraisals.length > 0) {
+          const actor = await actorFromUser(tx, userId);
+          for (const a of appraisals) {
+            await writeAudit(tx, actor, {
+              schoolId,
+              action: 'DELETE',
+              entity: 'TeacherAppraisal',
+              recordId: a.id,
+              summary: `Deleted appraisal of ${a.faculty.name} (${a.academicYear}) with their faculty profile`,
+            });
+          }
+        }
+        await tx.faculty.deleteMany({
+          where: { schoolId, id: { in: deletable } },
+        });
       });
+    }
     return {
       deleted: deletable.length,
       keptLinked: targets.filter((f) => f.userId).map((f) => f.name),

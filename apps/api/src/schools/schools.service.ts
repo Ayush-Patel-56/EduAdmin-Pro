@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { AccessService } from '../academic/access.service.js';
 import { standardProgramDefaults } from '../academic/academic-options.js';
 import { deactivateFacultyProfiles, linkFacultyProfile } from '../academic/faculty-link.js';
+import { actorFromUser, writeAudit } from '../recruitment/audit.js';
 import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
 import { parseDate, toIsoDate } from '../common/dates.js';
@@ -320,7 +321,7 @@ export class SchoolsService {
   /** What Clear All Data would remove, shown before the owner confirms. */
   async clearPreview(auth: AuthContext, schoolId: string) {
     await this.access.assertOwner(auth.userId, schoolId);
-    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts] = await Promise.all([
+    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts, recruitment] = await Promise.all([
       this.prisma.program.count({ where: { schoolId } }),
       this.prisma.batch.count({ where: { schoolId } }),
       this.prisma.syllabusItem.count({ where: { schoolId } }),
@@ -329,8 +330,28 @@ export class SchoolsService {
       this.prisma.promotionCycle.count({ where: { schoolId } }),
       this.prisma.curriculumChapter.count({ where: { schoolId } }),
       this.prisma.curriculumConcept.count({ where: { schoolId } }),
+      Promise.all([
+        this.prisma.jobRequirement.count({ where: { schoolId } }),
+        this.prisma.candidate.count({ where: { schoolId } }),
+        this.prisma.interview.count({ where: { schoolId } }),
+        this.prisma.teacherAppraisal.count({ where: { schoolId } }),
+      ]),
     ]);
-    return { programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts };
+    const [requirements, candidates, interviews, appraisals] = recruitment;
+    return {
+      programs,
+      batches,
+      syllabusItems,
+      importedFaculty,
+      announcements,
+      promotionCycles,
+      chapters,
+      concepts,
+      requirements,
+      candidates,
+      interviews,
+      appraisals,
+    };
   }
 
   /**
@@ -340,18 +361,37 @@ export class SchoolsService {
   async clearAllData(auth: AuthContext, schoolId: string, confirmName: string) {
     await this.access.assertOwner(auth.userId, schoolId);
     await this.assertConfirmName(schoolId, confirmName);
-    await this.prisma.$transaction([
-      this.prisma.syllabusItem.deleteMany({ where: { schoolId } }),
-      this.prisma.curriculumConcept.deleteMany({ where: { schoolId } }),
-      this.prisma.curriculumChapter.deleteMany({ where: { schoolId } }),
-      this.prisma.facultyBatch.deleteMany({ where: { schoolId } }),
-      this.prisma.facultyProgram.deleteMany({ where: { schoolId } }),
-      this.prisma.batch.deleteMany({ where: { schoolId } }),
-      this.prisma.program.deleteMany({ where: { schoolId } }),
-      this.prisma.promotionCycle.deleteMany({ where: { schoolId } }),
-      this.prisma.announcement.deleteMany({ where: { schoolId } }),
-      this.prisma.faculty.deleteMany({ where: { schoolId, userId: null } }),
-    ]);
+    await this.prisma.$transaction(async (tx) => {
+      const removed = await Promise.all([
+        tx.jobRequirement.count({ where: { schoolId } }),
+        tx.candidate.count({ where: { schoolId } }),
+        tx.teacherAppraisal.count({ where: { schoolId } }),
+      ]);
+      await tx.interview.deleteMany({ where: { schoolId } });
+      await tx.candidate.deleteMany({ where: { schoolId } });
+      await tx.jobRequirement.deleteMany({ where: { schoolId } });
+      await tx.teacherAppraisal.deleteMany({ where: { schoolId } });
+      // The audit trail itself is never cleared; it records the wipe instead.
+      await writeAudit(tx, await actorFromUser(tx, auth.userId), {
+        schoolId,
+        action: 'DELETE',
+        entity: 'School',
+        recordId: schoolId,
+        summary: `Clear All Data: removed ${removed[0]} requirements, ${removed[1]} candidates (with interviews), ${removed[2]} appraisals`,
+      });
+      // Same transaction as the recruitment wipe above: either everything is
+      // cleared (and audited) or nothing is.
+      await tx.syllabusItem.deleteMany({ where: { schoolId } });
+      await tx.curriculumConcept.deleteMany({ where: { schoolId } });
+      await tx.curriculumChapter.deleteMany({ where: { schoolId } });
+      await tx.facultyBatch.deleteMany({ where: { schoolId } });
+      await tx.facultyProgram.deleteMany({ where: { schoolId } });
+      await tx.batch.deleteMany({ where: { schoolId } });
+      await tx.program.deleteMany({ where: { schoolId } });
+      await tx.promotionCycle.deleteMany({ where: { schoolId } });
+      await tx.announcement.deleteMany({ where: { schoolId } });
+      await tx.faculty.deleteMany({ where: { schoolId, userId: null } });
+    }, { timeout: 60_000, maxWait: 10_000 });
     return { ok: true };
   }
 
@@ -359,12 +399,19 @@ export class SchoolsService {
   async deleteSchool(auth: AuthContext, schoolId: string, confirmName: string) {
     await this.access.assertOwner(auth.userId, schoolId);
     await this.assertConfirmName(schoolId, confirmName);
-    await this.prisma.$transaction([
+    await this.prisma.$transaction(async (tx) => {
       // Sessions only hold the id as a preference; drop it so nobody is left
       // pointing at a deleted school.
-      this.prisma.session.updateMany({ where: { activeSchoolId: schoolId }, data: { activeSchoolId: null } }),
-      this.prisma.school.delete({ where: { id: schoolId } }),
-    ]);
+      await tx.session.updateMany({ where: { activeSchoolId: schoolId }, data: { activeSchoolId: null } });
+      await writeAudit(tx, await actorFromUser(tx, auth.userId), {
+        schoolId,
+        action: 'DELETE',
+        entity: 'School',
+        recordId: schoolId,
+        summary: `Deleted school "${confirmName.trim()}" with all its recruitment and appraisal records`,
+      });
+      await tx.school.delete({ where: { id: schoolId } });
+    }, { timeout: 30_000 });
     return { ok: true };
   }
 
