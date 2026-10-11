@@ -10,7 +10,7 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import type { Actor } from './audit.js';
 import { RecruitmentController } from './recruitment.controller.js';
 import type { CandidateDto } from './recruitment.dto.js';
-import { RecruitmentService } from './recruitment.service.js';
+import { lockRow, RecruitmentService } from './recruitment.service.js';
 
 const auth = { userId: 'user-1', sessionId: 's', activeSchoolId: null };
 const actor: Actor = { userId: 'user-1', name: 'Asha', ip: null, userAgent: null };
@@ -338,5 +338,82 @@ describe('RecruitmentService: hiring', () => {
         status: 'PENDING',
       } as never),
     ).rejects.toThrow(/already has an appraisal/);
+  });
+});
+
+describe('RecruitmentService: row locks only reach the caller’s schools (#9)', () => {
+  const sqlOf = (call: unknown[]) => (call[0] as TemplateStringsArray).join('?');
+
+  it('lockRow filters by school id as well as row id', async () => {
+    const tx = { $queryRaw: vi.fn().mockResolvedValue([]) };
+    await lockRow(tx as never, 'Candidate', ID, [MINE, OTHER]);
+    const [call] = tx.$queryRaw.mock.calls;
+    expect(sqlOf(call)).toMatch(/WHERE "id" = \? AND "schoolId" = ANY\(\?::text\[\]\) FOR UPDATE/);
+    expect(call.slice(1)).toEqual([expect.anything(), ID, [MINE, OTHER]]);
+  });
+
+  it('every locking route passes the admin’s own schools', async () => {
+    const { recruitment, tx } = build('ADMIN', [MINE]);
+    // Nothing is found, so each call stops at its 404 right after the lock.
+    const dto = {
+      schoolId: MINE,
+      candidateId: ID,
+      facultyId: ID,
+      scheduledAt: '2026-10-20T10:00:00+05:30',
+      postingDate: '2026-10-01',
+    } as never;
+    const runs = [
+      () => recruitment.updateRequirement(actor, ID, dto),
+      () => recruitment.deleteRequirement(actor, ID),
+      () => recruitment.setStage(actor, ID, 'SHORTLISTED'),
+      () => recruitment.updateCandidate(actor, ID, dto),
+      () => recruitment.deleteCandidate(actor, ID),
+      () => recruitment.createInterview(actor, dto),
+      () => recruitment.updateInterview(actor, ID, dto),
+      () => recruitment.deleteInterview(actor, ID),
+      () => recruitment.updateAppraisal(actor, ID, dto),
+      () => recruitment.deleteAppraisal(actor, ID),
+    ];
+    for (const run of runs) await run().catch(() => undefined);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(runs.length);
+    for (const call of tx.$queryRaw.mock.calls) {
+      expect(sqlOf(call)).toContain('"schoolId" = ANY(');
+      expect(call.at(-1)).toEqual([MINE]);
+    }
+  });
+});
+
+describe('RecruitmentService: an appraisal’s teacher must be from its school (#9)', () => {
+  const dto = {
+    schoolId: MINE,
+    facultyId: FOREIGN,
+    period: 'ANNUAL',
+    academicYear: '2026-2027',
+    status: 'PENDING',
+  } as never;
+
+  it('create: a teacher from another school is a 400, looked up by id AND school', async () => {
+    const { recruitment, prisma } = build('ADMIN', [MINE]);
+    prisma.faculty.findFirst.mockResolvedValue(null);
+    await expect(recruitment.createAppraisal(actor, dto)).rejects.toThrow(
+      new BadRequestException('Select a teacher from this school'),
+    );
+    expect(prisma.faculty.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: FOREIGN, schoolId: MINE } }),
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('update: same, against the appraisal’s own school', async () => {
+    const { recruitment, prisma, tx } = build('ADMIN', [MINE]);
+    tx.teacherAppraisal.findFirst.mockResolvedValue({ id: ID, schoolId: MINE });
+    prisma.faculty.findFirst.mockResolvedValue(null);
+    await expect(recruitment.updateAppraisal(actor, ID, dto)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(prisma.faculty.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: FOREIGN, schoolId: MINE } }),
+    );
+    expect(tx.teacherAppraisal.update).not.toHaveBeenCalled();
   });
 });

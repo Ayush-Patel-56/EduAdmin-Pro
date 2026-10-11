@@ -3,6 +3,7 @@ import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { ConceptDto, CurriculumImportDto } from './curriculum.dto.js';
 import { CurriculumService } from './curriculum.service.js';
+import { realUniqueError } from '../common/prisma-errors.fixture.js';
 
 const duplicate = (meta?: Record<string, unknown>) =>
   new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -88,8 +89,13 @@ describe('CurriculumService: duplicates are decided by the database', () => {
   });
 
   it('a concept name that wins the race elsewhere is a 409 about the name', async () => {
+    // The real pg adapter error: it mentions "originalCode", which fooled
+    // the old "does the error mention code" check into a code message.
     create.mockRejectedValue(
-      duplicate({ target: 'CurriculumConcept_chapterId_lower_name_key' }),
+      realUniqueError(
+        'CurriculumConcept_chapterId_lower_name_key',
+        'CurriculumConcept',
+      ),
     );
     await expect(
       curriculum.createConcept('school-1', 'c1', dto),
@@ -98,7 +104,23 @@ describe('CurriculumService: duplicates are decided by the database', () => {
 
   it('a code clash is a 409 about the code', async () => {
     create.mockRejectedValue(
-      duplicate({ target: ['schoolId', 'code'] }),
+      realUniqueError(
+        'CurriculumConcept_schoolId_code_key',
+        'CurriculumConcept',
+      ),
+    );
+    await expect(
+      curriculum.createConcept('school-1', 'c1', dto),
+    ).rejects.toThrow(/code is already used/);
+  });
+
+  it('a code clash reported by fields (no index name) is still about the code', async () => {
+    create.mockRejectedValue(
+      duplicate({
+        driverAdapterError: {
+          cause: { constraint: { fields: ['schoolId', 'code'] } },
+        },
+      }),
     );
     await expect(
       curriculum.createConcept('school-1', 'c1', dto),
@@ -166,7 +188,9 @@ describe('CurriculumService.import', () => {
       },
     ]);
     expect(result.rows[0].action).toBe('error');
-    expect(result.rows[0].errors[0]).toMatch(/already a concept of this chapter/);
+    expect(result.rows[0].errors[0]).toMatch(
+      /already a concept of this chapter/,
+    );
   });
 
   it('a concept matched by code alone is renamed; by name alone is updated', async () => {
@@ -190,7 +214,11 @@ describe('CurriculumService.import', () => {
 
   it('an uncoded re-import with Board left blank updates the chapter instead of duplicating it', async () => {
     const result = await preview([
-      { subject: 'Physics', chapterName: 'motion', conceptName: 'Acceleration' },
+      {
+        subject: 'Physics',
+        chapterName: 'motion',
+        conceptName: 'Acceleration',
+      },
     ]);
     expect(result.rows[0].action).toBe('create'); // a new concept...
     expect(result.created).toBe(1);
@@ -252,7 +280,7 @@ describe('CurriculumService.import', () => {
 
   it('a duplicate that lands while importing is a 409, not a 500', async () => {
     transaction.mockRejectedValue(
-      duplicate({ target: 'CurriculumChapter_natural_key' }),
+      realUniqueError('CurriculumChapter_natural_key', 'CurriculumChapter'),
     );
     await expect(
       curriculum.import('school-1', {
@@ -260,5 +288,81 @@ describe('CurriculumService.import', () => {
         dryRun: false,
       } as never),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('CurriculumService.import: rows of one chapter in the same file (#8 nit)', () => {
+  const transaction = vi.fn();
+  const prisma = {
+    school: {
+      findUniqueOrThrow: vi.fn().mockResolvedValue({
+        classes: ['11th', '12th'],
+        programs: [],
+      }),
+    },
+    curriculumChapter: { findMany: vi.fn().mockResolvedValue([]) },
+    curriculumConcept: { findMany: vi.fn().mockResolvedValue([]) },
+    $transaction: transaction,
+  } as unknown as PrismaService;
+  const curriculum = new CurriculumService(prisma);
+
+  const applied = async (rows: CurriculumImportDto['rows']) => {
+    transaction.mockReset();
+    transaction.mockResolvedValue(undefined);
+    const result = await curriculum.import('school-1', {
+      rows,
+      dryRun: false,
+    } as never);
+    const tx = {
+      curriculumChapter: {
+        create: vi.fn().mockResolvedValue({ id: 'new' }),
+        update: vi.fn(),
+      },
+      curriculumConcept: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn(),
+        update: vi.fn(),
+      },
+    };
+    await transaction.mock.calls[0][0](tx);
+    return { result, created: tx.curriculumChapter.create.mock.calls };
+  };
+
+  it.each([
+    ['blank Board, then CBSE', [null, 'CBSE']],
+    ['CBSE, then blank Board', ['CBSE', null]],
+  ])('%s: one chapter, Board CBSE', async (_label, boards) => {
+    const { result, created } = await applied(
+      boards.map((board, i) => ({
+        subject: 'Physics',
+        chapterName: 'Fluids',
+        ...(board && { board }),
+        conceptName: `Concept ${i}`,
+      })),
+    );
+    expect(result.rows.map((r) => r.action)).toEqual(['create', 'create']);
+    expect(created).toHaveLength(1);
+    expect(created[0][0].data).toMatchObject({ name: 'Fluids', board: 'CBSE' });
+  });
+
+  it('different filled-in boards stay different chapters', async () => {
+    const { created } = await applied([
+      { subject: 'Physics', chapterName: 'Fluids', board: 'CBSE' },
+      { subject: 'Physics', chapterName: 'Fluids', board: 'ICSE' },
+    ]);
+    expect(created).toHaveLength(2);
+  });
+
+  it('a blank Board that fits two chapters in the file is refused, not guessed', async () => {
+    const result = await curriculum.import('school-1', {
+      rows: [
+        { subject: 'Physics', chapterName: 'Fluids', board: 'CBSE' },
+        { subject: 'Physics', chapterName: 'Fluids', board: 'ICSE' },
+        { subject: 'Physics', chapterName: 'Fluids', conceptName: 'Pressure' },
+      ],
+      dryRun: true,
+    } as never);
+    expect(result.rows[2].action).toBe('error');
+    expect(result.rows[2].errors[0]).toMatch(/More than one/);
   });
 });
