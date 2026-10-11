@@ -43,6 +43,7 @@ Local development uses the Neon **`dev`** branch, a copy of `production`. Point 
 3. **Every school has two invite codes** (e.g. `GFCZ-BBYB`), both shown on its admin dashboard. The code, not the account, decides the role:
    - **Teacher code:** share with teachers and staff. Teachers who enter it (at signup or later) join that school straight away. A teacher belongs to one school at a time. It can **never** grant admin rights: an admin account entering it is refused.
    - **Admin code:** share only with other administrators. Entering it joins an admin account as an admin. Teacher accounts can't use it.
+   - Any admin can **regenerate** either code from the dashboard (the refresh button next to it). The old code stops working immediately; existing members keep their access.
 
 ## Portals
 
@@ -75,7 +76,7 @@ If `SMTP_HOST`, `SMTP_USER` or `SMTP_PASS` is empty in development, codes are pr
 
 - **Env validation:** the API checks its environment at boot (`apps/api/src/config/env.ts`) and exits with a list of problems if anything required is missing or malformed. Production also requires `WEB_ORIGIN` and SMTP settings.
 - **Health checks:** `GET /api/health` and `/api/health/live` report the process is up (never rate limited, never touch the database). `GET /api/health/ready` also pings the database and returns 503 when it can't reach it; it is rate limited (30/min per IP) and its result is cached for 5 seconds, so it can't be used to hammer the database. Point uptime monitors at `/api/health/ready`.
-- **Deploy order:** migration → API → web. The web app tolerates an API that predates a feature (e.g. missing `preferences`), but not the other way round.
+- **Deploying and CI:** see [docs/deploy.md](docs/deploy.md) (order: migration → API → web, pre-deploy checks, reviewing existing admins). CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests and build on Node 22, plus an API e2e job against a throwaway Postgres.
 - **Behind a proxy:** set `TRUST_PROXY` to the number of proxies in front of the API (usually `1`) so rate limiting and session IPs see the real client address.
 - **Security headers** come from `helmet`, and the API drains requests and disconnects from the database on shutdown (SIGTERM).
 
