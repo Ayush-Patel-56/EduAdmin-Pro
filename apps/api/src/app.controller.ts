@@ -1,35 +1,67 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { PrismaService } from './prisma/prisma.service.js';
 
 const READY_TIMEOUT_MS = 3_000;
+// A fresh database check at most this often, however many callers ask.
+export const READY_CACHE_MS = 5_000;
 
-// Uptime monitors poll these, so they're exempt from rate limiting.
 @Controller('health')
-@SkipThrottle()
 export class AppController {
+  private lastReady: { at: number; ok: boolean } | null = null;
+  private inFlight: Promise<boolean> | null = null;
+
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Liveness: the process is up. Never touches the database. */
+  /** Liveness: the process is up. Never touches the database, so it isn't rate limited. */
   @Get()
+  @SkipThrottle()
   health() {
     return { status: 'ok' };
   }
 
   @Get('live')
+  @SkipThrottle()
   live() {
     return this.health();
   }
 
-  /** Readiness: the API can serve requests, i.e. the database answers. */
+  /**
+   * Readiness: the API can serve requests, i.e. the database answers. This one
+   * is rate limited and its result is cached for a few seconds, so a flood of
+   * calls can't turn into a flood of queries (or keep Neon awake).
+   */
   @Get('ready')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async ready() {
-    try {
-      await withTimeout(this.prisma.$queryRaw`SELECT 1`, READY_TIMEOUT_MS);
-      return { status: 'ok', database: 'up' };
-    } catch {
-      throw new ServiceUnavailableException({ status: 'error', database: 'down' });
+    if (!(await this.databaseUp())) {
+      throw new ServiceUnavailableException({
+        status: 'error',
+        database: 'down',
+      });
     }
+    return { status: 'ok', database: 'up' };
+  }
+
+  private async databaseUp(): Promise<boolean> {
+    const now = Date.now();
+    if (this.lastReady && now - this.lastReady.at < READY_CACHE_MS)
+      return this.lastReady.ok;
+    // Concurrent callers share one in-flight check.
+    this.inFlight ??= withTimeout(
+      this.prisma.$queryRaw`SELECT 1`,
+      READY_TIMEOUT_MS,
+    )
+      .then(() => true)
+      .catch(() => false)
+      .then((ok) => {
+        this.lastReady = { at: Date.now(), ok };
+        return ok;
+      })
+      .finally(() => {
+        this.inFlight = null;
+      });
+    return this.inFlight;
   }
 }
 

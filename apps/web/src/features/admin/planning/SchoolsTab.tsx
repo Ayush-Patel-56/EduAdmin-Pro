@@ -12,7 +12,7 @@ import { useSchoolOptions, type SchoolFormValues } from '@/features/onboarding/s
 import type { MouStatus } from '../useDashboard'
 import { useAdminContext } from '../adminContext'
 
-type ApiSchool = { id: string; inviteCode: string; classesLabel: string; mouStatus: MouStatus; isOwner: boolean } &
+type ApiSchool = { id: string; inviteCode: string; adminInviteCode: string; classesLabel: string; mouStatus: MouStatus; isOwner: boolean } &
   Omit<SchoolFormValues, 'mouStartDate' | 'mouEndDate' | 'contactPerson' | 'phone' | 'email' | 'address' | 'gstNumber'> & {
     mouStartDate: string | null
     mouEndDate: string | null
@@ -133,7 +133,6 @@ type SchoolCardProps = {
 }
 
 function SchoolCard({ school, active, switching, onActivate, onEdit, onDelete, onClear }: SchoolCardProps) {
-  const [copied, setCopied] = useState(false)
   const ownerOnly = school.isOwner ? undefined : 'Only the school owner can do this'
   return (
     <article
@@ -168,23 +167,8 @@ function SchoolCard({ school, active, switching, onActivate, onEdit, onDelete, o
           <Row label="MOU" value={MOU_LABEL[school.mouStatus]} />
         </dl>
 
-        <div className="mt-4 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
-          <div>
-            <p className="text-[10px] font-bold tracking-wider text-amber-700 uppercase">Invite code</p>
-            <p className="mt-0.5 font-mono text-sm font-bold tracking-[0.2em] text-amber-900">{school.inviteCode}</p>
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              await navigator.clipboard.writeText(school.inviteCode)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 1500)
-            }}
-            className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-200"
-          >
-            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} {copied ? 'Copied' : 'Copy'}
-          </button>
-        </div>
+        <CodeRow title="Teacher invite code" code={school.inviteCode} tone="amber" />
+        <CodeRow title="Admin invite code" code={school.adminInviteCode} tone="indigo" />
 
         {!active && (
           <button type="button" onClick={onActivate} disabled={switching} className={`${btnSecondary} mt-3 h-9 w-full text-xs`}>
@@ -216,6 +200,36 @@ function SchoolCard({ school, active, switching, onActivate, onEdit, onDelete, o
         </button>
       </div>
     </article>
+  )
+}
+
+const CODE_TONES = {
+  amber: { box: 'border-amber-200 bg-amber-50/70', title: 'text-amber-700', code: 'text-amber-900', button: 'bg-amber-100 text-amber-800 hover:bg-amber-200' },
+  indigo: { box: 'border-indigo-200 bg-indigo-50/60', title: 'text-indigo-700', code: 'text-indigo-900', button: 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200' },
+} as const
+
+/** One invite code with a copy button. Teacher and admin codes are shown separately and labelled. */
+function CodeRow({ title, code, tone }: { title: string; code: string; tone: keyof typeof CODE_TONES }) {
+  const [copied, setCopied] = useState(false)
+  const t = CODE_TONES[tone]
+  return (
+    <div className={`mt-3 flex items-center justify-between rounded-lg border px-3 py-2.5 ${t.box}`}>
+      <div>
+        <p className={`text-[10px] font-bold tracking-wider uppercase ${t.title}`}>{title}</p>
+        <p className={`mt-0.5 font-mono text-sm font-bold tracking-[0.2em] ${t.code}`}>{code}</p>
+      </div>
+      <button
+        type="button"
+        onClick={async () => {
+          await navigator.clipboard.writeText(code)
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        }}
+        className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${t.button}`}
+      >
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
   )
 }
 
@@ -294,10 +308,10 @@ function JoinSchoolDialog({ onJoined, onClose }: { onJoined: () => Promise<unkno
     }
   }
   return (
-    <Dialog title="Join by Code" description="Enter the invite code shared by that school’s admin" onClose={onClose} widthClass="max-w-md">
+    <Dialog title="Join by Code" description="Enter the school’s admin invite code (an existing admin can copy it from their dashboard)" onClose={onClose} widthClass="max-w-md">
       <form onSubmit={submit} noValidate className="space-y-4 px-6 py-5">
         <div>
-          <label htmlFor="join-code" className={labelClass}>School invite code</label>
+          <label htmlFor="join-code" className={labelClass}>School admin invite code</label>
           <input
             id="join-code"
             value={code}

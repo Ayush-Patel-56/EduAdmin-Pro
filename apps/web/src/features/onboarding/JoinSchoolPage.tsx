@@ -43,7 +43,7 @@ export function JoinSchoolPage() {
 
       <form onSubmit={handleSubmit} noValidate className="mt-6">
         <label htmlFor="invite-code" className={fieldLabelClass}>
-          Invite code
+          School admin invite code
         </label>
         <input
           id="invite-code"
@@ -52,13 +52,17 @@ export function JoinSchoolPage() {
             setCode(e.target.value.toUpperCase())
             setError(null)
           }}
-          placeholder="EDUA-4821"
+          placeholder="e.g. GFCZ-BBYB"
           autoComplete="off"
           spellCheck={false}
           autoFocus
           maxLength={32}
           className="h-11 w-full rounded-lg border-2 border-indigo-100 bg-slate-50 px-4 font-mono text-sm font-semibold tracking-[0.2em] text-slate-900 placeholder:text-slate-400 focus:border-indigo-200 focus:bg-white focus:outline-none"
         />
+        <p className="mt-2 text-[11px] text-slate-500">
+          Use the school’s <strong>admin</strong> invite code, which an existing admin can copy from their dashboard. The
+          teacher code won’t work for admin accounts.
+        </p>
         <FormError message={error} />
         <button
           type="submit"
