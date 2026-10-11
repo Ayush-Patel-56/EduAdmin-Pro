@@ -452,6 +452,9 @@ model Announcement {
 
 // The school's curriculum: Subject -> Chapter -> Concept. It is the reference
 // taxonomy (board, class, program) that question banks and tests pick from.
+// Names are unique by expression indexes that Prisma can't express (it leaves
+// them alone): "CurriculumConcept_chapterId_lower_name_key" and
+// "CurriculumChapter_natural_key", both from migration 20261012030000.
 model CurriculumChapter {
   id            String   @id @default(uuid())
   schoolId      String
