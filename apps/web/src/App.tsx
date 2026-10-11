@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
+import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { PlaceholderPage } from '@/features/auth/PlaceholderPage'
 import { HomeRedirect, RequireAuth } from '@/features/auth/guards'
@@ -8,63 +8,76 @@ import { SignupRolePage } from '@/features/auth/SignupRolePage'
 import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
-import { adminNav } from '@/features/admin/nav'
+import { adminExtraSections, adminNav, legacyAdminPaths } from '@/features/admin/nav'
+import { RouteError } from '@/features/portal/RouteError'
 import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
 import { CreateSchoolPage } from '@/features/onboarding/CreateSchoolPage'
 import { JoinSchoolPage } from '@/features/onboarding/JoinSchoolPage'
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage'
 import { SetupCompletePage } from '@/features/onboarding/SetupCompletePage'
-import { teacherExtraSections, teacherNav } from '@/features/teacher/nav'
+import { legacyTeacherPaths, teacherExtraSections, teacherNav } from '@/features/teacher/nav'
 import { TeacherDashboardPage } from '@/features/teacher/TeacherDashboardPage'
 import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 
-// Sections reachable from the dashboard that aren't in the sidebar.
-const extraSections = [
-  { path: 'announcements', label: 'Announcements' },
-  { path: 'schedule', label: 'Class Schedule' },
-]
+/** Sends /dashboard/fees → /management/fee-management and the like. */
+function LegacyAdminRedirect() {
+  const [section = '', ...rest] = (useParams()['*'] ?? '').split('/')
+  const to = ['/management', legacyAdminPaths[section] ?? section, ...rest].filter(Boolean).join('/')
+  return <Navigate to={to} replace />
+}
 
 const router = createBrowserRouter([
-  { path: '/', element: <HomeRedirect /> },
-  { path: '/login', element: <LoginPage /> },
-  { path: '/signup', element: <SignupRolePage /> },
-  { path: '/signup/teacher', element: <TeacherSignupPage /> },
-  { path: '/signup/admin', element: <AdminSignupPage /> },
-  { path: '/verify-email', element: <VerifyEmailPage /> },
-  { path: '/forgot-password', element: <PlaceholderPage title="Forgot password" /> },
-
-  { path: '/onboarding', element: adminOnly(<OnboardingPage />) },
-  { path: '/onboarding/create', element: adminOnly(<CreateSchoolPage />) },
-  { path: '/onboarding/join', element: adminOnly(<JoinSchoolPage />) },
-  { path: '/onboarding/done', element: adminOnly(<SetupCompletePage />) },
-
   {
-    path: '/dashboard',
-    element: adminOnly(<AdminLayout />),
+    // Any render or loader error below shows a recovery screen instead of a blank page.
+    errorElement: <RouteError />,
     children: [
-      { index: true, element: <DashboardPage /> },
-      ...[...adminNav.filter((n) => n.path), ...extraSections].map((n) => ({
-        path: n.path,
-        element: <SectionPlaceholder title={n.label} />,
-      })),
+      { path: '/', element: <HomeRedirect /> },
+      { path: '/login', element: <LoginPage /> },
+      { path: '/signup', element: <SignupRolePage /> },
+      { path: '/signup/teacher', element: <TeacherSignupPage /> },
+      { path: '/signup/admin', element: <AdminSignupPage /> },
+      { path: '/verify-email', element: <VerifyEmailPage /> },
+      { path: '/forgot-password', element: <PlaceholderPage title="Forgot password" /> },
+
+      { path: '/onboarding', element: adminOnly(<OnboardingPage />) },
+      { path: '/onboarding/create', element: adminOnly(<CreateSchoolPage />) },
+      { path: '/onboarding/join', element: adminOnly(<JoinSchoolPage />) },
+      { path: '/onboarding/done', element: adminOnly(<SetupCompletePage />) },
+
+      {
+        path: '/management',
+        element: adminOnly(<AdminLayout />),
+        children: [
+          { index: true, element: <DashboardPage /> },
+          ...[...adminNav.filter((n) => n.path), ...adminExtraSections].map((n) => ({
+            path: n.path,
+            element: <SectionPlaceholder title={n.label} />,
+          })),
+        ],
+      },
+      { path: '/dashboard/*', element: <LegacyAdminRedirect /> },
+
+      {
+        path: '/teacher',
+        element: teacherOnly(<TeacherLayout />),
+        children: [
+          { index: true, element: <TeacherDashboardPage /> },
+          ...[...teacherNav.filter((n) => n.path), ...teacherExtraSections].map((n) => ({
+            path: n.path,
+            element: <SectionPlaceholder title={n.label} />,
+          })),
+          ...Object.entries(legacyTeacherPaths).map(([from, to]) => ({
+            path: from,
+            element: <Navigate to={`/teacher/${to}`} replace />,
+          })),
+        ],
+      },
+      { path: '*', element: <Navigate to="/" replace /> },
     ],
   },
-
-  {
-    path: '/teacher',
-    element: teacherOnly(<TeacherLayout />),
-    children: [
-      { index: true, element: <TeacherDashboardPage /> },
-      ...[...teacherNav.filter((n) => n.path), ...teacherExtraSections].map((n) => ({
-        path: n.path,
-        element: <SectionPlaceholder title={n.label} />,
-      })),
-    ],
-  },
-  { path: '*', element: <Navigate to="/" replace /> },
 ])
 
 export default function App() {

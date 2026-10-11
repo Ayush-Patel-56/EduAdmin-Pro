@@ -3,6 +3,17 @@ export type AccountType = 'ADMIN' | 'TEACHER'
 export type Role = 'ADMIN' | 'TEACHER'
 export type MembershipStatus = 'PENDING' | 'ACTIVE' | 'REVOKED' | 'LEFT'
 
+export type AccentTheme = 'INDIGO' | 'BLUE' | 'EMERALD' | 'SLATE'
+
+export type Preferences = {
+  /** Report digest emails. */
+  emailNotifications: boolean
+  /** Syllabus coverage alerts. */
+  syllabusUpdates: boolean
+  /** null = the portal's default accent. */
+  accentTheme: AccentTheme | null
+}
+
 export type Membership = {
   schoolId: string
   schoolName: string
@@ -16,6 +27,7 @@ export type Me = {
   fullName: string
   accountType: AccountType
   emailVerified: boolean
+  preferences: Preferences
   activeSchoolId: string | null
   memberships: Membership[]
 }

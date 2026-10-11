@@ -28,6 +28,14 @@ enum MembershipStatus {
   LEFT // teacher switched to another school; may rejoin later
 }
 
+// Accent colour a user picks in Account Preferences; null = the portal default.
+enum AccentTheme {
+  INDIGO
+  BLUE
+  EMERALD
+  SLATE
+}
+
 enum AnnouncementCategory {
   GENERAL
   ACADEMIC
@@ -36,17 +44,21 @@ enum AnnouncementCategory {
 }
 
 model User {
-  id                String      @id @default(uuid())
-  email             String      @unique // stored lower-cased
-  passwordHash      String
-  fullName          String
-  accountType       AccountType
-  department        String?
-  employeeId        String?
-  emailVerified     Boolean     @default(false)
-  adminInviteCodeId String? // which admin invite code created this account
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  id                 String       @id @default(uuid())
+  email              String       @unique // stored lower-cased
+  passwordHash       String
+  fullName           String
+  accountType        AccountType
+  department         String?
+  employeeId         String?
+  emailVerified      Boolean      @default(false)
+  adminInviteCodeId  String? // which admin invite code created this account
+  // Account Preferences
+  emailNotifications Boolean      @default(true) // report digest emails
+  syllabusUpdates    Boolean      @default(true) // syllabus coverage alerts
+  accentTheme        AccentTheme?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
   adminInviteCode    AdminInviteCode?         @relation(fields: [adminInviteCodeId], references: [id], onDelete: SetNull)
   memberships        SchoolMembership[]
@@ -104,22 +116,23 @@ model AdminInviteCode {
 }
 
 model School {
-  id            String    @id @default(uuid())
-  name          String
+  id                     String    @id @default(uuid())
+  name                   String
   // Unique per school; shared with staff so they can join.
-  inviteCode    String    @unique
-  board         String
-  classes       String[]  @default([]) // e.g. ["6th", "7th", …], in display order
-  mouStartDate  DateTime? @db.Date
-  mouEndDate    DateTime? @db.Date
-  contactPerson String?
-  phone         String?
-  email         String?
-  address       String?
-  gstNumber     String?
-  createdById   String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  inviteCode             String    @unique
+  board                  String
+  classes                String[]  @default([]) // e.g. ["6th", "7th", …], in display order
+  academicYearStartMonth Int       @default(4) // 1-12; April by default
+  mouStartDate           DateTime? @db.Date
+  mouEndDate             DateTime? @db.Date
+  contactPerson          String?
+  phone                  String?
+  email                  String?
+  address                String?
+  gstNumber              String?
+  createdById            String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   createdBy     User?              @relation("SchoolCreator", fields: [createdById], references: [id], onDelete: SetNull)
   memberships   SchoolMembership[]

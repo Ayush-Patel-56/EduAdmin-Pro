@@ -15,6 +15,7 @@ import {
   CLASS_OPTIONS,
   classesLabel,
   DEFAULT_SELECTION,
+  MONTHS,
   orderClasses,
   STANDARD_BOARDS,
   STANDARD_PROGRAMS,
@@ -32,6 +33,7 @@ export class SchoolsService {
       boards: STANDARD_BOARDS,
       classes: CLASS_OPTIONS,
       programs: STANDARD_PROGRAMS,
+      months: MONTHS,
       defaults: DEFAULT_SELECTION,
     };
   }
@@ -53,6 +55,7 @@ export class SchoolsService {
           inviteCode: await uniqueSchoolCode(tx),
           board: dto.board,
           classes: orderClasses(dto.classes),
+          academicYearStartMonth: dto.academicYearStartMonth ?? DEFAULT_SELECTION.academicYearStartMonth,
           mouStartDate: mouStart,
           mouEndDate: mouEnd,
           contactPerson: dto.contactPerson ?? null,
@@ -195,6 +198,7 @@ export class SchoolsService {
         board: school.board,
         classes: school.classes,
         classesLabel: classesLabel(school.classes),
+        academicYearStartMonth: school.academicYearStartMonth,
         mouStartDate: toIsoDate(school.mouStartDate),
         mouEndDate: toIsoDate(school.mouEndDate),
         mouStatus: mouStatus(school.mouStartDate, school.mouEndDate),

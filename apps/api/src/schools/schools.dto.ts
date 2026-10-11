@@ -5,11 +5,14 @@ import {
   IsArray,
   IsEmail,
   IsIn,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import { IsGstin, IsIndianMobile } from '../common/validators.js';
@@ -39,6 +42,13 @@ export class CreateSchoolDto {
   @ArrayMinSize(1, { message: 'Select at least one class' })
   @IsIn(CLASS_OPTIONS, { each: true, message: 'Unknown class selected' })
   classes: string[];
+
+  // 1 = January … 12 = December. Defaults to April when omitted.
+  @IsOptional()
+  @IsInt({ message: 'Academic year start month is invalid' })
+  @Min(1, { message: 'Academic year start month is invalid' })
+  @Max(12, { message: 'Academic year start month is invalid' })
+  academicYearStartMonth?: number;
 
   @Transform(trimOrUndefined)
   @IsOptional()

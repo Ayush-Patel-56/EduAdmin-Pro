@@ -52,7 +52,7 @@ export function DashboardPage() {
 
         <Card icon={Zap} title="Quick Actions" className="xl:col-span-3">
           <Link
-            to="/dashboard/academic-planning"
+            to="/management/academic-planning"
             className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 transition hover:bg-slate-50"
           >
             <span className="flex size-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
@@ -64,7 +64,7 @@ export function DashboardPage() {
         </Card>
 
         <Card icon={Bell} title="Announcements" className="flex flex-col xl:col-span-2">
-          <AnnouncementList items={dashboard.announcements} manageTo="/dashboard/announcements" />
+          <AnnouncementList items={dashboard.announcements} manageTo="/management/announcements" />
         </Card>
       </div>
 
@@ -188,7 +188,7 @@ function Schedule({ rows }: { rows: Dashboard['todaySchedule'] }) {
         <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
           <CalendarClock className="size-5 text-slate-700" /> Today's Class Schedule
         </h2>
-        <Link to="/dashboard/schedule" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
+        <Link to="/management/schedule" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
           Manage Schedule
         </Link>
       </div>

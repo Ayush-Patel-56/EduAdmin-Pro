@@ -42,7 +42,16 @@ Local development uses the Neon **`dev`** branch, a copy of `production`. Point 
 2. After logging in, an admin either **creates a school** or **joins an existing school** with that school's invite code.
 3. **School invite code:** every school gets a unique code (e.g. `GFCZ-BBYB`), shown on its dashboard.
    - **Admin accounts** that enter it join as admins.
-   - **Teachers** who sign up with it join as *pending* until an admin approves them.
+   - **Teachers** who enter it (at signup or later) join that school straight away. A teacher belongs to one school at a time.
+
+## Portals
+
+| Portal | Route | Who |
+|---|---|---|
+| Admin (Management) | `/management/...` | Admin accounts; switch between the schools they belong to |
+| Faculty | `/teacher/...` | Teacher accounts; one school, no switcher |
+
+Routes follow the PRD's navigation map (e.g. `/management/fee-management`, `/teacher/daily-report`). Older paths such as `/dashboard/...` redirect to the new ones.
 
 ### Teachers
 
@@ -60,7 +69,14 @@ Codes are sent over SMTP. For Gmail (`academicplanningsystem@gmail.com`):
 2. Create an App Password at <https://myaccount.google.com/apppasswords>.
 3. Put the 16-character password in `apps/api/.env` as `SMTP_PASS` (`SMTP_HOST`, `SMTP_USER` and `MAIL_FROM` are already set in `.env.example`).
 
-If `SMTP_PASS` is empty in development, codes are printed in the API console instead. In production the API refuses to start without SMTP settings.
+If `SMTP_HOST`, `SMTP_USER` or `SMTP_PASS` is empty in development, codes are printed in the API console instead. In production the API refuses to start without SMTP settings.
+
+## Configuration and operations
+
+- **Env validation:** the API checks its environment at boot (`apps/api/src/config/env.ts`) and exits with a list of problems if anything required is missing or malformed. Production also requires `WEB_ORIGIN` and SMTP settings.
+- **Health checks:** `GET /api/health` and `/api/health/live` report the process is up; `GET /api/health/ready` also pings the database and returns 503 when it can't reach it. Point uptime monitors at `/api/health/ready`.
+- **Behind a proxy:** set `TRUST_PROXY` to the number of proxies in front of the API (usually `1`) so rate limiting and session IPs see the real client address.
+- **Security headers** come from `helmet`, and the API drains requests and disconnects from the database on shutdown (SIGTERM).
 
 ## Scripts
 

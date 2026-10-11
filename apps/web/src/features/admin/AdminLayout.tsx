@@ -8,9 +8,13 @@ import { meQueryKey, useMe } from '@/features/auth/session'
 import { adminSchools, type Me } from '@/features/auth/types'
 import { PortalShell } from '@/features/portal/PortalShell'
 import { ALL_PROGRAMS, BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
-import { adminNav } from './nav'
+import { adminExtraSections, adminNav } from './nav'
 import type { AdminContext } from './adminContext'
+import { AdminProfileMenu } from './AdminProfileMenu'
 import { useDashboard } from './useDashboard'
+
+// Schools, programs and batches are all managed under Academic Planning.
+const MANAGE_PATH = '/management/academic-planning'
 
 export function AdminLayout() {
   const { data: me } = useMe()
@@ -27,21 +31,35 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
   const queryClient = useQueryClient()
   const { data: dashboard, error: dashboardError } = useDashboard(schoolId)
   const [programId, setProgramId] = useState(ALL_PROGRAMS)
+  const schools = adminSchools(me)
+  const schoolName = schools.find((s) => s.schoolId === schoolId)?.schoolName ?? null
 
   async function switchSchool(id: string) {
     if (id === schoolId) return
     await api('/auth/active-school', { method: 'POST', body: JSON.stringify({ schoolId: id }) })
     queryClient.setQueryData<Me>(meQueryKey, (old) => (old ? { ...old, activeSchoolId: id } : old))
-    navigate('/dashboard')
+    navigate('/management')
   }
 
   return (
     <PortalShell
       me={me}
       subtitle="School Management"
-      basePath="/dashboard"
+      roleLabel="Admin"
+      defaultAccent="INDIGO"
+      basePath="/management"
       nav={adminNav}
+      extraPages={adminExtraSections}
       avatarClassName="bg-emerald-600"
+      renderProfileMenu={({ close, openPreferences }) => (
+        <AdminProfileMenu
+          me={me}
+          schoolName={schoolName}
+          manageSchoolsTo={MANAGE_PATH}
+          onPreferences={openPreferences}
+          onClose={close}
+        />
+      )}
       selectors={
         <>
           <Select
@@ -50,15 +68,21 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
             icon={Building2}
             iconClassName="text-indigo-500"
             value={schoolId}
-            options={adminSchools(me).map((s) => ({ value: s.schoolId, label: s.schoolName }))}
+            options={schools.map((s) => ({ value: s.schoolId, label: s.schoolName }))}
             onChange={switchSchool}
             footer={[
+              { label: 'Manage Schools', onSelect: () => navigate(MANAGE_PATH) },
               { label: '+ Create new school', onSelect: () => navigate('/onboarding/create') },
               { label: '# Join another school', onSelect: () => navigate('/onboarding/join') },
             ]}
           />
-          <ProgramSelect programs={dashboard?.programs ?? []} value={programId} onChange={setProgramId} />
-          <BatchSelect />
+          <ProgramSelect
+            programs={dashboard?.programs ?? []}
+            value={programId}
+            onChange={setProgramId}
+            footer={[{ label: 'Manage Programs', onSelect: () => navigate(MANAGE_PATH) }]}
+          />
+          <BatchSelect footer={[{ label: 'Manage Batches', onSelect: () => navigate(MANAGE_PATH) }]} />
         </>
       }
     >

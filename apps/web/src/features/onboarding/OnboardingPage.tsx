@@ -38,7 +38,7 @@ export function OnboardingPage() {
   const hasSchools = adminSchools(me).length > 0
 
   return (
-    <OnboardingCard backTo={hasSchools ? '/dashboard' : undefined}>
+    <OnboardingCard backTo={hasSchools ? '/management' : undefined}>
       <div className={`text-center ${hasSchools ? 'mt-2' : 'mt-4'}`}>
         <h1 className="text-2xl font-bold text-slate-900">Welcome, {firstName(me)}!</h1>
         <p className="mt-1 text-sm text-slate-400">

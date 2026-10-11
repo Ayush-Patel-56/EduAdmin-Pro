@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Patch,
   Post,
   Req,
   Res,
@@ -17,6 +18,7 @@ import {
   ResendVerificationDto,
   SetActiveSchoolDto,
   TeacherSignupDto,
+  UpdatePreferencesDto,
   VerifyEmailDto,
 } from './auth.dto.js';
 import { AuthService, SESSION_TTL_MS } from './auth.service.js';
@@ -85,6 +87,12 @@ export class AuthController {
   @UseGuards(SessionGuard)
   me(@Auth() auth: AuthContext) {
     return this.auth.profile(auth.userId, auth.activeSchoolId);
+  }
+
+  @Patch('preferences')
+  @UseGuards(SessionGuard)
+  updatePreferences(@Auth() auth: AuthContext, @Body() dto: UpdatePreferencesDto) {
+    return this.auth.updatePreferences(auth.userId, dto);
   }
 
   @Post('verify-email')

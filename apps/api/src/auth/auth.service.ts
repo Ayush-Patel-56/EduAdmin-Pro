@@ -8,12 +8,13 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
-import { Prisma } from '../generated/prisma/client.js';
+import { Prisma, type User } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type {
   AdminSignupDto,
   LoginDto,
   TeacherSignupDto,
+  UpdatePreferencesDto,
 } from './auth.dto.js';
 import { EmailVerificationService } from './email-verification.service.js';
 import {
@@ -196,6 +197,7 @@ export class AuthService {
       fullName: user.fullName,
       accountType: user.accountType,
       emailVerified: user.emailVerified,
+      preferences: toPreferences(user),
       activeSchoolId,
       memberships: user.memberships.map((m) => ({
         schoolId: m.school.id,
@@ -204,6 +206,18 @@ export class AuthService {
         status: m.status,
       })),
     };
+  }
+
+  async updatePreferences(userId: string, dto: UpdatePreferencesDto) {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        emailNotifications: dto.emailNotifications,
+        syllabusUpdates: dto.syllabusUpdates,
+        accentTheme: dto.accentTheme,
+      },
+    });
+    return toPreferences(user);
   }
 
   private async assertEmailFree(email: string) {
@@ -226,4 +240,12 @@ export class AuthService {
 
 function emailTaken() {
   return new ConflictException('An account with this email already exists');
+}
+
+function toPreferences(user: Pick<User, 'emailNotifications' | 'syllabusUpdates' | 'accentTheme'>) {
+  return {
+    emailNotifications: user.emailNotifications,
+    syllabusUpdates: user.syllabusUpdates,
+    accentTheme: user.accentTheme,
+  };
 }
