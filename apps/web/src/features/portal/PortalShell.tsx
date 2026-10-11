@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { Bell, BellOff, HelpCircle, LogOut, Menu, Settings, X, type LucideIcon } from 'lucide-react'
 import { useDismiss } from '@/components/ui/useDismiss'
 import { useLogout } from '@/features/auth/session'
-import type { AccentTheme, Me } from '@/features/auth/types'
+import { preferencesOf, type AccentTheme, type Me } from '@/features/auth/types'
 import { GlobalSearch, type SearchItem } from './GlobalSearch'
 import { HelpCenterDialog } from './HelpCenterDialog'
 import { PreferencesDialog } from './PreferencesDialog'
@@ -62,7 +62,7 @@ export function PortalShell({
   const openPreferences = useCallback(() => setDialog('preferences'), [])
   useDismiss(menuRef, menuOpen, closeMenu)
   const initial = me.fullName.trim().charAt(0).toUpperCase()
-  const accent = (me.preferences.accentTheme ?? defaultAccent).toLowerCase()
+  const accent = (preferencesOf(me).accentTheme ?? defaultAccent).toLowerCase()
 
   const searchItems = useMemo<SearchItem[]>(
     () =>

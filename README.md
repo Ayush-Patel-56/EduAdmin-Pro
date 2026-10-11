@@ -39,10 +39,10 @@ Local development uses the Neon **`dev`** branch, a copy of `production`. Point 
    ```bash
    pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14
    ```
-2. After logging in, an admin either **creates a school** or **joins an existing school** with that school's invite code.
-3. **School invite code:** every school gets a unique code (e.g. `GFCZ-BBYB`), shown on its dashboard.
-   - **Admin accounts** that enter it join as admins.
-   - **Teachers** who enter it (at signup or later) join that school straight away. A teacher belongs to one school at a time.
+2. After logging in, an admin either **creates a school** or **joins an existing school** with that school's **admin** invite code.
+3. **Every school has two invite codes** (e.g. `GFCZ-BBYB`), both shown on its admin dashboard. The code, not the account, decides the role:
+   - **Teacher code:** share with teachers and staff. Teachers who enter it (at signup or later) join that school straight away. A teacher belongs to one school at a time. It can **never** grant admin rights: an admin account entering it is refused.
+   - **Admin code:** share only with other administrators. Entering it joins an admin account as an admin. Teacher accounts can't use it.
 
 ## Portals
 
@@ -59,7 +59,7 @@ Routes follow the PRD's navigation map (e.g. `/management/fee-management`, `/tea
 2. After entering the code, sign in. Teachers can't sign in until their email is verified.
 3. With a school code, the teacher is connected to that school immediately; without one, they can join later from the Faculty Portal. A teacher belongs to one school at a time.
 
-Admins don't need to verify their email unless `REQUIRE_EMAIL_VERIFICATION=true`.
+Admins don't need to verify their email in development unless `REQUIRE_EMAIL_VERIFICATION=true`. **In production everyone verifies**: the API refuses to start with `REQUIRE_EMAIL_VERIFICATION=false`, and admin signup sends a code too.
 
 ## Email (verification codes)
 
@@ -74,7 +74,8 @@ If `SMTP_HOST`, `SMTP_USER` or `SMTP_PASS` is empty in development, codes are pr
 ## Configuration and operations
 
 - **Env validation:** the API checks its environment at boot (`apps/api/src/config/env.ts`) and exits with a list of problems if anything required is missing or malformed. Production also requires `WEB_ORIGIN` and SMTP settings.
-- **Health checks:** `GET /api/health` and `/api/health/live` report the process is up; `GET /api/health/ready` also pings the database and returns 503 when it can't reach it. Point uptime monitors at `/api/health/ready`.
+- **Health checks:** `GET /api/health` and `/api/health/live` report the process is up (never rate limited, never touch the database). `GET /api/health/ready` also pings the database and returns 503 when it can't reach it; it is rate limited (30/min per IP) and its result is cached for 5 seconds, so it can't be used to hammer the database. Point uptime monitors at `/api/health/ready`.
+- **Deploy order:** migration → API → web. The web app tolerates an API that predates a feature (e.g. missing `preferences`), but not the other way round.
 - **Behind a proxy:** set `TRUST_PROXY` to the number of proxies in front of the API (usually `1`) so rate limiting and session IPs see the real client address.
 - **Security headers** come from `helmet`, and the API drains requests and disconnects from the database on shutdown (SIGTERM).
 

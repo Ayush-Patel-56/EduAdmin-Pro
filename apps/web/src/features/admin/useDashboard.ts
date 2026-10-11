@@ -8,6 +8,7 @@ export type Dashboard = {
     id: string
     name: string
     inviteCode: string
+    adminInviteCode: string
     board: string
     classes: string[]
     classesLabel: string

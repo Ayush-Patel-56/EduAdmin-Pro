@@ -1,6 +1,6 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { AppController } from './app.controller.js';
+import { AppController, READY_CACHE_MS } from './app.controller.js';
 import { PrismaService } from './prisma/prisma.service.js';
 
 describe('AppController', () => {
@@ -31,5 +31,25 @@ describe('AppController', () => {
   it('is not ready when the database is down', async () => {
     prisma.$queryRaw.mockRejectedValue(new Error('connection refused'));
     await expect(appController.ready()).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('runs one database check for a burst of readiness calls', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ '?column?': 1 }]);
+    await Promise.all([appController.ready(), appController.ready(), appController.ready()]);
+    await appController.ready();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks again once the cached result is stale', async () => {
+    vi.useFakeTimers();
+    try {
+      prisma.$queryRaw.mockResolvedValue([{ '?column?': 1 }]);
+      await appController.ready();
+      vi.advanceTimersByTime(READY_CACHE_MS + 1);
+      await appController.ready();
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

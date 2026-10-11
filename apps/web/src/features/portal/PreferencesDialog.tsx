@@ -5,7 +5,7 @@ import { api, ApiError } from '@/lib/api'
 import { Dialog } from '@/components/ui/Dialog'
 import { FormError } from '@/features/auth/AuthInput'
 import { meQueryKey } from '@/features/auth/session'
-import type { AccentTheme, Me, Preferences } from '@/features/auth/types'
+import { preferencesOf, type AccentTheme, type Me, type Preferences } from '@/features/auth/types'
 
 const ACCENTS: { value: AccentTheme; label: string; swatch: string }[] = [
   { value: 'INDIGO', label: 'Indigo', swatch: 'bg-[#4f46e5]' },
@@ -24,7 +24,7 @@ type PreferencesDialogProps = {
 
 export function PreferencesDialog({ me, defaultAccent, roleLabel, onClose }: PreferencesDialogProps) {
   const queryClient = useQueryClient()
-  const [values, setValues] = useState<Preferences>(me.preferences)
+  const [values, setValues] = useState<Preferences>(() => preferencesOf(me))
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const accent = values.accentTheme ?? defaultAccent

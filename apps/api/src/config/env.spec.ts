@@ -20,6 +20,24 @@ describe('validateEnv', () => {
     );
   });
 
+  it('does not allow turning email verification off in production', () => {
+    const production = {
+      ...base,
+      NODE_ENV: 'production',
+      WEB_ORIGIN: 'https://app.example.com',
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_USER: 'u',
+      SMTP_PASS: 'p',
+    };
+    expect(() => validateEnv({ ...production, REQUIRE_EMAIL_VERIFICATION: 'false' })).toThrow(
+      'REQUIRE_EMAIL_VERIFICATION=false is not allowed in production',
+    );
+    expect(validateEnv({ ...production, REQUIRE_EMAIL_VERIFICATION: 'true' })).toBeTruthy();
+    expect(validateEnv(production)).toBeTruthy();
+    // Still fine to leave it off in development.
+    expect(validateEnv({ ...base, REQUIRE_EMAIL_VERIFICATION: 'false' })).toBeTruthy();
+  });
+
   it('requires SMTP and WEB_ORIGIN in production', () => {
     expect(() => validateEnv({ ...base, NODE_ENV: 'production' })).toThrow(/WEB_ORIGIN is required[\s\S]*SMTP_PASS/);
     expect(

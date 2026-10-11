@@ -49,3 +49,9 @@ export const legacyAdminPaths: Record<string, string> = {
   fees: 'fee-management',
   tests: 'tests-bank',
 }
+
+/** Where an old /dashboard/<splat> URL now lives under /management. */
+export function legacyAdminTarget(splat: string): string {
+  const [section = '', ...rest] = splat.split('/')
+  return ['/management', legacyAdminPaths[section] ?? section, ...rest].filter(Boolean).join('/')
+}
