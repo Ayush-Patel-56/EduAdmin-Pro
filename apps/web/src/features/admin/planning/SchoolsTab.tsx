@@ -383,6 +383,8 @@ type ClearPreview = {
   importedFaculty: number
   announcements: number
   promotionCycles: number
+  chapters: number
+  concepts: number
 }
 
 function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () => void }) {
@@ -396,6 +398,8 @@ function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () =
     [preview.programs, 'programs'],
     [preview.batches, 'batches'],
     [preview.syllabusItems, 'syllabus chapters'],
+    [preview.chapters, 'curriculum chapters'],
+    [preview.concepts, 'curriculum concepts'],
     [preview.importedFaculty, 'imported faculty profiles (without a login)'],
     [preview.announcements, 'announcements'],
     [preview.promotionCycles, 'promotion records'],

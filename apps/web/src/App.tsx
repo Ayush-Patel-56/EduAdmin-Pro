@@ -9,6 +9,7 @@ import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
 import { adminExtraSections, adminNav, legacyAdminPaths } from '@/features/admin/nav'
+import { CurriculumPage } from '@/features/admin/curriculum/CurriculumPage'
 import { AcademicPlanningPage } from '@/features/admin/planning/AcademicPlanningPage'
 import { RouteError } from '@/features/portal/RouteError'
 import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
@@ -22,7 +23,10 @@ import { TeacherDashboardPage } from '@/features/teacher/TeacherDashboardPage'
 import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
-const adminPages: Record<string, ReactNode> = { 'academic-planning': <AcademicPlanningPage /> }
+const adminPages: Record<string, ReactNode> = {
+  'academic-planning': <AcademicPlanningPage />,
+  curriculum: <CurriculumPage />,
+}
 const teacherPages: Record<string, ReactNode> = { 'academic-planning': <TeacherAcademicPlanningPage /> }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 
