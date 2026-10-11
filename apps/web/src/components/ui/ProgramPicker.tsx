@@ -10,10 +10,22 @@ type ProgramPickerProps = {
   standard: readonly string[]
   value: string[]
   onChange: (value: string[]) => void
+  /** Wording, so the picker also serves e.g. target exams. */
+  placeholder?: string
+  standardHeading?: string
+  customPlaceholder?: string
 }
 
 /** Chips for chosen programs, with standard options and a "custom program" adder. */
-export function ProgramPicker({ id, standard, value, onChange }: ProgramPickerProps) {
+export function ProgramPicker({
+  id,
+  standard,
+  value,
+  onChange,
+  placeholder = 'Select programs',
+  standardHeading = 'Standard programs',
+  customPlaceholder = 'Add custom program...',
+}: ProgramPickerProps) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -69,7 +81,7 @@ export function ProgramPicker({ id, standard, value, onChange }: ProgramPickerPr
         className="flex min-h-10 w-full cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white py-1.5 pr-3 pl-2.5 focus-visible:ring-2 focus-visible:ring-indigo-100 focus-visible:outline-none"
       >
         <div className="flex flex-1 flex-wrap gap-1.5">
-          {value.length === 0 && <span className="px-1 text-sm text-slate-400">Select programs</span>}
+          {value.length === 0 && <span className="px-1 text-sm text-slate-400">{placeholder}</span>}
           {value.map((name) => (
             <span
               key={name}
@@ -96,7 +108,7 @@ export function ProgramPicker({ id, standard, value, onChange }: ProgramPickerPr
       {open && (
         <div className={menuClass}>
           <p className="px-3 pt-2.5 pb-1 text-[10px] font-semibold tracking-wider text-slate-400 uppercase">
-            Standard programs
+            {standardHeading}
           </p>
           <ul id={listId} role="listbox" aria-multiselectable="true" className="pb-1">
             {standard.map((name) => (
@@ -117,8 +129,8 @@ export function ProgramPicker({ id, standard, value, onChange }: ProgramPickerPr
                   setError(null)
                 }}
                 onKeyDown={onCustomKey}
-                placeholder="Add custom program..."
-                aria-label="Custom program name"
+                placeholder={customPlaceholder}
+                aria-label={customPlaceholder.replace(/\.+$/, '')}
                 maxLength={MAX_PROGRAM_LENGTH + 10}
                 className="h-8 flex-1 rounded-md border border-slate-200 px-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none"
               />

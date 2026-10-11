@@ -2,7 +2,9 @@ import { useCallback, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { useMe } from '@/features/auth/session'
 import { PortalShell } from '@/features/portal/PortalShell'
-import { ALL_PROGRAMS, BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
+import { useStructure } from '@/features/academic/api'
+import { useAcademicFilters } from '@/features/academic/filters'
+import { BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
 import { teacherExtraSections, teacherNav } from './nav'
 import { ProfileMenu } from './ProfileMenu'
 import { SwitchSchoolDialog } from './SwitchSchoolDialog'
@@ -11,7 +13,10 @@ import { useTeacherDashboard, type TeacherContext } from './useTeacherDashboard'
 export function TeacherLayout() {
   const { data: me } = useMe()
   const { data: dashboard, error: dashboardError } = useTeacherDashboard()
-  const [programId, setProgramId] = useState(ALL_PROGRAMS)
+  const schoolId = dashboard?.school?.id ?? null
+  // Only fetched once the teacher is in a school; the API answers 403 otherwise.
+  const { data: structure } = useStructure({ kind: 'teacher' }, !!schoolId)
+  const filters = useAcademicFilters(structure, `filters:teacher:${schoolId ?? 'none'}`)
   const [switchOpen, setSwitchOpen] = useState(false)
   const openSwitchSchool = useCallback(() => setSwitchOpen(true), [])
   const closeSwitchSchool = useCallback(() => setSwitchOpen(false), [])
@@ -39,12 +44,12 @@ export function TeacherLayout() {
       )}
       selectors={
         <>
-          <ProgramSelect programs={dashboard?.programs ?? []} value={programId} onChange={setProgramId} />
-          <BatchSelect />
+          <ProgramSelect programs={structure?.programs ?? []} value={filters.programId} onChange={filters.setProgramId} />
+          <BatchSelect batches={filters.batchOptions} value={filters.batchId} onChange={filters.setBatchId} />
         </>
       }
     >
-      <Outlet context={{ me, dashboard, dashboardError, programId, openSwitchSchool } satisfies TeacherContext} />
+      <Outlet context={{ me, dashboard, dashboardError, structure, filters, openSwitchSchool } satisfies TeacherContext} />
       {switchOpen && <SwitchSchoolDialog currentSchool={schoolName} onClose={closeSwitchSchool} />}
     </PortalShell>
   )

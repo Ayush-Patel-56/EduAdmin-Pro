@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Navigate, Outlet, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Building2 } from 'lucide-react'
@@ -7,14 +6,16 @@ import { Select } from '@/components/ui/Select'
 import { meQueryKey, useMe } from '@/features/auth/session'
 import { adminSchools, type Me } from '@/features/auth/types'
 import { PortalShell } from '@/features/portal/PortalShell'
-import { ALL_PROGRAMS, BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
+import { useStructure } from '@/features/academic/api'
+import { useAcademicFilters } from '@/features/academic/filters'
+import { BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
 import { adminExtraSections, adminNav } from './nav'
 import type { AdminContext } from './adminContext'
 import { AdminProfileMenu } from './AdminProfileMenu'
 import { useDashboard } from './useDashboard'
 
 // Schools, programs and batches are all managed under Academic Planning.
-const MANAGE_PATH = '/management/academic-planning'
+const PLANNING = '/management/academic-planning'
 
 export function AdminLayout() {
   const { data: me } = useMe()
@@ -30,7 +31,8 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data: dashboard, error: dashboardError } = useDashboard(schoolId)
-  const [programId, setProgramId] = useState(ALL_PROGRAMS)
+  const { data: structure } = useStructure({ kind: 'admin', schoolId })
+  const filters = useAcademicFilters(structure, `filters:${schoolId}`)
   const schools = adminSchools(me)
   const schoolName = schools.find((s) => s.schoolId === schoolId)?.schoolName ?? null
 
@@ -55,7 +57,7 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
         <AdminProfileMenu
           me={me}
           schoolName={schoolName}
-          manageSchoolsTo={MANAGE_PATH}
+          manageSchoolsTo={`${PLANNING}?tab=schools`}
           onPreferences={openPreferences}
           onClose={close}
         />
@@ -71,22 +73,27 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
             options={schools.map((s) => ({ value: s.schoolId, label: s.schoolName }))}
             onChange={switchSchool}
             footer={[
-              { label: 'Manage Schools', onSelect: () => navigate(MANAGE_PATH) },
+              { label: 'Manage Schools', onSelect: () => navigate(`${PLANNING}?tab=schools`) },
               { label: '+ Create new school', onSelect: () => navigate('/onboarding/create') },
               { label: '# Join another school', onSelect: () => navigate('/onboarding/join') },
             ]}
           />
           <ProgramSelect
-            programs={dashboard?.programs ?? []}
-            value={programId}
-            onChange={setProgramId}
-            footer={[{ label: 'Manage Programs', onSelect: () => navigate(MANAGE_PATH) }]}
+            programs={structure?.programs ?? []}
+            value={filters.programId}
+            onChange={filters.setProgramId}
+            footer={[{ label: 'Manage Programs', onSelect: () => navigate(`${PLANNING}?tab=programs`) }]}
           />
-          <BatchSelect footer={[{ label: 'Manage Batches', onSelect: () => navigate(MANAGE_PATH) }]} />
+          <BatchSelect
+            batches={filters.batchOptions}
+            value={filters.batchId}
+            onChange={filters.setBatchId}
+            footer={[{ label: 'Manage Batches', onSelect: () => navigate(`${PLANNING}?tab=batches`) }]}
+          />
         </>
       }
     >
-      <Outlet context={{ me, schoolId, dashboard, dashboardError, programId } satisfies AdminContext} />
+      <Outlet context={{ me, schoolId, dashboard, dashboardError, structure, filters } satisfies AdminContext} />
     </PortalShell>
   )
 }

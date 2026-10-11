@@ -36,6 +36,43 @@ enum AccentTheme {
   SLATE
 }
 
+enum ProgramType {
+  JEE
+  NEET
+  FOUNDATIONAL
+  OTHER
+}
+
+enum ThemeColor {
+  BLUE
+  GREEN
+  PURPLE
+}
+
+enum FacultyStatus {
+  ACTIVE
+  ON_LEAVE
+  INACTIVE
+}
+
+// A teacher's role within one batch.
+enum BatchRole {
+  PRIMARY
+  SUBSTITUTE
+  ASSISTANT
+}
+
+enum SyllabusStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum PromotionStatus {
+  CONFIRMED
+  DISMISSED
+}
+
 enum AnnouncementCategory {
   GENERAL
   ACADEMIC
@@ -66,6 +103,7 @@ model User {
   verificationTokens EmailVerificationToken[]
   schoolsCreated     School[]                 @relation("SchoolCreator")
   announcements      Announcement[]
+  facultyProfiles    Faculty[]
 }
 
 // Opaque login sessions. Only a SHA-256 hash of the cookie token is stored,
@@ -134,10 +172,14 @@ model School {
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
-  createdBy     User?              @relation("SchoolCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  memberships   SchoolMembership[]
-  programs      Program[]
-  announcements Announcement[]
+  createdBy       User?              @relation("SchoolCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  memberships     SchoolMembership[]
+  programs        Program[]
+  batches         Batch[]
+  faculty         Faculty[]
+  syllabusItems   SyllabusItem[]
+  promotionCycles PromotionCycle[]
+  announcements   Announcement[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -157,19 +199,170 @@ model SchoolMembership {
   @@index([schoolId])
 }
 
-// Programs such as JEE or NEET. Batches will be created under these.
+// Programs such as JEE or NEET. Every batch belongs to exactly one program.
 model Program {
-  id         String   @id @default(uuid())
-  schoolId   String
-  name       String
-  isStandard Boolean // one of the platform's standard programs vs. added by the school
-  sortOrder  Int
-  createdAt  DateTime @default(now())
+  id            String      @id @default(uuid())
+  schoolId      String
+  name          String // display name, unique per school (case-insensitive in the service)
+  code          String? // e.g. "JEE-2Y", unique per school when set; stored upper-cased
+  type          ProgramType @default(OTHER)
+  targetExams   String[]    @default([])
+  durationYears Int?
+  themeColor    ThemeColor  @default(BLUE)
+  isActive      Boolean     @default(true)
+  isStandard    Boolean // one of the platform's standard programs vs. added by the school
+  sortOrder     Int
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @default(now()) @updatedAt
+
+  school          School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batches         Batch[]
+  facultyPrograms FacultyProgram[]
+
+  @@unique([schoolId, name])
+  @@unique([schoolId, code])
+  // Lets batches reference (program, school) so a batch can never point at
+  // another school's program.
+  @@unique([id, schoolId])
+  @@index([schoolId])
+}
+
+// A student group for one academic period, always under a program.
+model Batch {
+  id            String    @id @default(uuid())
+  schoolId      String
+  programId     String
+  name          String
+  classLevel    Int? // 6-12
+  capacity      Int       @default(60)
+  startDate     DateTime  @db.Date
+  endDate       DateTime? @db.Date
+  coordinatorId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  school         School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // NoAction (checked at end of statement) so deleting a school can cascade
+  // through programs and batches together; the service blocks deleting a
+  // program that still has batches.
+  program        Program        @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  coordinator    Faculty?       @relation("BatchCoordinator", fields: [coordinatorId], references: [id], onDelete: SetNull)
+  facultyBatches FacultyBatch[]
+  syllabusItems  SyllabusItem[]
+
+  @@unique([programId, name])
+  @@unique([id, schoolId])
+  @@index([schoolId])
+}
+
+// A teacher's profile in one school. Imported faculty exist before they have a
+// login; `userId` links the record once that teacher joins the school.
+model Faculty {
+  id              String        @id @default(uuid())
+  schoolId        String
+  userId          String?
+  name            String
+  email           String? // lower-cased
+  phone           String?
+  altPhone        String?
+  employeeId      String?
+  dateOfBirth     DateTime?     @db.Date
+  gender          String?
+  address         String?
+  city            String?
+  state           String?
+  pincode         String?
+  subjects        String[]      @default([])
+  specialization  String?
+  qualification   String?
+  experienceYears Int?
+  joiningDate     DateTime?     @db.Date
+  status          FacultyStatus @default(ACTIVE)
+  bio             String?
+  profileImageUrl String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  school             School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  user               User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  batchAssignments   FacultyBatch[]
+  programAssignments FacultyProgram[]
+  coordinatedBatches Batch[]          @relation("BatchCoordinator")
+
+  @@unique([schoolId, userId])
+  @@unique([schoolId, email])
+  @@unique([schoolId, employeeId])
+  @@unique([id, schoolId])
+  @@index([schoolId])
+}
+
+// Faculty <-> batch, with the teacher's role in that batch.
+model FacultyBatch {
+  facultyId String
+  batchId   String
+  schoolId  String
+  role      BatchRole @default(PRIMARY)
+  createdAt DateTime  @default(now())
+
+  faculty Faculty @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch   Batch   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@id([facultyId, batchId])
+  @@index([batchId])
+}
+
+// Faculty <-> program. Assigning a batch also assigns its program.
+model FacultyProgram {
+  facultyId String
+  programId String
+  schoolId  String
+  createdAt DateTime @default(now())
+
+  faculty Faculty @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  program Program @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@id([facultyId, programId])
+  @@index([programId])
+}
+
+// One chapter on a batch's syllabus for one subject. Admin and faculty edit
+// the same rows, so both portals always see the same status.
+model SyllabusItem {
+  id             String         @id @default(uuid())
+  schoolId       String
+  batchId        String
+  subject        String
+  title          String
+  estimatedHours Int?
+  targetDates    String? // free text, e.g. "Oct 01 - Oct 15"
+  status         SyllabusStatus @default(NOT_STARTED)
+  remarks        String?
+  createdById    String?
+  updatedById    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch  Batch  @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([schoolId, batchId, subject])
+}
+
+// The yearly class promotion decision. One row per school and academic year,
+// so a year can never be promoted twice.
+model PromotionCycle {
+  id           String          @id @default(uuid())
+  schoolId     String
+  academicYear String // "2026-2027"
+  boundaryDate DateTime        @db.Date
+  status       PromotionStatus
+  studentCount Int             @default(0)
+  decidedById  String?
+  decidedAt    DateTime        @default(now())
 
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
-  @@unique([schoolId, name])
-  @@index([schoolId])
+  @@unique([schoolId, academicYear])
 }
 
 model Announcement {

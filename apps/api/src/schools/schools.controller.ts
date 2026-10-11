@@ -1,13 +1,20 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
-import { CreateSchoolDto, JoinSchoolDto } from './schools.dto.js';
+import { ConfirmNameDto, CreateSchoolDto, JoinSchoolDto } from './schools.dto.js';
 import { SchoolsService } from './schools.service.js';
+
+const SchoolId = () => Param('schoolId', ParseUUIDPipe);
 
 @Controller('schools')
 @UseGuards(SessionGuard)
 export class SchoolsController {
   constructor(private readonly schools: SchoolsService) {}
+
+  @Get()
+  mine(@Auth() auth: AuthContext) {
+    return this.schools.mySchools(auth);
+  }
 
   @Get('options')
   options() {
@@ -26,8 +33,29 @@ export class SchoolsController {
     return this.schools.joinSchool(auth, dto.inviteCode);
   }
 
+  @Patch(':schoolId')
+  update(@Auth() auth: AuthContext, @SchoolId() schoolId: string, @Body() dto: CreateSchoolDto) {
+    return this.schools.updateSchool(auth, schoolId, dto);
+  }
+
+  @Delete(':schoolId')
+  remove(@Auth() auth: AuthContext, @SchoolId() schoolId: string, @Body() dto: ConfirmNameDto) {
+    return this.schools.deleteSchool(auth, schoolId, dto.confirmName);
+  }
+
+  @Get(':schoolId/clear-preview')
+  clearPreview(@Auth() auth: AuthContext, @SchoolId() schoolId: string) {
+    return this.schools.clearPreview(auth, schoolId);
+  }
+
+  @Post(':schoolId/clear')
+  @HttpCode(200)
+  clear(@Auth() auth: AuthContext, @SchoolId() schoolId: string, @Body() dto: ConfirmNameDto) {
+    return this.schools.clearAllData(auth, schoolId, dto.confirmName);
+  }
+
   @Get(':schoolId/dashboard')
-  dashboard(@Auth() auth: AuthContext, @Param('schoolId', ParseUUIDPipe) schoolId: string) {
+  dashboard(@Auth() auth: AuthContext, @SchoolId() schoolId: string) {
     return this.schools.dashboard(auth, schoolId);
   }
 }

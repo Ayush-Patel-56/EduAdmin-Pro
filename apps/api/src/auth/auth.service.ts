@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
+import { linkFacultyProfile } from '../academic/faculty-link.js';
 import { Prisma, type User } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type {
@@ -74,6 +75,7 @@ export class AuthService {
         await tx.schoolMembership.create({
           data: { userId: user.id, schoolId: school.id, role: 'TEACHER', status: 'ACTIVE' },
         });
+        await linkFacultyProfile(tx, school.id, user);
       }
       return this.verification.issue(tx, user.id);
     });

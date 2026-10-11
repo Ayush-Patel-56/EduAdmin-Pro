@@ -9,6 +9,7 @@ import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
 import { adminExtraSections, adminNav, legacyAdminPaths } from '@/features/admin/nav'
+import { AcademicPlanningPage } from '@/features/admin/planning/AcademicPlanningPage'
 import { RouteError } from '@/features/portal/RouteError'
 import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
 import { CreateSchoolPage } from '@/features/onboarding/CreateSchoolPage'
@@ -16,10 +17,13 @@ import { JoinSchoolPage } from '@/features/onboarding/JoinSchoolPage'
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage'
 import { SetupCompletePage } from '@/features/onboarding/SetupCompletePage'
 import { legacyTeacherPaths, teacherExtraSections, teacherNav } from '@/features/teacher/nav'
+import { TeacherAcademicPlanningPage } from '@/features/teacher/TeacherAcademicPlanningPage'
 import { TeacherDashboardPage } from '@/features/teacher/TeacherDashboardPage'
 import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
+const adminPages: Record<string, ReactNode> = { 'academic-planning': <AcademicPlanningPage /> }
+const teacherPages: Record<string, ReactNode> = { 'academic-planning': <TeacherAcademicPlanningPage /> }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 
 /** Sends /dashboard/fees → /management/fee-management and the like. */
@@ -54,7 +58,7 @@ const router = createBrowserRouter([
           { index: true, element: <DashboardPage /> },
           ...[...adminNav.filter((n) => n.path), ...adminExtraSections].map((n) => ({
             path: n.path,
-            element: <SectionPlaceholder title={n.label} />,
+            element: adminPages[n.path] ?? <SectionPlaceholder title={n.label} />,
           })),
         ],
       },
@@ -67,7 +71,7 @@ const router = createBrowserRouter([
           { index: true, element: <TeacherDashboardPage /> },
           ...[...teacherNav.filter((n) => n.path), ...teacherExtraSections].map((n) => ({
             path: n.path,
-            element: <SectionPlaceholder title={n.label} />,
+            element: teacherPages[n.path] ?? <SectionPlaceholder title={n.label} />,
           })),
           ...Object.entries(legacyTeacherPaths).map(([from, to]) => ({
             path: from,

@@ -110,3 +110,10 @@ export class JoinSchoolDto {
   @MaxLength(32)
   inviteCode: string;
 }
+
+export class ConfirmNameDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Type the school name to confirm' })
+  @MaxLength(150)
+  confirmName: string;
+}
