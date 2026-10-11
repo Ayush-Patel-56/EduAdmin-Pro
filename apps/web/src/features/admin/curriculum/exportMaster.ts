@@ -1,3 +1,4 @@
+import { todayIst } from '@/lib/dates'
 import { MASTER_FIELDS, type MasterRow } from './api'
 
 /** Downloads the (filtered) master sheet as a real .xlsx workbook. */
@@ -16,7 +17,7 @@ export async function exportMasterSheet(rows: MasterRow[], schoolName: string) {
     r.conceptCode,
   ])
   const slug = schoolName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'school'
-  const date = new Date().toISOString().slice(0, 10)
+  const date = todayIst()
   await writeXlsxFile([header, ...body], {
     sheet: 'Curriculum',
     stickyRowsCount: 1,

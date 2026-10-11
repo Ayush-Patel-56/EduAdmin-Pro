@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Building2, Lightbulb } from 'lucide-react'
 import { api } from '@/lib/api'
-import { todayIst } from '@/lib/dates'
+import { academicYearIst, todayIst } from '@/lib/dates'
 import { isValidIndianMobile, EMAIL_PATTERN } from '@/lib/validators'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
@@ -361,12 +361,6 @@ export function InterviewDialog({ item, candidateId, onClose }: { item?: Intervi
 
 // Appraisal
 
-function currentAcademicYear(startMonth: number) {
-  const now = new Date()
-  const start = now.getMonth() + 1 >= startMonth ? now.getFullYear() : now.getFullYear() - 1
-  return `${start}-${start + 1}`
-}
-
 function suggestBadge(teaching: string, punctuality: string): AppraisalBadge | null {
   const scores = [teaching, punctuality].filter(Boolean).map(Number)
   if (scores.length === 0) return null
@@ -398,7 +392,7 @@ export function AppraisalDialog({ item, defaultSchoolId, onClose }: { item?: App
     enabled: !!v.schoolId,
   })
   const school = schools?.find((s) => s.id === v.schoolId)
-  const academicYear = v.academicYear || currentAcademicYear(school?.academicYearStartMonth ?? 4)
+  const academicYear = v.academicYear || academicYearIst(school?.academicYearStartMonth ?? 4)
   const suggested = suggestBadge(v.teachingScore, v.punctualityScore)
   const set = (k: keyof typeof v, value: string) => {
     setV((p) => ({ ...p, [k]: value, ...(k === 'schoolId' && { facultyId: '' }) }))

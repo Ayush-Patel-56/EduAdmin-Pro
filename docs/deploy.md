@@ -52,6 +52,33 @@ Migration folders must sort in the order they were created: use timestamps later
 
 - The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
 
+## Timestamps become `timestamptz` (`20261012070000_timestamptz`)
+
+Converts the remaining 28 `timestamp without time zone` columns (users, sessions, schools, programs, batches, faculty, syllabus, curriculum, ...) to `timestamptz(3)`. Calendar dates (`@db.Date`: MOU dates, joining date, batch start/end, ...) are untouched. Existing values are read as UTC explicitly (`USING ... AT TIME ZONE 'UTC'`), so nothing shifts whatever the session time zone of the migration.
+
+- **Preflight:** the database's session time zone must be UTC. On Neon it is `GMT` by default:
+
+  ```sql
+  SHOW timezone;  -- must be UTC, GMT or Etc/UTC
+  ```
+
+  Prisma's pg adapter sends and reads timestamps as UTC without an offset, so with `timestamptz` columns a non-UTC session would store every instant shifted (5:30 early in Asia/Kolkata). The API now checks this at startup and refuses to boot otherwise. Fix with `ALTER DATABASE <db> SET timezone TO 'UTC';`.
+- **Locking:** each table is rewritten once under an `ACCESS EXCLUSIVE` lock (reads and writes on it wait). The tables are small, so this takes well under a second today. The migration sets `lock_timeout = 10s`: if a long-running query holds a table, it fails instead of queueing every request behind it.
+- **If it fails** (e.g. lock timeout), it is wrapped in `BEGIN; ... COMMIT;`, so nothing was converted. Mark it rolled back and deploy again:
+
+  ```bash
+  pnpm --filter api exec prisma migrate resolve --rolled-back 20261012070000_timestamptz
+  pnpm --filter api exec prisma migrate deploy
+  ```
+
+- The previous API release keeps working against the converted tables (verified on a UTC session), so the usual order applies: migration → API → web.
+- Verify afterwards (expect 0):
+
+  ```sql
+  SELECT count(*) FROM information_schema.columns
+  WHERE table_schema = 'public' AND data_type = 'timestamp without time zone' AND table_name <> '_prisma_migrations';
+  ```
+
 ## After deploying the invite-code change: review existing admins
 
 Before this change, any admin account that entered a school's invite code, the same code teachers use, became an ADMIN of that school. Nothing records which code was used, so review every admin who is not the school's owner:
