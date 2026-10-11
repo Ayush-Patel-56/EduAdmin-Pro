@@ -11,18 +11,20 @@ import {
   Clock,
   Copy,
   Loader2,
+  RefreshCw,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { AnnouncementList } from '@/features/portal/Announcements'
 import { formatDate } from '@/features/portal/format'
+import { RegenerateCodeDialog } from './RegenerateCodeDialog'
 import { useAdminContext } from './adminContext'
 import type { Dashboard, MouStatus } from './useDashboard'
 
 const CURRENT_YEAR = new Date().getFullYear()
 
 export function DashboardPage() {
-  const { dashboard, dashboardError } = useAdminContext()
+  const { dashboard, dashboardError, schoolId } = useAdminContext()
 
   if (dashboardError) {
     return <p className="rounded-lg bg-red-50 p-4 text-sm text-red-700">{dashboardError.message}</p>
@@ -47,7 +49,7 @@ export function DashboardPage() {
 
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-12">
         <Card icon={Building2} title="School Background" className="md:col-span-2 xl:col-span-7">
-          <SchoolBackground dashboard={dashboard} />
+          <SchoolBackground dashboard={dashboard} schoolId={schoolId} />
         </Card>
 
         <Card icon={Zap} title="Quick Actions" className="xl:col-span-3">
@@ -84,7 +86,7 @@ function Card({ icon: Icon, title, className = '', children }: { icon: LucideIco
   )
 }
 
-function SchoolBackground({ dashboard }: { dashboard: Dashboard }) {
+function SchoolBackground({ dashboard, schoolId }: { dashboard: Dashboard; schoolId: string }) {
   const { school, programs } = dashboard
   return (
     <>
@@ -99,12 +101,16 @@ function SchoolBackground({ dashboard }: { dashboard: Dashboard }) {
         title="Teacher Invite Code"
         hint="Share with teachers & staff. It joins them as teachers only."
         tone="teacher"
+        schoolId={schoolId}
+        kind="TEACHER"
       />
       <InviteCode
         code={school.adminInviteCode}
         title="Admin Invite Code"
         hint="Share only with other administrators. It joins them as admins."
         tone="admin"
+        schoolId={schoolId}
+        kind="ADMIN"
       />
     </>
   )
@@ -165,7 +171,14 @@ function MouTile({ status, start, end }: { status: MouStatus; start: string | nu
   )
 }
 
-type InviteCodeProps = { code: string; title: string; hint: string; tone: 'teacher' | 'admin' }
+type InviteCodeProps = {
+  code: string
+  title: string
+  hint: string
+  tone: 'teacher' | 'admin'
+  schoolId: string
+  kind: 'ADMIN' | 'TEACHER'
+}
 
 const INVITE_TONES = {
   teacher: {
@@ -184,8 +197,9 @@ const INVITE_TONES = {
   },
 } as const
 
-function InviteCode({ code, title, hint, tone }: InviteCodeProps) {
+function InviteCode({ code, title, hint, tone, schoolId, kind }: InviteCodeProps) {
   const [copied, setCopied] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
   const t = INVITE_TONES[tone]
   async function copy() {
     await navigator.clipboard.writeText(code)
@@ -207,6 +221,16 @@ function InviteCode({ code, title, hint, tone }: InviteCodeProps) {
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         {copied ? 'Copied' : 'Copy'}
       </button>
+      <button
+        type="button"
+        onClick={() => setRegenerating(true)}
+        aria-label={`Regenerate ${title}`}
+        title="Regenerate (the old code stops working)"
+        className={`flex items-center rounded-md p-1.5 transition ${t.button}`}
+      >
+        <RefreshCw className="size-3.5" />
+      </button>
+      {regenerating && <RegenerateCodeDialog schoolId={schoolId} kind={kind} onClose={() => setRegenerating(false)} />}
     </div>
   )
 }

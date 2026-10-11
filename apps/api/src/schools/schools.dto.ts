@@ -117,3 +117,8 @@ export class ConfirmNameDto {
   @MaxLength(150)
   confirmName: string;
 }
+
+export class RegenerateCodeDto {
+  @IsIn(['ADMIN', 'TEACHER'], { message: 'Choose which code to regenerate' })
+  kind: 'ADMIN' | 'TEACHER';
+}
