@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
-import { ConfirmNameDto, CreateSchoolDto, JoinSchoolDto } from './schools.dto.js';
+import { ConfirmNameDto, CreateSchoolDto, JoinSchoolDto, RegenerateCodeDto } from './schools.dto.js';
 import { SchoolsService } from './schools.service.js';
 
 const SchoolId = () => Param('schoolId', ParseUUIDPipe);
@@ -52,6 +52,18 @@ export class SchoolsController {
   @HttpCode(200)
   clear(@Auth() auth: AuthContext, @SchoolId() schoolId: string, @Body() dto: ConfirmNameDto) {
     return this.schools.clearAllData(auth, schoolId, dto.confirmName);
+  }
+
+  @Post(':schoolId/regenerate-code')
+  @HttpCode(200)
+  // Rotating codes is rare; keep it slow so it can't be used to churn them.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  regenerateCode(
+    @Auth() auth: AuthContext,
+    @Param('schoolId', ParseUUIDPipe) schoolId: string,
+    @Body() dto: RegenerateCodeDto,
+  ) {
+    return this.schools.regenerateCode(auth, schoolId, dto.kind);
   }
 
   @Get(':schoolId/dashboard')

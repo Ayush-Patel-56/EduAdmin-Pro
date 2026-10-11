@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, CircleCheck, Copy, Hash, Loader2, Pencil, Plus, Trash2, TriangleAlert } from 'lucide-react'
+import { Check, CircleCheck, Copy, Hash, Loader2, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
@@ -11,6 +11,7 @@ import { SchoolForm } from '@/features/onboarding/SchoolForm'
 import { useSchoolOptions, type SchoolFormValues } from '@/features/onboarding/schoolOptions'
 import type { MouStatus } from '../useDashboard'
 import { useAdminContext } from '../adminContext'
+import { RegenerateCodeDialog } from '../RegenerateCodeDialog'
 
 type ApiSchool = { id: string; inviteCode: string; adminInviteCode: string; classesLabel: string; mouStatus: MouStatus; isOwner: boolean } &
   Omit<SchoolFormValues, 'mouStartDate' | 'mouEndDate' | 'contactPerson' | 'phone' | 'email' | 'address' | 'gstNumber'> & {
@@ -167,8 +168,8 @@ function SchoolCard({ school, active, switching, onActivate, onEdit, onDelete, o
           <Row label="MOU" value={MOU_LABEL[school.mouStatus]} />
         </dl>
 
-        <CodeRow title="Teacher invite code" code={school.inviteCode} tone="amber" />
-        <CodeRow title="Admin invite code" code={school.adminInviteCode} tone="indigo" />
+        <CodeRow title="Teacher invite code" code={school.inviteCode} tone="amber" schoolId={school.id} kind="TEACHER" />
+        <CodeRow title="Admin invite code" code={school.adminInviteCode} tone="indigo" schoolId={school.id} kind="ADMIN" />
 
         {!active && (
           <button type="button" onClick={onActivate} disabled={switching} className={`${btnSecondary} mt-3 h-9 w-full text-xs`}>
@@ -209,8 +210,9 @@ const CODE_TONES = {
 } as const
 
 /** One invite code with a copy button. Teacher and admin codes are shown separately and labelled. */
-function CodeRow({ title, code, tone }: { title: string; code: string; tone: keyof typeof CODE_TONES }) {
+function CodeRow({ title, code, tone, schoolId, kind }: { title: string; code: string; tone: keyof typeof CODE_TONES; schoolId: string; kind: 'ADMIN' | 'TEACHER' }) {
   const [copied, setCopied] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
   const t = CODE_TONES[tone]
   return (
     <div className={`mt-3 flex items-center justify-between rounded-lg border px-3 py-2.5 ${t.box}`}>
@@ -229,6 +231,16 @@ function CodeRow({ title, code, tone }: { title: string; code: string; tone: key
       >
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} {copied ? 'Copied' : 'Copy'}
       </button>
+      <button
+        type="button"
+        onClick={() => setRegenerating(true)}
+        aria-label={`Regenerate ${title}`}
+        title="Regenerate (the old code stops working)"
+        className={`ml-1 inline-flex rounded-md p-1.5 ${t.button}`}
+      >
+        <RefreshCw className="size-3.5" />
+      </button>
+      {regenerating && <RegenerateCodeDialog schoolId={schoolId} kind={kind} onClose={() => setRegenerating(false)} />}
     </div>
   )
 }
