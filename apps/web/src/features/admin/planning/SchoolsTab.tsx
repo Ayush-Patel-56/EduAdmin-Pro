@@ -111,7 +111,7 @@ export function SchoolsTab() {
             </>
           }
           onConfirm={async (confirmName) => {
-            await api(`/schools/${modal.school.id}`, { method: 'DELETE', body: JSON.stringify({ confirmName }) })
+            await api(`/schools/${modal.school.id}/delete`, { method: 'POST', body: JSON.stringify({ confirmName }) })
             queryClient.removeQueries({ queryKey: [modal.school.id] })
             await refreshAll()
           }}

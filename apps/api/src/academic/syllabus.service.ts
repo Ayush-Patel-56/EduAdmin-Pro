@@ -1,10 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { SyllabusStatus } from '../generated/prisma/client.js';
+import { Prisma, type SyllabusStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { SyllabusImportDto, SyllabusItemDto } from './academic.dto.js';
 import { SUBJECTS } from './academic-options.js';
@@ -63,15 +64,17 @@ export class SyllabusService {
     dto: SyllabusItemDto,
   ) {
     await this.assertBatch(schoolId, scope, dto.batchId);
-    return this.prisma.syllabusItem.create({
-      data: {
-        schoolId,
-        ...fields(dto),
-        createdById: userId,
-        updatedById: userId,
-      },
-      select: itemSelect,
-    });
+    return duplicateAsConflict(() =>
+      this.prisma.syllabusItem.create({
+        data: {
+          schoolId,
+          ...fields(dto),
+          createdById: userId,
+          updatedById: userId,
+        },
+        select: itemSelect,
+      }),
+    );
   }
 
   async update(
@@ -83,11 +86,13 @@ export class SyllabusService {
   ) {
     await this.find(schoolId, scope, itemId);
     await this.assertBatch(schoolId, scope, dto.batchId);
-    return this.prisma.syllabusItem.update({
-      where: { id: itemId },
-      data: { ...fields(dto), updatedById: userId },
-      select: itemSelect,
-    });
+    return duplicateAsConflict(() =>
+      this.prisma.syllabusItem.update({
+        where: { id: itemId },
+        data: { ...fields(dto), updatedById: userId },
+        select: itemSelect,
+      }),
+    );
   }
 
   /** Moving a card between Kanban columns. */
@@ -284,27 +289,32 @@ export class SyllabusService {
     if (!dto.dryRun) {
       const toCreate = rows.filter((r) => r.action === 'create');
       const toUpdate = rows.filter((r) => r.action === 'update');
-      await this.prisma.$transaction(
-        [
-          this.prisma.syllabusItem.createMany({
-            data: toCreate.map((r) => ({
-              schoolId,
-              ...r.data!,
-              status: r.data!.status ?? 'NOT_STARTED',
-              createdById: userId,
-              updatedById: userId,
-            })),
-          }),
-          // An existing chapter only takes the cells the file filled in, so a
-          // sparse sheet (e.g. just status) never blanks out hours or remarks.
-          ...toUpdate.map((r) =>
-            this.prisma.syllabusItem.update({
-              where: { id: r.existingId },
-              data: { ...withoutBlanks(r.data!), updatedById: userId },
+      await duplicateAsConflict(() =>
+        this.prisma.$transaction(
+          [
+            this.prisma.syllabusItem.createMany({
+              // The database's unique index is the last word: a chapter another
+              // import or a double-click just created is skipped, not duplicated.
+              skipDuplicates: true,
+              data: toCreate.map((r) => ({
+                schoolId,
+                ...r.data!,
+                status: r.data!.status ?? 'NOT_STARTED',
+                createdById: userId,
+                updatedById: userId,
+              })),
             }),
-          ),
-        ],
-        { timeout: 60_000 },
+            // An existing chapter only takes the cells the file filled in, so a
+            // sparse sheet (e.g. just status) never blanks out hours or remarks.
+            ...toUpdate.map((r) =>
+              this.prisma.syllabusItem.update({
+                where: { id: r.existingId },
+                data: { ...withoutBlanks(r.data!), updatedById: userId },
+              }),
+            ),
+          ],
+          { timeout: 60_000 },
+        ),
       );
     }
 
@@ -366,4 +376,25 @@ function withoutBlanks<T extends Record<string, unknown>>(
   return Object.fromEntries(
     Object.entries(data).filter(([, v]) => v !== null && v !== undefined),
   ) as { [K in keyof T]?: Exclude<T[K], null> };
+}
+
+/**
+ * The database rejects a second chapter with the same title (any case) in a
+ * batch and subject. Surface that as a clear 409 instead of a 500, which is
+ * also what a concurrent import that changed data under us looks like.
+ */
+async function duplicateAsConflict<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      throw new ConflictException(
+        'A chapter with this title already exists for this batch and subject (or it was just added by someone else). Refresh and try again.',
+      );
+    }
+    throw err;
+  }
 }

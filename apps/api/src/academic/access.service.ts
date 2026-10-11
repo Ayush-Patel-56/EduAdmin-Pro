@@ -57,15 +57,22 @@ export class AccessService {
       where: { schoolId_userId: { schoolId: membership.schoolId, userId } },
       select: {
         id: true,
+        status: true,
         batchAssignments: { select: { batchId: true } },
         programAssignments: { select: { programId: true } },
       },
     });
+    // An INACTIVE profile (left the school, or switched to another) keeps its
+    // history but no longer opens any batch. ON_LEAVE stays assigned: they are
+    // still staff and will be back.
+    const active = faculty && faculty.status !== 'INACTIVE';
     return {
       schoolId: membership.schoolId,
       facultyId: faculty?.id ?? null,
-      batchIds: faculty?.batchAssignments.map((b) => b.batchId) ?? [],
-      programIds: faculty?.programAssignments.map((p) => p.programId) ?? [],
+      batchIds: active ? faculty.batchAssignments.map((b) => b.batchId) : [],
+      programIds: active
+        ? faculty.programAssignments.map((p) => p.programId)
+        : [],
     };
   }
 }

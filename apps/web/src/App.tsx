@@ -1,16 +1,14 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { PlaceholderPage } from '@/features/auth/PlaceholderPage'
-import { HomeRedirect, RequireAuth } from '@/features/auth/guards'
+import { HomeRedirect, PageSpinner, RequireAuth } from '@/features/auth/guards'
 import { AdminSignupPage, TeacherSignupPage } from '@/features/auth/SignupPages'
 import { SignupRolePage } from '@/features/auth/SignupRolePage'
 import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
 import { adminExtraSections, adminNav, legacyAdminTarget } from '@/features/admin/nav'
-import { CurriculumPage } from '@/features/admin/curriculum/CurriculumPage'
-import { AcademicPlanningPage } from '@/features/admin/planning/AcademicPlanningPage'
 import { RouteError } from '@/features/portal/RouteError'
 import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
 import { CreateSchoolPage } from '@/features/onboarding/CreateSchoolPage'
@@ -18,16 +16,27 @@ import { JoinSchoolPage } from '@/features/onboarding/JoinSchoolPage'
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage'
 import { SetupCompletePage } from '@/features/onboarding/SetupCompletePage'
 import { legacyTeacherPaths, teacherExtraSections, teacherNav } from '@/features/teacher/nav'
-import { TeacherAcademicPlanningPage } from '@/features/teacher/TeacherAcademicPlanningPage'
 import { TeacherDashboardPage } from '@/features/teacher/TeacherDashboardPage'
 import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
+// Heavy pages load on first visit instead of in the initial bundle.
+const AcademicPlanningPage = lazy(() =>
+  import('@/features/admin/planning/AcademicPlanningPage').then((m) => ({ default: m.AcademicPlanningPage })),
+)
+const CurriculumPage = lazy(() =>
+  import('@/features/admin/curriculum/CurriculumPage').then((m) => ({ default: m.CurriculumPage })),
+)
+const TeacherAcademicPlanningPage = lazy(() =>
+  import('@/features/teacher/TeacherAcademicPlanningPage').then((m) => ({ default: m.TeacherAcademicPlanningPage })),
+)
+const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
+
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
 const adminPages: Record<string, ReactNode> = {
-  'academic-planning': <AcademicPlanningPage />,
-  curriculum: <CurriculumPage />,
+  'academic-planning': lazyPage(<AcademicPlanningPage />),
+  curriculum: lazyPage(<CurriculumPage />),
 }
-const teacherPages: Record<string, ReactNode> = { 'academic-planning': <TeacherAcademicPlanningPage /> }
+const teacherPages: Record<string, ReactNode> = { 'academic-planning': lazyPage(<TeacherAcademicPlanningPage />) }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 
 /** Sends /dashboard/fees → /management/fee-management and the like. */

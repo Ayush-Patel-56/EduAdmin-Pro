@@ -8,14 +8,20 @@ import { Prisma } from '../generated/prisma/client.js';
 import type { PromotionStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
 /**
  * The academic year that started on the most recent boundary (1st of the
  * school's start month) on or before `today`, e.g. April 2026 -> "2026-2027".
  */
 export function currentAcademicYear(startMonth: number, today = new Date()) {
-  const year = today.getUTCFullYear();
+  // Schools run on Indian time: the new year begins at midnight IST (18:30 UTC
+  // the day before), not 05:30 IST.
+  const ist = new Date(today.getTime() + IST_OFFSET_MS);
+  const year = ist.getUTCFullYear();
+  // Both sides are compared as IST wall-clock times, expressed in UTC fields.
   const thisYearsBoundary = Date.UTC(year, startMonth - 1, 1);
-  const startYear = today.getTime() >= thisYearsBoundary ? year : year - 1;
+  const startYear = ist.getTime() >= thisYearsBoundary ? year : year - 1;
   return {
     academicYear: `${startYear}-${startYear + 1}`,
     boundaryDate: new Date(Date.UTC(startYear, startMonth - 1, 1)),
@@ -84,6 +90,14 @@ export class PromotionService {
     if (!pending || pending.academicYear !== academicYear) {
       throw new BadRequestException(
         `There is no pending promotion for ${academicYear}`,
+      );
+    }
+    // Each year can be decided once. Confirming before student records exist
+    // would use that year up with nobody promoted, so wait until they do.
+    // (Dismissing is always allowed.)
+    if (status === 'CONFIRMED' && !pending.studentsTracked) {
+      throw new ConflictException(
+        'Promotion can be confirmed once student records exist. Until then you can dismiss it.',
       );
     }
     try {
