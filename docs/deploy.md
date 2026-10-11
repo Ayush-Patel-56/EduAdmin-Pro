@@ -68,9 +68,18 @@ UPDATE "SchoolMembership" SET "status" = 'REVOKED' WHERE "id" = '<membership id 
 
 A revoked member cannot rejoin with an invite code. Then rotate the school's codes from its dashboard (the refresh button next to each code), since the old teacher code is the one that leaked admin access.
 
-## Admin signup code (`ADMIN123`)
+## Admin signup code (`ADMIN123`) is development-only (`20261012060000_revoke_admin123`)
 
-`ADMIN123` is a permanent, public platform code that lets anyone create an **admin account** (it no longer lets them into an existing school: joining a school needs that school's admin invite code). Issue private codes with `pnpm --filter api invite:create`. Making `ADMIN123` development-only is tracked as a follow-up.
+`ADMIN123` used to be a permanent public code that let anyone create an admin account. The migration revokes it in every environment (a migration can't tell production from development). Accounts already created with it keep working; only new signups with it are refused.
+
+- **Production:** issue a private code per client with `pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14`. After deploying, confirm the revoke:
+
+  ```sql
+  SELECT code, "revokedAt" FROM "AdminInviteCode" WHERE code = 'ADMIN123';  -- revokedAt must be set
+  ```
+
+  Also review admins who signed up with it (`pnpm --filter api admins:audit`, see above).
+- **Development** (local database or the Neon `dev` branch): `NODE_ENV=development pnpm --filter api seed:dev` re-enables it. The script refuses to run when `NODE_ENV` is `production` or unset.
 
 ## Environment
 
