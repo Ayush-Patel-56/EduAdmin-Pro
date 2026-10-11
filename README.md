@@ -88,7 +88,9 @@ If `SMTP_HOST`, `SMTP_USER` or `SMTP_PASS` is empty in development, codes are pr
 | `pnpm dev` | Run web + api together |
 | `pnpm build` | Build all apps |
 | `pnpm lint` | Lint all apps |
-| `pnpm --filter api db:migrate` | Create/apply a migration |
+| `pnpm --filter api db:migrate` | Create/apply a migration (development only) |
+| `pnpm --filter api db:deploy` | Pre-deploy checks, then apply migrations (production) |
+| `pnpm --filter api db:preflight` | Pre-deploy checks only (read-only) |
 | `pnpm --filter api db:studio` | Browse data in Prisma Studio |
 | `pnpm --filter api invite:create` | Issue an admin invite code |
 | `NODE_ENV=development pnpm --filter api seed:dev` | Development only: enable the shared dev admin code |

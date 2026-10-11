@@ -7,7 +7,9 @@
 - The new migrations are additive. `School.adminInviteCode` has a database default, so the *previous* API can keep creating schools between the migration and the API deploy (no "back to back" window is needed).
 - The web app tolerates an API that predates a feature (for example `/auth/me` without `preferences`), but an old web build against a *newer* API is not guaranteed, so deploy the web last.
 
-Run migrations with `pnpm --filter api exec prisma migrate deploy` over the **direct** (non-pooled) connection (`DIRECT_URL`). Never run `prisma migrate dev` against production.
+Run migrations with **`pnpm --filter api db:deploy`** over the **direct** (non-pooled) connection (`DIRECT_URL`). It first runs `db:preflight` (read-only: duplicates that would break a unique index, migrations that failed part-way, a non-UTC session time zone) and only then `prisma migrate deploy`; if a check fails it prints the offending rows and deploys nothing. `pnpm --filter api db:preflight` runs the checks alone. Never run `prisma migrate dev` against production.
+
+New migrations are wrapped in `BEGIN; ... COMMIT;` so a failure leaves nothing half-applied. Three older ones (`20261012010000`, `20261012030000`, `20261012050000`) are not, and they are already applied on the dev branch, so they are left byte-for-byte unchanged: editing an applied migration changes its checksum, and `prisma migrate dev` against that database then insists on resetting it (all data lost). The preflight checks every condition that can make them fail instead.
 
 ## Before the invite-code migration (`20261011210000_admin_invite_and_email_index`)
 
@@ -89,11 +91,24 @@ Migration folders must sort in the order they were created: use timestamps later
   ```
 
   A database that has not applied it yet needs nothing.
-- The hardening migration turns the recruitment tables' timestamps into `timestamptz` (existing values are read as UTC), adds `Candidate.facultyId` and adds a unique index on `TeacherAppraisal (facultyId, period, academicYear)`. The index fails if duplicates exist, so check first:
+- The hardening migration turns the recruitment tables' timestamps into `timestamptz` (existing values are read as UTC), adds `Candidate.facultyId` and adds a unique index on `TeacherAppraisal (facultyId, period, academicYear)`. The index fails if duplicates exist, so check first (`db:preflight` does this):
 
   ```sql
   SELECT "facultyId", "period", "academicYear", count(*) FROM "TeacherAppraisal" GROUP BY 1, 2, 3 HAVING count(*) > 1;
   ```
+
+- **It is not atomic.** If it fails, the steps before the failure stay applied (timestamps converted, `Candidate.facultyId` added). Do **not** `migrate resolve --rolled-back` and redeploy: the re-run fails on the existing column, and converting an already converted timestamp column again shifts its values by the session's UTC offset. That is why `db:deploy` refuses to run while duplicates exist.
+- **If the recruitment hardening migration failed** anyway, finish it instead of re-running it:
+
+  ```bash
+  # 1. remove the duplicate appraisals the error / db:preflight lists, then
+  psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f apps/api/prisma/recovery/20261012050000_recruitment_hardening_finish.sql
+  pnpm --filter api exec prisma migrate resolve --applied 20261012050000_recruitment_hardening
+  pnpm --filter api db:deploy
+  ```
+
+  The finish script does each remaining step only if it hasn't happened (it converts only columns that are still `timestamp without time zone`) in one transaction, and fails without changing anything if duplicates remain. Tested from both partial states (failure at the appraisal index, and failure part-way through the conversions) with the session in Asia/Kolkata: no value shifted, and the schema ends identical to a clean replay.
+- Like `20261012070000`, its timestamp conversion rewrites each recruitment table under an `ACCESS EXCLUSIVE` lock (reads and writes wait until it finishes). The tables are tiny now, but `RecruitmentAuditLog` only ever grows: any future type change on it should be planned for a quiet moment.
 
 - The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
 
@@ -113,7 +128,7 @@ Converts the remaining 28 `timestamp without time zone` columns (users, sessions
 
   ```bash
   pnpm --filter api exec prisma migrate resolve --rolled-back 20261012070000_timestamptz
-  pnpm --filter api exec prisma migrate deploy
+  pnpm --filter api db:deploy
   ```
 
 - The previous API release keeps working against the converted tables (verified on a UTC session), so the usual order applies: migration → API → web.
