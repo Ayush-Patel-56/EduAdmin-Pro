@@ -6,6 +6,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { STANDARD_PROGRAMS } from '../schools/school-options.js';
 import type { ProgramDto } from './academic.dto.js';
+import {
+  duplicateAsConflict,
+  isCodeClash,
+} from '../common/unique-violation.js';
 
 @Injectable()
 export class ProgramsService {
@@ -38,26 +42,35 @@ export class ProgramsService {
       orderBy: { sortOrder: 'desc' },
       select: { sortOrder: true },
     });
-    const program = await this.prisma.program.create({
-      data: {
-        schoolId,
-        ...this.fields(dto),
-        isStandard: STANDARD_PROGRAMS.some(
-          (s) => s.toLowerCase() === dto.name.toLowerCase(),
-        ),
-        sortOrder: (last?.sortOrder ?? -1) + 1,
-      },
-    });
+    // The check above can race another request; the unique indexes decide.
+    const program = await duplicateAsConflict(
+      () =>
+        this.prisma.program.create({
+          data: {
+            schoolId,
+            ...this.fields(dto),
+            isStandard: STANDARD_PROGRAMS.some(
+              (s) => s.toLowerCase() === dto.name.toLowerCase(),
+            ),
+            sortOrder: (last?.sortOrder ?? -1) + 1,
+          },
+        }),
+      programClash(dto),
+    );
     return { id: program.id };
   }
 
   async update(schoolId: string, programId: string, dto: ProgramDto) {
     await this.find(schoolId, programId);
     await this.assertUnique(schoolId, dto, programId);
-    await this.prisma.program.update({
-      where: { id: programId },
-      data: this.fields(dto),
-    });
+    await duplicateAsConflict(
+      () =>
+        this.prisma.program.update({
+          where: { id: programId },
+          data: this.fields(dto),
+        }),
+      programClash(dto),
+    );
     return { id: programId };
   }
 
@@ -140,4 +153,12 @@ function dedupe(values: string[]) {
     seen.add(key);
     return true;
   });
+}
+
+/** 409 message for a program name/code unique-index violation. */
+export function programClash(dto: { name: string; code?: string | null }) {
+  return (names: string[]) =>
+    isCodeClash(names)
+      ? `Code ${dto.code} is already used by another program`
+      : `A program named ${dto.name} already exists`;
 }
