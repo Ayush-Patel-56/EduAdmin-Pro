@@ -52,10 +52,14 @@ export class SchoolsService {
     const programs = dedupePrograms(dto.programs);
 
     return this.prisma.$transaction(async (tx) => {
+      const inviteCode = await uniqueSchoolCode(tx);
+      let adminInviteCode = await uniqueSchoolCode(tx);
+      while (adminInviteCode === inviteCode) adminInviteCode = await uniqueSchoolCode(tx);
       const school = await tx.school.create({
         data: {
           name: dto.name,
-          inviteCode: await uniqueSchoolCode(tx),
+          inviteCode,
+          adminInviteCode,
           board: dto.board,
           classes: orderClasses(dto.classes),
           academicYearStartMonth: dto.academicYearStartMonth ?? DEFAULT_SELECTION.academicYearStartMonth,
@@ -91,9 +95,13 @@ export class SchoolsService {
   }
 
   /**
-   * Join a school with its invite code. Admin accounts join as admins (any
-   * number of schools). Teachers join as teachers and leave any school they
-   * were in, since they belong to one school at a time.
+   * Join a school with one of its two invite codes. The role comes from the
+   * code, never from the account alone:
+   *  - the teacher code joins a teacher account as a teacher (and leaves any
+   *    school they were in, since teachers belong to one school at a time);
+   *  - the admin code joins an admin account as an admin (any number of schools).
+   * A code of the wrong kind is refused, so sharing the teacher code with
+   * staff can never hand out admin rights.
    */
   async joinSchool(auth: AuthContext, inviteCode: string) {
     const user = await this.prisma.user.findUniqueOrThrow({
@@ -101,8 +109,17 @@ export class SchoolsService {
       select: { id: true, accountType: true, email: true, fullName: true, department: true },
     });
     const { accountType } = user;
-    const school = await this.prisma.school.findUnique({ where: { inviteCode } });
+    const school = await this.prisma.school.findFirst({
+      where: { OR: [{ inviteCode }, { adminInviteCode: inviteCode }] },
+    });
     if (!school) throw new BadRequestException('Invalid invite code');
+    const isAdminCode = school.adminInviteCode === inviteCode;
+    if (isAdminCode && accountType !== 'ADMIN') {
+      throw new ForbiddenException('That code is for school administrators. Ask your school for the teacher code.');
+    }
+    if (!isAdminCode && accountType === 'ADMIN') {
+      throw new ForbiddenException('That is the teacher code. Ask the school owner for the school’s admin invite code.');
+    }
 
     const existing = await this.prisma.schoolMembership.findUnique({
       where: { userId_schoolId: { userId: auth.userId, schoolId: school.id } },
@@ -194,6 +211,7 @@ export class SchoolsService {
         id: school.id,
         name: school.name,
         inviteCode: school.inviteCode,
+        adminInviteCode: school.adminInviteCode,
         board: school.board,
         classes: school.classes,
         classesLabel: classesLabel(school.classes),
@@ -222,6 +240,7 @@ export class SchoolsService {
       id: school.id,
       name: school.name,
       inviteCode: school.inviteCode,
+      adminInviteCode: school.adminInviteCode,
       board: school.board,
       classes: school.classes,
       classesLabel: classesLabel(school.classes),
@@ -420,7 +439,11 @@ export function mouStatus(start: Date | null, end: Date | null, now = new Date()
 async function uniqueSchoolCode(tx: Tx) {
   for (;;) {
     const code = generateJoinCode();
-    const taken = await tx.school.findUnique({ where: { inviteCode: code }, select: { id: true } });
+    // A code is unique across both columns, so one code never means two things.
+    const taken = await tx.school.findFirst({
+      where: { OR: [{ inviteCode: code }, { adminInviteCode: code }] },
+      select: { id: true },
+    });
     if (!taken) return code;
   }
 }

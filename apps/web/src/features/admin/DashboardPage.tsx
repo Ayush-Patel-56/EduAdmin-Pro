@@ -94,7 +94,18 @@ function SchoolBackground({ dashboard }: { dashboard: Dashboard }) {
         <Tile label="Programs Offered" value={programs.map((p) => p.name).join(', ') || 'None yet'} />
         <MouTile status={school.mouStatus} start={school.mouStartDate} end={school.mouEndDate} />
       </div>
-      <InviteCode code={school.inviteCode} />
+      <InviteCode
+        code={school.inviteCode}
+        title="Teacher Invite Code"
+        hint="Share with teachers & staff. It joins them as teachers only."
+        tone="teacher"
+      />
+      <InviteCode
+        code={school.adminInviteCode}
+        title="Admin Invite Code"
+        hint="Share only with other administrators. It joins them as admins."
+        tone="admin"
+      />
     </>
   )
 }
@@ -154,24 +165,44 @@ function MouTile({ status, start, end }: { status: MouStatus; start: string | nu
   )
 }
 
-function InviteCode({ code }: { code: string }) {
+type InviteCodeProps = { code: string; title: string; hint: string; tone: 'teacher' | 'admin' }
+
+const INVITE_TONES = {
+  teacher: {
+    box: 'border-amber-300 bg-amber-50/70',
+    title: 'text-amber-700',
+    code: 'text-amber-900',
+    hint: 'text-amber-600',
+    button: 'bg-amber-100 text-amber-800 hover:bg-amber-200',
+  },
+  admin: {
+    box: 'border-indigo-200 bg-indigo-50/60',
+    title: 'text-indigo-700',
+    code: 'text-indigo-900',
+    hint: 'text-indigo-600',
+    button: 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200',
+  },
+} as const
+
+function InviteCode({ code, title, hint, tone }: InviteCodeProps) {
   const [copied, setCopied] = useState(false)
+  const t = INVITE_TONES[tone]
   async function copy() {
     await navigator.clipboard.writeText(code)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <div className="mt-4 flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50/70 p-4">
+    <div className={`mt-4 flex items-center gap-3 rounded-lg border p-4 ${t.box}`}>
       <div className="flex-1">
-        <p className="text-[10px] font-bold tracking-wider text-amber-700 uppercase">School Invite Code</p>
-        <p className="mt-1 font-mono text-base font-bold tracking-[0.25em] text-amber-900">{code}</p>
-        <p className="mt-1 text-[11px] text-amber-600">Share this code with teachers &amp; staff to join your school</p>
+        <p className={`text-[10px] font-bold tracking-wider uppercase ${t.title}`}>{title}</p>
+        <p className={`mt-1 font-mono text-base font-bold tracking-[0.25em] ${t.code}`}>{code}</p>
+        <p className={`mt-1 text-[11px] ${t.hint}`}>{hint}</p>
       </div>
       <button
         type="button"
         onClick={copy}
-        className="flex items-center gap-1.5 rounded-md bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-200"
+        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${t.button}`}
       >
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         {copied ? 'Copied' : 'Copy'}
