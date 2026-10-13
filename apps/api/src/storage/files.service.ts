@@ -18,6 +18,9 @@ import {
 } from './storage.js';
 
 const MB = 1024 * 1024;
+const DOCX =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const IMAGES = ['image/jpeg', 'image/png', 'image/webp'];
 
 /** File signatures ("magic bytes"): the start of a real file of each type. */
 const SIGNATURES: Record<string, (head: Buffer) => boolean> = {
@@ -27,7 +30,20 @@ const SIGNATURES: Record<string, (head: Buffer) => boolean> = {
   'image/webp': (h) =>
     h.subarray(0, 4).toString('latin1') === 'RIFF' &&
     h.subarray(8, 12).toString('latin1') === 'WEBP',
+  'application/pdf': (h) => h.subarray(0, 5).toString('latin1') === '%PDF-',
+  // A .docx is a zip archive.
+  [DOCX]: (h) => isZip(h),
+  'application/zip': (h) => isZip(h),
+  'video/mp4': (h) => h.subarray(4, 8).toString('latin1') === 'ftyp',
 };
+
+function isZip(h: Buffer) {
+  return (
+    h[0] === 0x50 &&
+    h[1] === 0x4b &&
+    ((h[2] === 0x03 && h[3] === 0x04) || (h[2] === 0x05 && h[3] === 0x06))
+  );
+}
 
 type PurposeRule = {
   maxBytes: number;
@@ -40,8 +56,29 @@ type PurposeRule = {
 export const PURPOSES: Record<FilePurpose, PurposeRule> = {
   STUDENT_PHOTO: {
     maxBytes: 2 * MB,
-    types: ['image/jpeg', 'image/png', 'image/webp'],
+    types: IMAGES,
     describe: 'a JPG, PNG or WebP image',
+  },
+  FACULTY_PHOTO: {
+    maxBytes: 2 * MB,
+    types: IMAGES,
+    describe: 'a JPG, PNG or WebP image',
+  },
+  // PRD 5.9: PDF, DOCX, ZIP, MP4; max 50 MB.
+  STUDY_MATERIAL: {
+    maxBytes: 50 * MB,
+    types: ['application/pdf', DOCX, 'application/zip', 'video/mp4'],
+    describe: 'a PDF, DOCX, ZIP or MP4 file',
+  },
+  ASSIGNMENT_SHEET: {
+    maxBytes: 10 * MB,
+    types: ['application/pdf', DOCX, ...IMAGES],
+    describe: 'a PDF, DOCX or image file',
+  },
+  SUBMISSION: {
+    maxBytes: 10 * MB,
+    types: ['application/pdf', DOCX, ...IMAGES],
+    describe: 'a PDF, DOCX or image file',
   },
 };
 
@@ -116,7 +153,10 @@ export class FilesService {
   ) {
     const driver = this.requireDriver();
     const rule = PURPOSES[input.purpose];
-    const contentType = input.contentType.toLowerCase();
+    // Windows browsers report zips as application/x-zip-compressed.
+    const contentType = input.contentType
+      .toLowerCase()
+      .replace('application/x-zip-compressed', 'application/zip');
     if (!rule.types.includes(contentType)) {
       throw new BadRequestException(`Upload ${rule.describe}`);
     }
@@ -193,6 +233,37 @@ export class FilesService {
   }
 
   /**
+   * A READY file this user uploaded for `purpose` that nothing uses yet, about
+   * to be attached to a record. `except` is the file the record already has
+   * (re-saving it is fine).
+   */
+  async claim(
+    schoolId: string,
+    fileId: string,
+    purpose: FilePurpose,
+    uploadedById: string,
+    except?: string | null,
+  ) {
+    if (fileId === except) return;
+    const file = await this.prisma.fileObject.findFirst({
+      where: {
+        id: fileId,
+        schoolId,
+        purpose,
+        status: 'READY',
+        uploadedById,
+        students: { none: {} },
+        faculty: { none: {} },
+        materials: { none: {} },
+        assignments: { none: {} },
+        submissions: { none: {} },
+      },
+      select: { id: true },
+    });
+    if (!file) throw new BadRequestException('Upload the file again');
+  }
+
+  /**
    * A short-lived URL for reading the file, or null when storage is off. The
    * same URL is handed out for a while, so a roster that refreshes every 30 s
    * doesn't make the browser download every photo again.
@@ -245,7 +316,7 @@ export class FilesService {
 
   /**
    * Housekeeping, run when a school starts a new upload: uploads never
-   * completed, and photos uploaded but never attached to a student.
+   * completed, and files uploaded but never attached to anything.
    */
   async removeAbandoned(schoolId: string) {
     try {
@@ -256,7 +327,13 @@ export class FilesService {
           createdAt: { lt: before },
           OR: [
             { status: 'PENDING' },
-            { purpose: 'STUDENT_PHOTO', students: { none: {} } },
+            {
+              students: { none: {} },
+              faculty: { none: {} },
+              materials: { none: {} },
+              assignments: { none: {} },
+              submissions: { none: {} },
+            },
           ],
         },
         select: { id: true, key: true },

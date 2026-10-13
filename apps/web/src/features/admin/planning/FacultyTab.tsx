@@ -206,7 +206,7 @@ const SAMPLE = [
   ['Vikram Singh', '', '', '', '', '', '', '', '', '', '', 'Chemistry', 'Organic Chemistry', '', '', '', 'ACTIVE', '', '', ''],
 ]
 
-function ImportFacultyDialog({ schoolId, onImported, onClose }: { schoolId: string; onImported: () => Promise<unknown>; onClose: () => void }) {
+export function ImportFacultyDialog({ schoolId, onImported, onClose }: { schoolId: string; onImported: () => Promise<unknown>; onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null)
   const [records, setRecords] = useState<Record<string, string>[] | null>(null)
   const [preview, setPreview] = useState<ImportPreview | null>(null)

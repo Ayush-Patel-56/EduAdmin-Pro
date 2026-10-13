@@ -12,6 +12,9 @@ import { RecruitmentModule } from './recruitment/recruitment.module.js';
 import { SchoolsModule } from './schools/schools.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { StudentsModule } from './students/students.module.js';
+import { CounselingModule } from './counseling/counseling.module.js';
+import { TeacherPortalModule } from './teacher-portal/teacher-portal.module.js';
+import { WorkspaceModule } from './workspace/workspace.module.js';
 
 @Module({
   imports: [
@@ -25,6 +28,9 @@ import { StudentsModule } from './students/students.module.js';
     RecruitmentModule,
     StorageModule,
     StudentsModule,
+    TeacherPortalModule,
+    WorkspaceModule,
+    CounselingModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

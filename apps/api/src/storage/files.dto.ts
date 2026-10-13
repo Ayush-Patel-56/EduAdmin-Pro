@@ -11,7 +11,13 @@ import {
 import type { FilePurpose } from '../generated/prisma/client.js';
 import { MAX_UPLOAD_BYTES } from './files.service.js';
 
-export const FILE_PURPOSES = ['STUDENT_PHOTO'] as const satisfies readonly FilePurpose[];
+export const FILE_PURPOSES = [
+  'STUDENT_PHOTO',
+  'FACULTY_PHOTO',
+  'STUDY_MATERIAL',
+  'ASSIGNMENT_SHEET',
+  'SUBMISSION',
+] as const satisfies readonly FilePurpose[];
 
 export class CreateUploadDto {
   @IsIn(FILE_PURPOSES, { message: 'Unknown upload type' })

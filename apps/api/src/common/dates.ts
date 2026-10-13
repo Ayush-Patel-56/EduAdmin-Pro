@@ -39,3 +39,34 @@ export function formatIst(date: Date): string {
 export function toIsoDate(date: Date | null): string | null {
   return date ? date.toISOString().slice(0, 10) : null;
 }
+
+/** "2026-10-20" + "15:30" entered in India -> the instant (stored as UTC). */
+export function istInstant(date: string, time: string, label: string): Date {
+  const day = parseDate(date, label);
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(time);
+  if (!match) throw new BadRequestException(`${label} needs a time like 15:30`);
+  return new Date(
+    day.getTime() +
+      (Number(match[1]) * 60 + Number(match[2])) * 60_000 -
+      IST_OFFSET_MS,
+  );
+}
+
+/** An instant as the date and time an Indian user would enter: ["2026-10-20", "15:30"]. */
+export function istParts(instant: Date): [string, string] {
+  const ist = new Date(instant.getTime() + IST_OFFSET_MS).toISOString();
+  return [ist.slice(0, 10), ist.slice(11, 16)];
+}
+
+/** Monday 00:00 IST of the week `now` falls in. */
+export function istWeekStart(now = new Date()): Date {
+  const today = istToday(now); // UTC midnight of the IST date
+  const daysSinceMonday = (today.getUTCDay() + 6) % 7;
+  return new Date(today.getTime() - daysSinceMonday * 86_400_000 - IST_OFFSET_MS);
+}
+
+/** The 1st of the current IST month, 00:00 IST. */
+export function istMonthStart(now = new Date()): Date {
+  const today = istToday(now);
+  return new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1) - IST_OFFSET_MS);
+}

@@ -27,3 +27,25 @@ describe('Indian calendar helpers', () => {
     expect(formatIst(new Date('2026-10-20T10:00:00Z'))).toBe('2026-10-20 15:30 IST');
   });
 });
+
+describe('IST date-time helpers', () => {
+  it('a time entered in India is stored as the right instant, and read back the same', async () => {
+    const { istInstant, istParts } = await import('./dates.js');
+    const at = istInstant('2026-10-20', '15:30', 'Date');
+    expect(at.toISOString()).toBe('2026-10-20T10:00:00.000Z');
+    expect(istParts(at)).toEqual(['2026-10-20', '15:30']);
+    // 23:59 IST is still the same Indian date.
+    expect(istParts(istInstant('2026-12-31', '23:59', 'Date'))).toEqual(['2026-12-31', '23:59']);
+    expect(() => istInstant('2026-10-20', '25:00', 'Date')).toThrow(/time like 15:30/);
+  });
+
+  it('weeks start on Monday and months on the 1st, both at midnight IST', async () => {
+    const { istMonthStart, istWeekStart } = await import('./dates.js');
+    // Wednesday 2026-10-14 10:00 IST
+    const wed = new Date('2026-10-14T04:30:00Z');
+    expect(istWeekStart(wed).toISOString()).toBe('2026-10-11T18:30:00.000Z'); // Mon 12 Oct 00:00 IST
+    expect(istMonthStart(wed).toISOString()).toBe('2026-09-30T18:30:00.000Z'); // 1 Oct 00:00 IST
+    // Monday 00:10 IST is already the new week.
+    expect(istWeekStart(new Date('2026-10-11T18:40:00Z')).toISOString()).toBe('2026-10-11T18:30:00.000Z');
+  });
+});
