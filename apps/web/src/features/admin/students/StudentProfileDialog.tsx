@@ -154,7 +154,10 @@ export function StudentProfileDialog({ schoolId, studentId, onEdit, onDelete, on
                   <tbody className="divide-y divide-slate-100">
                     {student.enrollments.map((e) => (
                       <tr key={e.id}>
-                        <td className="py-2 font-medium text-slate-800">{e.batch} <span className="text-xs text-slate-400">({e.program})</span></td>
+                        <td className="py-2 font-medium text-slate-800">
+                          {e.batch} <span className="text-xs text-slate-400">({e.program})</span>
+                          {!e.batchExists && <span className="ml-1 text-xs text-slate-400 italic">· batch deleted</span>}
+                        </td>
                         <td className="py-2">{dash(e.rollNumber)}</td>
                         <td className="py-2">{e.enrolledOn ? formatDay(e.enrolledOn) : '—'}</td>
                         <td className="py-2">{e.endedOn ? formatDay(e.endedOn) : <span className="text-emerald-600">Current</span>}</td>

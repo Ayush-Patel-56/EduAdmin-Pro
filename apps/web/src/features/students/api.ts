@@ -50,8 +50,10 @@ export type Guardian = {
 
 export type Enrollment = {
   id: string
+  /** The batch and program names when the enrollment was made (kept if the batch is deleted). */
   batch: string
   program: string
+  batchExists: boolean
   rollNumber: string | null
   enrolledOn: string | null
   endedOn: string | null
@@ -90,7 +92,7 @@ export type StudentDetail = {
   enrollments: Enrollment[]
 }
 
-/** The faculty view of one student: no identity numbers, contacts, address or guardians. */
+/** The faculty view of one student: no identity numbers, contacts, address or guardians (notes are shown, PRD 5.5). */
 export type TeacherStudentDetail = Pick<
   StudentDetail,
   | 'id'
@@ -105,6 +107,7 @@ export type TeacherStudentDetail = Pick<
   | 'previousPercentage'
   | 'admissionDate'
   | 'status'
+  | 'notes'
   | 'enrollments'
 >
 

@@ -66,4 +66,12 @@ describe('validateEnv', () => {
       }),
     ).toBeTruthy();
   });
+
+  it('local file storage is opt-in and never allowed in production', () => {
+    expect(validateEnv({ ...base, FILE_STORAGE: 'local' })).toBeTruthy();
+    expect(() => validateEnv({ ...base, FILE_STORAGE: 'disk' })).toThrow('FILE_STORAGE must be');
+    expect(() =>
+      validateEnv({ ...base, NODE_ENV: 'production', WEB_ORIGIN: 'https://a.b', SMTP_HOST: 'h', SMTP_USER: 'u', SMTP_PASS: 'p', FILE_STORAGE: 'local' }),
+    ).toThrow('FILE_STORAGE=local is for development only');
+  });
 });

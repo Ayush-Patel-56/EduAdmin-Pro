@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import type { AccessService, TeacherScope } from '../academic/access.service.js';
+import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { FilesService } from '../storage/files.service.js';
 import {
@@ -138,10 +140,11 @@ describe('StudentsService: what faculty can see', () => {
       guardians: [{ id: 'g', name: 'Mom', isPrimary: true }], enrollments: [],
     });
     const detail = await service.teacherGet(scope({}), 'st-1');
-    for (const hidden of ['admissionNumber', 'aadharNumber', 'email', 'phone', 'parentContact', 'address', 'guardians', 'notes', 'dateOfBirth']) {
+    for (const hidden of ['admissionNumber', 'aadharNumber', 'email', 'phone', 'parentContact', 'address', 'guardians', 'dateOfBirth']) {
       expect(detail).not.toHaveProperty(hidden);
     }
-    expect(detail).toMatchObject({ fullName: 'Riya', gender: 'Female', previousSchool: 'DPS' });
+    // PRD 5.5 includes notes in the faculty view.
+    expect(detail).toMatchObject({ fullName: 'Riya', gender: 'Female', previousSchool: 'DPS', notes: 'private' });
   });
 
   it('the teacher roster has no contact columns', async () => {
@@ -162,16 +165,26 @@ describe('StudentsService: records stay inside the school', () => {
   const batchFindFirst = vi.fn();
   const programFindFirst = vi.fn();
   const studentFindFirst = vi.fn();
-  const findReady = vi.fn();
+  const claim = vi.fn();
+  const discard = vi.fn();
   const transaction = vi.fn();
+  const tx = {
+    $queryRaw: vi.fn(),
+    batch: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: '10-A', program: { name: 'JEE' } }) },
+    student: { findUniqueOrThrow: vi.fn(), update: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'new' }) },
+    studentGuardian: { count: vi.fn().mockResolvedValue(0), updateMany: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'g1' }), findFirst: vi.fn(), update: vi.fn() },
+    studentEnrollment: { updateMany: vi.fn(), create: vi.fn() },
+  };
+  const studentFindMany = vi.fn();
   const prisma = {
     school: { findUniqueOrThrow: vi.fn().mockResolvedValue({ classes: ['9th', '10th'] }) },
     batch: { findFirst: batchFindFirst },
     program: { findFirst: programFindFirst },
-    student: { findFirst: studentFindFirst, delete: vi.fn() },
+    student: { findFirst: studentFindFirst, delete: vi.fn(), findMany: studentFindMany },
     $transaction: transaction,
   } as unknown as PrismaService;
-  const service = new StudentsService(prisma, { findReady } as unknown as FilesService);
+  const service = new StudentsService(prisma, { claim, discard } as unknown as FilesService);
+  const runTx = () => transaction.mockImplementation((run: (t: typeof tx) => unknown) => run(tx));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -193,26 +206,69 @@ describe('StudentsService: records stay inside the school', () => {
   });
 
   it('a batch decides the program; naming a different program is refused', async () => {
-    batchFindFirst.mockResolvedValue({ programId: 'p-jee', program: { name: 'JEE' } });
+    batchFindFirst.mockResolvedValue({ name: 'A', classLevel: null, programId: 'p-jee', program: { name: 'JEE' } });
     await expect(service.create('school-1', 'u', dto({ batchId: 'b1', programId: 'p-neet' }))).rejects.toThrow('That batch belongs to JEE');
     await expect(service.create('school-1', 'u', dto({ batchId: 'b1' }))).resolves.toEqual({ id: 'new-id' });
   });
 
-  it('an uploaded photo must be a READY photo of this school', async () => {
-    findReady.mockRejectedValue(new BadRequestException('Upload the file again'));
-    await expect(service.create('school-1', 'u', dto({ photoFileId: 'f1' }))).rejects.toBeInstanceOf(BadRequestException);
-    expect(findReady).toHaveBeenCalledWith('school-1', 'f1', 'STUDENT_PHOTO');
+  it('a photo must be a READY upload by this admin that no other student uses', async () => {
+    claim.mockRejectedValue(new BadRequestException('Upload the file again'));
+    await expect(service.create('school-1', 'admin-1', dto({ photoFileId: 'f1' }))).rejects.toBeInstanceOf(BadRequestException);
+    expect(claim).toHaveBeenCalledWith('school-1', 'f1', 'STUDENT_PHOTO', 'admin-1', undefined);
+  });
+
+  it('a class-specific batch refuses another class, and fills the class in when blank', async () => {
+    batchFindFirst.mockResolvedValue({ name: '10-A', classLevel: 10, programId: 'p', program: { name: 'JEE' } });
+    await expect(service.create('school-1', 'u', dto({ batchId: 'b1', classLevel: '9th' }))).rejects.toThrow('10-A is a class 10 batch; this student is in 9th');
+    runTx();
+    await service.create('school-1', 'u', dto({ batchId: 'b1' }));
+    expect(tx.student.create.mock.calls[0][0].data.classLevel).toBe('10th');
+    expect(tx.studentEnrollment.create.mock.calls[0][0].data).toMatchObject({ batchId: 'b1', batchName: '10-A', programName: 'JEE' });
   });
 
   it('a future date of birth is refused', async () => {
     await expect(service.create('school-1', 'u', dto({ dateOfBirth: '2999-01-01' }))).rejects.toThrow('future');
   });
 
-  it("another school's student is a 404 for edit and delete", async () => {
+  it("another school's student is a 404 for edit and delete (the lock includes the school)", async () => {
+    runTx();
+    tx.$queryRaw.mockResolvedValue([]);
+    await expect(service.update('school-1', 'u', 'st-x', dto())).rejects.toBeInstanceOf(NotFoundException);
+    expect(tx.$queryRaw.mock.calls[0].slice(1)).toEqual(['st-x', 'school-1']);
+    expect(tx.student.update).not.toHaveBeenCalled();
     studentFindFirst.mockResolvedValue(null);
-    await expect(service.update('school-1', 'st-x', dto())).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.remove('school-1', 'st-x')).rejects.toBeInstanceOf(NotFoundException);
     expect(studentFindFirst.mock.calls[0][0].where).toEqual({ id: 'st-x', schoolId: 'school-1' });
+  });
+
+  it('a delete that succeeded is reported as success even if its photo cannot be removed', async () => {
+    studentFindFirst.mockResolvedValue({ id: 'st-1', photo: { id: 'f1', key: 'k' } });
+    discard.mockRejectedValue(new Error('still referenced'));
+    await expect(service.remove('school-1', 'st-1')).resolves.toEqual({ ok: true });
+  });
+
+  it('guardian changes lock the student first, and a lost race is a 409, not a 500', async () => {
+    runTx();
+    tx.$queryRaw.mockResolvedValue([{ id: 'st-1' }]);
+    await service.addGuardian('school-1', 'st-1', { name: 'Mom', isPrimary: false } as never);
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.studentGuardian.count.mock.invocationCallOrder[0]);
+    // The first guardian becomes the primary contact.
+    expect(tx.studentGuardian.create.mock.calls[0][0].data.isPrimary).toBe(true);
+    transaction.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 't' }));
+    await expect(service.addGuardian('school-1', 'st-1', { name: 'Dad', isPrimary: true } as never)).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.updateGuardian('school-1', 'st-1', 'g1', { name: 'Dad', isPrimary: true } as never)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('export comes in pages with a hasMore flag, never silently cut off', async () => {
+    const row = { fullName: 'A', admissionNumber: null, aadharNumber: null, rollNumber: null, email: null, phone: null, parentContact: null, address: null, city: null, state: null, pincode: null, dateOfBirth: null, gender: null, bloodGroup: null, previousSchool: null, previousPercentage: null, classLevel: null, program: null, batch: null, admissionDate: null, status: 'ACTIVE', notes: null, guardians: [] };
+    studentFindMany.mockResolvedValue(Array(1001).fill(row));
+    const first = await service.exportRows('school-1', {});
+    expect(first.hasMore).toBe(true);
+    expect(first.rows).toHaveLength(1000);
+    expect(studentFindMany.mock.calls[0][0]).toMatchObject({ skip: 0, take: 1001 });
+    studentFindMany.mockResolvedValue([row]);
+    await expect(service.exportRows('school-1', { page: 2 })).resolves.toMatchObject({ hasMore: false });
+    expect(studentFindMany.mock.calls[1][0]).toMatchObject({ skip: 1000 });
   });
 });
 
@@ -227,13 +283,18 @@ describe('student helpers', () => {
     expect(message(['Student_schoolId_admissionNumber_key'])).toMatch(/Admission number ADM-1/);
     expect(message(['schoolId', 'aadharNumber'])).toMatch(/Aadhaar/);
     expect(message(['Student_batchId_rollNumber_key'])).toMatch(/Roll number 7/);
+    expect(message(['Student_photoFileId_key'])).toMatch(/photo is already used/);
   });
 
   it('moving batch closes the open enrollment and opens a new one; a new roll updates it', async () => {
-    const tx = { studentEnrollment: { updateMany: vi.fn(), create: vi.fn() } };
+    const tx = {
+      studentEnrollment: { updateMany: vi.fn(), create: vi.fn() },
+      batch: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Batch 2', program: { name: 'NEET' } }) },
+    };
     await moveEnrollment(tx as never, 's', 'st', { batchId: 'b1', rollNumber: '1' }, { batchId: 'b2', rollNumber: '4' });
     expect(tx.studentEnrollment.updateMany.mock.calls[0][0].where).toEqual({ studentId: 'st', endedOn: null });
-    expect(tx.studentEnrollment.create.mock.calls[0][0].data).toMatchObject({ batchId: 'b2', rollNumber: '4' });
+    // The names are kept, so the history survives deleting the batch.
+    expect(tx.studentEnrollment.create.mock.calls[0][0].data).toMatchObject({ batchId: 'b2', batchName: 'Batch 2', programName: 'NEET', rollNumber: '4' });
 
     vi.clearAllMocks();
     await moveEnrollment(tx as never, 's', 'st', { batchId: 'b1', rollNumber: '1' }, { batchId: 'b1', rollNumber: '2' });

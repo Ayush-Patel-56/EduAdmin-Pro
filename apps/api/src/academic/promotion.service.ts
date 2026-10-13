@@ -23,7 +23,9 @@ export function nextClass(classLevel: string, offered: string[]) {
  * Who moves where this cycle. Active students admitted before the boundary
  * move up one class; new admissions (admitted on or after it) are held, Class
  * 12 is left for the school to handle, and students without a class (or whose
- * next class the school doesn't offer) stay where they are.
+ * next class the school doesn't offer) stay where they are. A student in a
+ * batch meant for one class leaves that batch when they move up (the school
+ * puts them in next year's batch); `leavingBatch` counts them.
  */
 export async function planPromotion(
   db: Db,
@@ -33,9 +35,10 @@ export async function planPromotion(
 ) {
   const students = await db.student.findMany({
     where: { schoolId, status: 'ACTIVE' },
-    select: { id: true, classLevel: true, admissionDate: true },
+    select: { id: true, classLevel: true, admissionDate: true, batch: { select: { classLevel: true } } },
   });
   const groups = new Map<string, { toClass: string; ids: string[] }>();
+  const leavingBatch: string[] = [];
   let heldNewAdmissions = 0;
   let class12Excluded = 0;
   let notPromoted = 0;
@@ -49,6 +52,7 @@ export async function planPromotion(
         const group = groups.get(s.classLevel!) ?? { toClass: to, ids: [] };
         group.ids.push(s.id);
         groups.set(s.classLevel!, group);
+        if (s.batch?.classLevel != null) leavingBatch.push(s.id);
       }
     }
   }
@@ -61,6 +65,7 @@ export async function planPromotion(
     heldNewAdmissions,
     class12Excluded,
     notPromoted,
+    leavingBatch,
   };
 }
 
@@ -125,6 +130,7 @@ export class PromotionService {
             heldNewAdmissions: plan.heldNewAdmissions,
             class12Excluded: plan.class12Excluded,
             notPromoted: plan.notPromoted,
+            leavingBatch: plan.leavingBatch.length,
           }
         : null,
       history: history.map((c) => ({
@@ -190,6 +196,18 @@ export class PromotionService {
           await tx.student.updateMany({
             where: { id: { in: group.ids }, schoolId },
             data: { classLevel: group.toClass },
+          });
+        }
+        // Their batch is for the class they've left: unassign them and close
+        // the enrollment, so batch and class never disagree.
+        if (plan && plan.leavingBatch.length > 0) {
+          await tx.student.updateMany({
+            where: { id: { in: plan.leavingBatch }, schoolId },
+            data: { batchId: null },
+          });
+          await tx.studentEnrollment.updateMany({
+            where: { studentId: { in: plan.leavingBatch }, schoolId, endedOn: null },
+            data: { endedOn: boundaryDate },
           });
         }
       }, { timeout: 60_000, maxWait: 10_000 });

@@ -194,6 +194,12 @@ function StudentDetailView({ student }: { student: TeacherStudentDetail }) {
               <dd className="mt-1 text-sm font-medium text-slate-800">{value}</dd>
             </div>
           ))}
+          {student.notes && (
+            <div className="sm:col-span-4">
+              <dt className="text-xs text-slate-500">Notes</dt>
+              <dd className="mt-1 text-sm font-medium whitespace-pre-line text-slate-800">{student.notes}</dd>
+            </div>
+          )}
         </dl>
       </Card>
 
@@ -224,6 +230,7 @@ function StudentDetailView({ student }: { student: TeacherStudentDetail }) {
                   <li key={e.id} className="flex items-center justify-between py-2 text-sm">
                     <span className="font-medium text-slate-800">
                       {e.batch} <span className="text-xs text-slate-400">({e.program})</span>
+                      {!e.batchExists && <span className="ml-1 text-xs text-slate-400 italic">· batch deleted</span>}
                     </span>
                     <span className="text-xs text-slate-500">
                       {e.rollNumber && `Roll ${e.rollNumber} · `}

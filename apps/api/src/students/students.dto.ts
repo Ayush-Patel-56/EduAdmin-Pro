@@ -72,7 +72,8 @@ export class StudentDto {
   @Matches(AADHAAR, { message: 'Aadhaar number must be 12 digits, not starting with 0 or 1' })
   aadharNumber?: string | null;
 
-  @Transform(blankToNull)
+  /** Stored upper-cased, so "r5" and "R5" are the same roll number. */
+  @Transform(upper)
   @IsOptional()
   @IsString()
   @MaxLength(20, { message: 'Roll number must be 20 characters or less' })

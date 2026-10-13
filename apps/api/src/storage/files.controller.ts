@@ -106,9 +106,14 @@ export class LocalFilesController {
     const driver = this.driver();
     const grant = driver.verify(token, 'put');
     if (!grant) throw new HttpException('Upload link expired', 403);
+    // Like a one-time ticket: once the file is completed (or gone) the link is dead.
+    if (!(await this.files.acceptsUpload(grant.key))) {
+      throw new HttpException('This upload is already finished', 409);
+    }
+    // Exactly the approved size, as R2 enforces through the signed Content-Length.
     const declared = Number(req.headers['content-length'] ?? NaN);
-    if (Number.isFinite(declared) && declared > (grant.max ?? 0)) {
-      throw new HttpException('File too large', HttpStatus.PAYLOAD_TOO_LARGE);
+    if (declared !== grant.max) {
+      throw new HttpException('The file size does not match the upload', HttpStatus.BAD_REQUEST);
     }
     const target = await driver.prepare(grant.key);
     const partial = `${target}.part`;
