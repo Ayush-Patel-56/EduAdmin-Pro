@@ -90,6 +90,11 @@ export class ProgramsService {
     // (or a 409 names the ones that would become duplicates).
     await this.prisma.$transaction(async (tx) => {
       await unlinkProgramChapters(tx, schoolId, [programId]);
+      // Students of the program (none can be in a batch: it has none) stay, without a program.
+      await tx.student.updateMany({
+        where: { schoolId, programId },
+        data: { programId: null },
+      });
       await tx.program.delete({ where: { id: programId } });
     });
     return { ok: true };

@@ -11,6 +11,8 @@ export type TeacherScope = {
   facultyId: string | null;
   batchIds: string[];
   programIds: string[];
+  /** false when the teacher has no faculty profile or it is INACTIVE. */
+  active: boolean;
 };
 
 /**
@@ -78,6 +80,7 @@ export class AccessService {
     return {
       schoolId: membership.schoolId,
       facultyId: faculty?.id ?? null,
+      active: !!active,
       batchIds: active ? faculty.batchAssignments.map((b) => b.batchId) : [],
       programIds: active
         ? faculty.programAssignments.map((p) => p.programId)

@@ -113,6 +113,38 @@ Migration folders must sort in the order they were created: use timestamps later
 
 - The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
 
+## Students (`20261013090000_students`)
+
+New tables only (students, guardians, batch history, uploaded-file metadata), wrapped in a transaction, so there is nothing to check before deploying.
+
+## Students hardening (`20261013100000_students_hardening`)
+
+One transaction: a unique index on `Student.photoFileId` (a photo belongs to one student), batch history that keeps the batch and program names and survives deleting the batch (`StudentEnrollment.batchId` becomes nullable, `ON DELETE SET NULL`), and roll numbers stored upper-cased. The unique indexes fail if duplicates already exist, so check first and expect no rows:
+
+```sql
+SELECT "photoFileId", count(*) FROM "Student" WHERE "photoFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "batchId", upper("rollNumber"), count(*) FROM "Student"
+WHERE "batchId" IS NOT NULL AND "rollNumber" IS NOT NULL GROUP BY 1, 2 HAVING count(*) > 1;
+```
+
+If either returns rows, fix those students (another photo, another roll number) and run the check again. A failed run rolls back completely, so after fixing the data, `prisma migrate resolve --rolled-back 20261013100000_students_hardening` and `migrate deploy` again.
+
+## File storage (Cloudflare R2)
+
+Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.
+
+1. Create an R2 bucket (keep public access off) and an API token with Object Read & Write on it.
+2. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` on the API (all four, or none).
+3. Add a CORS rule to the bucket so the web app can upload and show files:
+
+   ```json
+   [{ "AllowedOrigins": ["https://<your web origin>"], "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["Content-Type"], "MaxAgeSeconds": 3600 }]
+   ```
+
+4. Add a lifecycle rule that deletes objects under the `uploads/` prefix after 1 day. The browser uploads to `uploads/<school>/<file>`; completing the upload checks the bytes and moves them to the key they are served from. The signed upload URL stays valid for its few minutes even after that, so a second PUT with it could leave bytes behind under `uploads/`. They are never served, and this rule removes them.
+
+Without these settings, production refuses uploads with a clear message (everything else works). For development without R2, set `FILE_STORAGE=local` (the API refuses to start with it in production): files then go to `apps/api/.storage` (git-ignored, served through the API with signed links that stop working when the API restarts), and an upload link stops working once its file is completed. Uploads that are never completed, and photos never attached to a student, are removed after a day; deleting a student, Clear All Data and deleting a school remove their files too.
+
 ## After deploying the invite-code change: review existing admins
 
 Before this change, any admin account that entered a school's invite code, the same code teachers use, became an ADMIN of that school. Nothing records which code was used, so review every admin who is not the school's owner:

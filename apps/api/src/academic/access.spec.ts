@@ -124,6 +124,7 @@ describe('AccessService.teacherScope', () => {
       facultyId: 'fac-1',
       batchIds: ['b1', 'b2'],
       programIds: ['p1'],
+      active: true,
     });
     expect(findFirst.mock.calls[0][0].where).toEqual({
       userId: 'user-1',
@@ -140,6 +141,7 @@ describe('AccessService.teacherScope', () => {
     await expect(access.teacherScope('user-1')).resolves.toMatchObject({
       batchIds: [],
       programIds: [],
+      active: false,
     });
     facultyFindUnique.mockResolvedValue({
       id: 'fac-1',
@@ -159,6 +161,7 @@ describe('AccessService.teacherScope', () => {
       facultyId: 'fac-1',
       batchIds: [],
       programIds: [],
+      active: false,
     });
     facultyFindUnique.mockResolvedValue(profile('ON_LEAVE'));
     await expect(access.teacherScope('user-1')).resolves.toMatchObject({

@@ -128,6 +128,24 @@ enum AuditAction {
   DELETE
 }
 
+enum StudentStatus {
+  ACTIVE
+  INACTIVE
+  TRANSFERRED
+  COMPLETED
+}
+
+// What an uploaded file is for; decides who may upload and read it, and which
+// types and sizes are accepted.
+enum FilePurpose {
+  STUDENT_PHOTO
+}
+
+enum FileStatus {
+  PENDING // upload URL issued, bytes not confirmed yet
+  READY // size and file signature checked
+}
+
 enum AnnouncementCategory {
   GENERAL
   ACADEMIC
@@ -248,6 +266,8 @@ model School {
   interviews      Interview[]
   appraisals      TeacherAppraisal[]
   announcements   Announcement[]
+  students        Student[]
+  files           FileObject[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -287,6 +307,7 @@ model Program {
   batches         Batch[]
   facultyPrograms FacultyProgram[]
   chapters        CurriculumChapter[]
+  students        Student[]
 
   @@unique([schoolId, name])
   @@unique([schoolId, code])
@@ -310,14 +331,16 @@ model Batch {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  school         School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school         School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   // NoAction (checked at end of statement) so deleting a school can cascade
   // through programs and batches together; the service blocks deleting a
   // program that still has batches.
-  program        Program        @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
-  coordinator    Faculty?       @relation("BatchCoordinator", fields: [coordinatorId], references: [id], onDelete: SetNull)
+  program        Program             @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  coordinator    Faculty?            @relation("BatchCoordinator", fields: [coordinatorId], references: [id], onDelete: SetNull)
   facultyBatches FacultyBatch[]
   syllabusItems  SyllabusItem[]
+  students       Student[]
+  enrollments    StudentEnrollment[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -619,4 +642,125 @@ model RecruitmentAuditLog {
   createdAt DateTime    @default(now()) @db.Timestamptz(3)
 
   @@index([schoolId, createdAt])
+}
+
+// A student of one school (PRD 4.6). `batchId` is the current batch (its
+// program is `programId`); StudentEnrollment keeps the batch history.
+// Admission number and Aadhaar are unique within a school, roll number within
+// a batch. Faculty read a limited view; only admins create or edit.
+model Student {
+  id                 String        @id @default(uuid())
+  schoolId           String
+  fullName           String
+  admissionNumber    String? // stored upper-cased
+  aadharNumber       String? // 12 digits, stored without spaces or dashes
+  rollNumber         String? // stored upper-cased (unique per batch)
+  email              String? // lower-cased
+  phone              String? // 10-digit mobile
+  parentContact      String? // 10-digit mobile
+  address            String?
+  city               String?
+  state              String?
+  pincode            String?
+  dateOfBirth        DateTime?     @db.Date
+  gender             String? // Male / Female / Other
+  bloodGroup         String?
+  profileImageUrl    String? // an external https image
+  photoFileId        String?       @unique // or an uploaded photo (takes precedence)
+  previousSchool     String?
+  previousPercentage Decimal?      @db.Decimal(5, 2)
+  classLevel         String? // one of the school's classes, e.g. "9th"
+  programId          String?
+  batchId            String?
+  admissionDate      DateTime?     @db.Date
+  status             StudentStatus @default(ACTIVE)
+  notes              String?
+  createdById        String?
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
+
+  school      School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // NoAction (checked at end of statement) so a school delete cascades; the
+  // batch and program services unassign students before deleting either.
+  program     Program?            @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  batch       Batch?              @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  photo       FileObject?         @relation(fields: [photoFileId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  guardians   StudentGuardian[]
+  enrollments StudentEnrollment[]
+
+  @@unique([schoolId, admissionNumber])
+  @@unique([schoolId, aadharNumber])
+  @@unique([batchId, rollNumber])
+  @@unique([id, schoolId])
+  @@index([schoolId, classLevel])
+  @@index([programId])
+}
+
+// Parents and guardians. At most one primary contact per student (partial
+// unique index "StudentGuardian_primary_key" in the migration).
+model StudentGuardian {
+  id           String   @id @default(uuid())
+  schoolId     String
+  studentId    String
+  name         String
+  relationship String?
+  phone        String?
+  altPhone     String?
+  email        String?
+  occupation   String?
+  annualIncome Int? // rupees per year
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([studentId])
+}
+
+// Batch history: one open row (endedOn null) for the current batch, closed
+// when the student moves or is unassigned. The batch and program names are
+// kept, so the history still reads right after a batch is deleted (batchId
+// is then cleared). A plain FK (not composite) so the delete can clear it;
+// rows are only ever written for a batch of the student's own school.
+model StudentEnrollment {
+  id          String    @id @default(uuid())
+  schoolId    String
+  studentId   String
+  batchId     String?
+  batchName   String
+  programName String
+  rollNumber  String?
+  enrolledOn  DateTime  @db.Date
+  endedOn     DateTime? @db.Date
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch   Batch?  @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([studentId])
+  @@index([batchId])
+}
+
+// Metadata of a file whose bytes live in private object storage (Cloudflare
+// R2, or a local folder in development). Bytes are written straight to
+// storage with a short-lived signed URL, then checked (size, file signature)
+// before the file is READY; downloads also use short-lived signed URLs.
+model FileObject {
+  id           String      @id @default(uuid())
+  schoolId     String
+  purpose      FilePurpose
+  status       FileStatus  @default(PENDING)
+  key          String      @unique // opaque storage key
+  originalName String
+  contentType  String
+  size         Int // bytes
+  uploadedById String?
+  createdAt    DateTime    @default(now()) @db.Timestamptz(3)
+
+  school   School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  students Student[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, status, createdAt])
 }

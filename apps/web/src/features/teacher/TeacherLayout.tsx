@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { useMe } from '@/features/auth/session'
 import { PortalShell } from '@/features/portal/PortalShell'
+import { searchStudents } from '@/features/students/api'
 import { useStructure } from '@/features/academic/api'
 import { useAcademicFilters } from '@/features/academic/filters'
 import { BatchSelect, ProgramSelect } from '@/features/portal/Selectors'
@@ -20,6 +21,7 @@ export function TeacherLayout() {
   const [switchOpen, setSwitchOpen] = useState(false)
   const openSwitchSchool = useCallback(() => setSwitchOpen(true), [])
   const closeSwitchSchool = useCallback(() => setSwitchOpen(false), [])
+  const searchRemote = useCallback((q: string) => searchStudents({ kind: 'teacher' }, q), [])
   if (!me) return null
   const schoolName = dashboard?.school?.name ?? null
 
@@ -29,6 +31,7 @@ export function TeacherLayout() {
       subtitle="Faculty Portal"
       roleLabel="Teacher"
       defaultAccent="BLUE"
+      searchRemote={schoolId ? searchRemote : undefined}
       basePath="/teacher"
       nav={teacherNav}
       extraPages={teacherExtraSections}

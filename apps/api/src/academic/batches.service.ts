@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { parseDate, toIsoDate } from '../common/dates.js';
+import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import type { BatchDto } from './academic.dto.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
 
@@ -107,13 +107,25 @@ export class BatchesService {
     );
   }
 
-  /** Deleting a batch also removes its syllabus chapters and teacher assignments. */
+  /**
+   * Deleting a batch also removes its syllabus chapters, teacher assignments
+   * and enrollment history; its students stay in the program, unassigned.
+   */
   async remove(schoolId: string, batchId: string) {
     const batch = await this.find(schoolId, batchId);
     await this.prisma.$transaction(async (tx) => {
       const teachers = await tx.facultyBatch.findMany({
         where: { batchId },
         select: { facultyId: true },
+      });
+      await tx.student.updateMany({
+        where: { schoolId, batchId },
+        data: { batchId: null },
+      });
+      // Their time in the batch ends today; the history keeps its name.
+      await tx.studentEnrollment.updateMany({
+        where: { schoolId, batchId, endedOn: null },
+        data: { endedOn: istToday() },
       });
       await tx.batch.delete({ where: { id: batchId } });
       await pruneFacultyPrograms(

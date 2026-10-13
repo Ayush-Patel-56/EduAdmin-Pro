@@ -106,7 +106,7 @@ describe('both ways of removing a program use it', () => {
     } as unknown as PrismaService;
     const access = { assertOwner: vi.fn() } as unknown as AccessService;
     await expect(
-      new SchoolsService(prisma, access).updateSchool(
+      new SchoolsService(prisma, access, {} as never).updateSchool(
         { userId: 'u1' } as AuthContext,
         's1',
         {

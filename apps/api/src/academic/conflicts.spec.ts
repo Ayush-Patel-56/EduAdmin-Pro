@@ -189,7 +189,7 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
       $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     } as unknown as PrismaService;
     const access = { assertOwner: vi.fn() } as unknown as AccessService;
-    const schools = new SchoolsService(prisma, access);
+    const schools = new SchoolsService(prisma, access, {} as never);
     await expect(
       schools.updateSchool({ userId: 'u1' } as AuthContext, 's1', {
         name: 'S',
@@ -199,5 +199,24 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
       } as CreateSchoolDto),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(tx.school.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('BatchesService.remove: student history', () => {
+  it('unassigns the students and ends their open enrollments, so history shows when they left', async () => {
+    const tx = {
+      facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
+      student: { updateMany: vi.fn() },
+      studentEnrollment: { updateMany: vi.fn() },
+      batch: { delete: vi.fn() },
+    };
+    const prisma = {
+      batch: { findFirst: vi.fn().mockResolvedValue({ id: 'b1', programId: 'p1' }) },
+      $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+    } as unknown as PrismaService;
+    await new BatchesService(prisma).remove('s1', 'b1');
+    expect(tx.student.updateMany.mock.calls[0][0]).toEqual({ where: { schoolId: 's1', batchId: 'b1' }, data: { batchId: null } });
+    expect(tx.studentEnrollment.updateMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', batchId: 'b1', endedOn: null });
+    expect(tx.studentEnrollment.updateMany.mock.invocationCallOrder[0]).toBeLessThan(tx.batch.delete.mock.invocationCallOrder[0]);
   });
 });
