@@ -202,9 +202,11 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
   });
 });
 
-describe('BatchesService.remove: student history', () => {
-  it('unassigns the students and ends their open enrollments, so history shows when they left', async () => {
+describe('BatchesService.remove: student history and grades', () => {
+  const build = (graded: number) => {
     const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      assignmentSubmission: { count: vi.fn().mockResolvedValue(graded) },
       facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
       student: { updateMany: vi.fn() },
       studentEnrollment: { updateMany: vi.fn() },
@@ -214,7 +216,22 @@ describe('BatchesService.remove: student history', () => {
       batch: { findFirst: vi.fn().mockResolvedValue({ id: 'b1', programId: 'p1' }) },
       $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     } as unknown as PrismaService;
-    await new BatchesService(prisma).remove('s1', 'b1');
+    return { tx, batches: new BatchesService(prisma) };
+  };
+
+  it('a batch with recorded grades is not deleted (they are records)', async () => {
+    const { tx, batches } = build(3);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('3 grades are recorded');
+    expect(tx.assignmentSubmission.count.mock.calls[0][0].where).toEqual({ schoolId: 's1', status: 'GRADED', assignment: { batchId: 'b1' } });
+    // Counted after locking the batch and its assignments, so no grade slips in.
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('unassigns the students and ends their open enrollments, so history shows when they left', async () => {
+    const { tx, batches } = build(0);
+    await batches.remove('s1', 'b1');
     expect(tx.student.updateMany.mock.calls[0][0]).toEqual({ where: { schoolId: 's1', batchId: 'b1' }, data: { batchId: null } });
     expect(tx.studentEnrollment.updateMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', batchId: 'b1', endedOn: null });
     expect(tx.studentEnrollment.updateMany.mock.invocationCallOrder[0]).toBeLessThan(tx.batch.delete.mock.invocationCallOrder[0]);

@@ -18,6 +18,9 @@ import {
 } from './storage.js';
 
 const MB = 1024 * 1024;
+const DOCX =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const IMAGES = ['image/jpeg', 'image/png', 'image/webp'];
 
 /** Where the browser PUTs a file's bytes before they are checked. */
 export const uploadKey = (fileId: string, schoolId: string) => `uploads/${schoolId}/${fileId}`;
@@ -31,7 +34,20 @@ const SIGNATURES: Record<string, (head: Buffer) => boolean> = {
   'image/webp': (h) =>
     h.subarray(0, 4).toString('latin1') === 'RIFF' &&
     h.subarray(8, 12).toString('latin1') === 'WEBP',
+  'application/pdf': (h) => h.subarray(0, 5).toString('latin1') === '%PDF-',
+  // A .docx is a zip archive.
+  [DOCX]: (h) => isZip(h),
+  'application/zip': (h) => isZip(h),
+  'video/mp4': (h) => h.subarray(4, 8).toString('latin1') === 'ftyp',
 };
+
+function isZip(h: Buffer) {
+  return (
+    h[0] === 0x50 &&
+    h[1] === 0x4b &&
+    ((h[2] === 0x03 && h[3] === 0x04) || (h[2] === 0x05 && h[3] === 0x06))
+  );
+}
 
 type PurposeRule = {
   maxBytes: number;
@@ -44,8 +60,29 @@ type PurposeRule = {
 export const PURPOSES: Record<FilePurpose, PurposeRule> = {
   STUDENT_PHOTO: {
     maxBytes: 2 * MB,
-    types: ['image/jpeg', 'image/png', 'image/webp'],
+    types: IMAGES,
     describe: 'a JPG, PNG or WebP image',
+  },
+  FACULTY_PHOTO: {
+    maxBytes: 2 * MB,
+    types: IMAGES,
+    describe: 'a JPG, PNG or WebP image',
+  },
+  // PRD 5.9: PDF, DOCX, ZIP, MP4; max 50 MB.
+  STUDY_MATERIAL: {
+    maxBytes: 50 * MB,
+    types: ['application/pdf', DOCX, 'application/zip', 'video/mp4'],
+    describe: 'a PDF, DOCX, ZIP or MP4 file',
+  },
+  ASSIGNMENT_SHEET: {
+    maxBytes: 10 * MB,
+    types: ['application/pdf', DOCX, ...IMAGES],
+    describe: 'a PDF, DOCX or image file',
+  },
+  SUBMISSION: {
+    maxBytes: 10 * MB,
+    types: ['application/pdf', DOCX, ...IMAGES],
+    describe: 'a PDF, DOCX or image file',
   },
 };
 
@@ -122,7 +159,10 @@ export class FilesService {
   ) {
     const driver = this.requireDriver();
     const rule = PURPOSES[input.purpose];
-    const contentType = input.contentType.toLowerCase();
+    // Windows browsers report zips as application/x-zip-compressed.
+    const contentType = input.contentType
+      .toLowerCase()
+      .replace('application/x-zip-compressed', 'application/zip');
     if (!rule.types.includes(contentType)) {
       throw new BadRequestException(`Upload ${rule.describe}`);
     }
@@ -228,6 +268,10 @@ export class FilesService {
         status: 'READY',
         uploadedById,
         students: { none: {} },
+        faculty: { none: {} },
+        materials: { none: {} },
+        assignments: { none: {} },
+        submissions: { none: {} },
       },
       select: { id: true },
     });
@@ -273,6 +317,19 @@ export class FilesService {
     );
   }
 
+  /**
+   * `discard` after the record that used the files is already gone: the
+   * request succeeded, so a failure here is logged (the abandoned-file
+   * cleanup retries) instead of turning that success into a 500.
+   */
+  async discardQuietly(files: { id: string; key: string; schoolId?: string }[]) {
+    await this.discard(files).catch((err: unknown) => {
+      this.logger.warn(
+        `Could not remove files ${files.map((f) => f.id).join(', ')}: ${(err as Error).message}`,
+      );
+    });
+  }
+
   /** Whether an upload key still belongs to a PENDING file (development storage checks this before accepting bytes). */
   async acceptsUpload(key: string) {
     const match = UPLOAD_KEY.exec(key);
@@ -301,7 +358,7 @@ export class FilesService {
 
   /**
    * Housekeeping, run when a school starts a new upload: uploads never
-   * completed, and photos uploaded but never attached to a student.
+   * completed, and files uploaded but never attached to anything.
    */
   async removeAbandoned(schoolId: string) {
     try {
@@ -312,7 +369,13 @@ export class FilesService {
           createdAt: { lt: before },
           OR: [
             { status: 'PENDING' },
-            { purpose: 'STUDENT_PHOTO', students: { none: {} } },
+            {
+              students: { none: {} },
+              faculty: { none: {} },
+              materials: { none: {} },
+              assignments: { none: {} },
+              submissions: { none: {} },
+            },
           ],
         },
         select: { id: true, key: true, schoolId: true },

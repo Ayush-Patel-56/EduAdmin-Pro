@@ -179,6 +179,19 @@ export class SchoolsService {
       },
     });
     const school = membership?.school;
+    // Work handed in (or late) but not graded yet, in the teacher's batches.
+    const faculty = school
+      ? await this.prisma.faculty.findUnique({
+          where: { schoolId_userId: { schoolId: school.id, userId: auth.userId } },
+          select: { status: true, batchAssignments: { select: { batchId: true } } },
+        })
+      : null;
+    const batchIds = faculty && faculty.status !== 'INACTIVE' ? faculty.batchAssignments.map((b) => b.batchId) : [];
+    const assignmentsToGrade = batchIds.length
+      ? await this.prisma.assignmentSubmission.count({
+          where: { schoolId: school!.id, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: { in: batchIds } } },
+        })
+      : 0;
     return {
       school: school
         ? {
@@ -193,9 +206,9 @@ export class SchoolsService {
         : null,
       programs: school?.programs ?? [],
       announcements: school?.announcements ?? [],
-      // The counts, schedule and feedback below are filled in as timetables,
-      // daily reports, assignments, tests and admin feedback are built.
-      stats: { todayClasses: 0, pendingDailyReports: 0, assignmentsToGrade: 0, upcomingTests: 0 },
+      // The other counts, the schedule and feedback are filled in as
+      // timetables, daily reports, tests and admin feedback are built.
+      stats: { todayClasses: 0, pendingDailyReports: 0, assignmentsToGrade, upcomingTests: 0 },
       todaySchedule: [],
       adminFeedback: [],
     };
@@ -328,7 +341,7 @@ export class SchoolsService {
   /** What Clear All Data would remove, shown before the owner confirms. */
   async clearPreview(auth: AuthContext, schoolId: string) {
     await this.access.assertOwner(auth.userId, schoolId);
-    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts, students, recruitment] = await Promise.all([
+    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts, students, teaching, recruitment] = await Promise.all([
       this.prisma.program.count({ where: { schoolId } }),
       this.prisma.batch.count({ where: { schoolId } }),
       this.prisma.syllabusItem.count({ where: { schoolId } }),
@@ -339,6 +352,11 @@ export class SchoolsService {
       this.prisma.curriculumConcept.count({ where: { schoolId } }),
       this.prisma.student.count({ where: { schoolId } }),
       Promise.all([
+        this.prisma.studyMaterial.count({ where: { schoolId } }),
+        this.prisma.assignment.count({ where: { schoolId } }),
+        this.prisma.counselingSession.count({ where: { schoolId } }),
+      ]),
+      Promise.all([
         this.prisma.jobRequirement.count({ where: { schoolId } }),
         this.prisma.candidate.count({ where: { schoolId } }),
         this.prisma.interview.count({ where: { schoolId } }),
@@ -346,6 +364,7 @@ export class SchoolsService {
       ]),
     ]);
     const [requirements, candidates, interviews, appraisals] = recruitment;
+    const [materials, assignments, counselingSessions] = teaching;
     return {
       programs,
       batches,
@@ -356,6 +375,9 @@ export class SchoolsService {
       chapters,
       concepts,
       students,
+      materials,
+      assignments,
+      counselingSessions,
       requirements,
       candidates,
       interviews,
@@ -391,9 +413,10 @@ export class SchoolsService {
       // Same transaction as the recruitment wipe above: either everything is
       // cleared (and audited) or nothing is. Students (with guardians and
       // batch history) go before the batches and programs they point at.
+      await tx.counselingSession.deleteMany({ where: { schoolId } });
+      await tx.assignment.deleteMany({ where: { schoolId } }); // with their submissions
+      await tx.studyMaterial.deleteMany({ where: { schoolId } });
       await tx.student.deleteMany({ where: { schoolId } });
-      const files = await tx.fileObject.findMany({ where: { schoolId }, select: { key: true } });
-      await tx.fileObject.deleteMany({ where: { schoolId } });
       await tx.syllabusItem.deleteMany({ where: { schoolId } });
       await tx.curriculumConcept.deleteMany({ where: { schoolId } });
       await tx.curriculumChapter.deleteMany({ where: { schoolId } });
@@ -404,6 +427,10 @@ export class SchoolsService {
       await tx.promotionCycle.deleteMany({ where: { schoolId } });
       await tx.announcement.deleteMany({ where: { schoolId } });
       await tx.faculty.deleteMany({ where: { schoolId, userId: null } });
+      // Every uploaded file goes, except the photos of the faculty who stay.
+      const unused = { schoolId, faculty: { none: {} } };
+      const files = await tx.fileObject.findMany({ where: unused, select: { key: true } });
+      await tx.fileObject.deleteMany({ where: unused });
       return files.map((f) => f.key);
     }, { timeout: 60_000, maxWait: 10_000 });
     // Stored bytes go once the rows are gone (best effort; nothing points at them any more).

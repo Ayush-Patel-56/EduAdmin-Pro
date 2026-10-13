@@ -55,6 +55,9 @@ export type Batch = {
   coordinator: { id: string; name: string } | null
   facultyCount: number
   chapterCount: number
+  studentCount: number
+  materialCount: number
+  assignmentCount: number
 }
 
 export type Faculty = {

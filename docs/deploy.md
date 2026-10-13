@@ -129,6 +129,23 @@ WHERE "batchId" IS NOT NULL AND "rollNumber" IS NOT NULL GROUP BY 1, 2 HAVING co
 
 If either returns rows, fix those students (another photo, another roll number) and run the check again. A failed run rolls back completely, so after fixing the data, `prisma migrate resolve --rolled-back 20261013100000_students_hardening` and `migrate deploy` again.
 
+## Teacher portal (`20261013150000_teacher_portal`)
+
+New tables (study material, assignments with staff-recorded submissions, counseling sessions), new nullable or defaulted faculty columns (designation, primary subject and stream, uploaded photo) and four new upload kinds. Wrapped in a transaction; nothing to check before deploying. Adding enum values inside a transaction needs PostgreSQL 12 or later (Neon runs 16+).
+
+Study material accepts PDF, DOCX, ZIP and MP4 up to 50 MB; question sheets and submitted work accept PDF, DOCX and images up to 10 MB. With R2, the bucket's CORS rule below covers these uploads too.
+
+## Teacher portal hardening (`20261013160000_teacher_portal_hardening`)
+
+One transaction: unique indexes so an uploaded file belongs to one record (`Faculty.photoFileId`, `StudyMaterial.fileId`, `Assignment.questionFileId`, `AssignmentSubmission.fileId`). The API already checks this before attaching a file; the indexes decide when two requests race past that check (the loser gets a 409). They fail if duplicates exist, so check first and expect no rows:
+
+```sql
+SELECT "photoFileId", count(*) FROM "Faculty" WHERE "photoFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "fileId", count(*) FROM "StudyMaterial" GROUP BY 1 HAVING count(*) > 1;
+SELECT "questionFileId", count(*) FROM "Assignment" WHERE "questionFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "fileId", count(*) FROM "AssignmentSubmission" WHERE "fileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+```
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

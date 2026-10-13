@@ -4,6 +4,7 @@ import { rename, rm } from 'node:fs/promises';
 import { Transform } from 'node:stream';
 import {
   Body,
+  ForbiddenException,
   Controller,
   Get,
   HttpCode,
@@ -51,6 +52,26 @@ export class FilesController {
         // Only admins edit student records.
         await this.access.assertAdmin(userId, schoolId);
         return;
+      case 'FACULTY_PHOTO': {
+        // Admins edit any profile; a teacher edits their own.
+        const teacher = await this.access
+          .teacherScope(userId)
+          .catch(() => null);
+        if (teacher?.facultyId && teacher.schoolId === schoolId) return;
+        await this.access.assertAdmin(userId, schoolId);
+        return;
+      }
+      case 'STUDY_MATERIAL':
+      case 'ASSIGNMENT_SHEET':
+      case 'SUBMISSION': {
+        // Teaching uploads come from active faculty of this school (admins
+        // see and preview them, they don't upload them).
+        const teacher = await this.access.teacherScope(userId).catch(() => null);
+        if (!teacher || teacher.schoolId !== schoolId || !teacher.active) {
+          throw new ForbiddenException('Only active faculty of this school can upload this');
+        }
+        return;
+      }
     }
   }
 

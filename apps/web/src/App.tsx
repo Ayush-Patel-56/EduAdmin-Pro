@@ -33,6 +33,13 @@ const StudentsPage = lazy(() => import('@/features/admin/students/StudentsPage')
 const TeacherStudentsPage = lazy(() =>
   import('@/features/teacher/TeacherStudentsPage').then((m) => ({ default: m.TeacherStudentsPage })),
 )
+const TeacherPortalPage = lazy(() =>
+  import('@/features/admin/teacher-portal/TeacherPortalPage').then((m) => ({ default: m.TeacherPortalPage })),
+)
+const CounselingPage = lazy(() => import('@/features/admin/counseling/CounselingPage').then((m) => ({ default: m.CounselingPage })))
+const WorkspacePage = lazy(() => import('@/features/teacher/workspace/WorkspacePage').then((m) => ({ default: m.WorkspacePage })))
+const CounselingLogPage = lazy(() => import('@/features/teacher/CounselingLogPage').then((m) => ({ default: m.CounselingLogPage })))
+const MyProfilePage = lazy(() => import('@/features/teacher/MyProfilePage').then((m) => ({ default: m.MyProfilePage })))
 const TeacherAcademicPlanningPage = lazy(() =>
   import('@/features/teacher/TeacherAcademicPlanningPage').then((m) => ({ default: m.TeacherAcademicPlanningPage })),
 )
@@ -44,10 +51,16 @@ const adminPages: Record<string, ReactNode> = {
   curriculum: lazyPage(<CurriculumPage />),
   recruitment: lazyPage(<RecruitmentPage />),
   students: lazyPage(<StudentsPage />),
+  'teacher-portal': lazyPage(<TeacherPortalPage />),
+  counseling: lazyPage(<CounselingPage />),
 }
 const teacherPages: Record<string, ReactNode> = {
   'academic-planning': lazyPage(<TeacherAcademicPlanningPage />),
   students: lazyPage(<TeacherStudentsPage />),
+  courses: lazyPage(<WorkspacePage />),
+  assignments: lazyPage(<WorkspacePage />),
+  'counseling-log': lazyPage(<CounselingLogPage />),
+  profile: lazyPage(<MyProfilePage />),
 }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 

@@ -12,6 +12,7 @@ import {
   type StudentStatus,
   type TeacherStudentDetail,
 } from '@/features/students/api'
+import { COUNSELING_STATUS_LABELS, COUNSELING_TYPE_LABELS, useTeacherSessions } from '@/features/counseling/api'
 import { useTeacherContext } from './useTeacherDashboard'
 
 const pill =
@@ -242,11 +243,34 @@ function StudentDetailView({ student }: { student: TeacherStudentDetail }) {
               </ul>
             )}
           </Card>
-          <Card title="Counseling Notes">
-            <p className="text-center text-sm text-slate-500 italic">No counseling notes found.</p>
-          </Card>
+          <CounselingNotes studentId={student.id} />
         </div>
       </div>
     </div>
+  )
+}
+
+/** The sessions this teacher held with the student (their own notes only). */
+function CounselingNotes({ studentId }: { studentId: string }) {
+  const sessions = useTeacherSessions({ studentId })
+  return (
+    <Card title="Counseling Notes">
+      {sessions.isPending ? (
+        <Loader2 className="mx-auto size-5 animate-spin text-slate-300" aria-label="Loading" />
+      ) : !sessions.data || sessions.data.length === 0 ? (
+        <p className="text-center text-sm text-slate-500 italic">No counseling notes found.</p>
+      ) : (
+        <ul className="space-y-3">
+          {sessions.data.slice(0, 5).map((c) => (
+            <li key={c.id} className="text-sm">
+              <p className="text-xs font-semibold text-slate-800">
+                {COUNSELING_TYPE_LABELS[c.type]} · {formatDay(c.date)} · {COUNSELING_STATUS_LABELS[c.status]}
+              </p>
+              {c.notes && <p className="mt-0.5 text-xs whitespace-pre-line text-slate-600">{c.notes}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   )
 }
