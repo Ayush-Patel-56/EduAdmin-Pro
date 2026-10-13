@@ -60,6 +60,15 @@ describe('Clear All Data is one transaction', () => {
     expect(removeObjects).toHaveBeenCalledWith(['schools/s/photo/1']);
   });
 
+  it('linked faculty stay, and so do their photos; every other file of the school goes', async () => {
+    await schools.clearAllData(auth, 'school-1', 'Demo School');
+    const wheres = deleteMany.mock.calls.map((c) => (c[0] as { where: unknown }).where);
+    expect(wheres).toContainEqual({ schoolId: 'school-1', userId: null });
+    const unused = { schoolId: 'school-1', faculty: { none: {} } };
+    expect(wheres).toContainEqual(unused);
+    expect(findMany.mock.calls.map((c) => (c[0] as { where: unknown }).where)).toContainEqual(unused);
+  });
+
   it('a failure part-way rolls everything back: no second transaction, nothing committed outside', async () => {
     // The academic half fails; recruitment data must not already be gone.
     deleteMany.mockImplementation(async () => {

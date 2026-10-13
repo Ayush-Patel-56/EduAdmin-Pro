@@ -79,6 +79,8 @@ export function SessionDialog(props: Props) {
     if (!v.time) return setError('Time is required')
     const minutes = Number(v.durationMinutes)
     if (!Number.isInteger(minutes) || minutes < 5 || minutes > 480) return setError('Duration must be between 5 and 480 minutes')
+    // PRD 5.14: a teacher logs 15 to 90 minutes (a longer one an admin set stays as it is).
+    if (!admin && minutes !== session?.durationMinutes && (minutes < 15 || minutes > 90)) return setError('Duration must be between 15 and 90 minutes')
     if (v.nextSessionDate && v.nextSessionDate < v.date) return setError('The next session can’t be before this one')
     setBusy(true)
     try {

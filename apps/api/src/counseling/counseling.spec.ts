@@ -24,7 +24,7 @@ function build() {
 }
 
 describe('CounselingService: admins', () => {
-  const dto = (counselor: string) => ({ ...fields(), counselor }) as ScheduleSessionDto;
+  const dto = (counselor: string) => fields({ counselor } as Partial<SessionFields>) as ScheduleSessionDto;
 
   it("a student or counselor from another school is refused (looked up with this school)", async () => {
     const { service, prisma } = build();
@@ -38,6 +38,8 @@ describe('CounselingService: admins', () => {
     expect(prisma.faculty.findFirst.mock.calls[0][0].where).toMatchObject({ id: 'f-other', schoolId: 'school-1' });
     prisma.schoolMembership.findFirst.mockResolvedValue(null);
     await expect(service.schedule('school-1', 'u', dto('admin:user-other'))).rejects.toThrow('Select a counselor from this school');
+    // An admin counselor must be an active admin of this school, not of any school.
+    expect(prisma.schoolMembership.findFirst.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', userId: 'user-other', role: 'ADMIN', status: 'ACTIVE' });
     expect(prisma.counselingSession.create).not.toHaveBeenCalled();
   });
 
@@ -67,6 +69,25 @@ describe('CounselingService: faculty', () => {
     await service.teacherList(scope(), { q: 'riya' });
     expect(prisma.counselingSession.findMany.mock.calls[0][0].where).toMatchObject({ schoolId: 'school-1', counselorFacultyId: 'fac-1' });
     await expect(service.teacherList(scope({ facultyId: null }), {})).resolves.toEqual([]);
+    // A counselor filter can't widen it to someone else's sessions.
+    await service.teacherList(scope(), { counselor: 'faculty:fac-2' });
+    expect(prisma.counselingSession.findMany.mock.calls[1][0].where.counselorFacultyId).toBe('fac-1');
+  });
+
+  it("an inactive teacher no longer reads counseling notes", async () => {
+    const { service, prisma } = build();
+    await expect(service.teacherList(scope({ active: false }), {})).resolves.toEqual([]);
+    expect(prisma.counselingSession.findMany).not.toHaveBeenCalled();
+  });
+
+  it('a teacher logs 15 to 90 minutes (PRD 5.14); an unchanged longer duration set by an admin is kept', async () => {
+    const { service, prisma } = build();
+    prisma.student.findFirst.mockResolvedValue({ id: 'st-1' });
+    await expect(service.teacherLog(scope(), 'u', fields({ durationMinutes: 120 }))).rejects.toThrow('between 15 and 90');
+    await expect(service.teacherLog(scope(), 'u', fields({ durationMinutes: 10 }))).rejects.toThrow('between 15 and 90');
+    prisma.counselingSession.findFirst.mockResolvedValue({ id: 'c1', durationMinutes: 120 });
+    await expect(service.teacherUpdate(scope(), 'c1', fields({ durationMinutes: 120 }))).resolves.toEqual({ id: 'c1' });
+    await expect(service.teacherUpdate(scope(), 'c1', fields({ durationMinutes: 100 }))).rejects.toThrow('between 15 and 90');
   });
 
   it('logs only with students the teacher can see', async () => {

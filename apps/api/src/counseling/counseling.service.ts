@@ -172,12 +172,13 @@ export class CounselingService {
   // Faculty
 
   async teacherList(scope: TeacherScope, query: CounselingQuery) {
-    if (!scope.facultyId) return [];
+    // Counseling notes are sensitive: an inactive teacher no longer reads them.
+    if (!scope.active || !scope.facultyId) return [];
     const rows = await this.prisma.counselingSession.findMany({
       where: {
         schoolId: scope.schoolId,
         counselorFacultyId: scope.facultyId,
-        ...filters({ ...query, counselor: null }),
+        ...filters(query, false),
       },
       include: sessionInclude,
       orderBy: { scheduledAt: 'desc' },
@@ -189,6 +190,7 @@ export class CounselingService {
   /** A teacher logs a session they held (or will hold) with a student they can see. */
   async teacherLog(scope: TeacherScope, userId: string, dto: SessionFields) {
     const facultyId = this.requireTeacher(scope);
+    teacherDuration(dto.durationMinutes);
     await this.requireVisibleStudent(scope, dto.studentId);
     const faculty = await this.prisma.faculty.findUniqueOrThrow({
       where: { id: facultyId },
@@ -211,7 +213,8 @@ export class CounselingService {
   }
 
   async teacherUpdate(scope: TeacherScope, id: string, dto: SessionFields & { status?: CounselingStatus }) {
-    await this.ownSession(scope, id);
+    const current = await this.ownSession(scope, id);
+    teacherDuration(dto.durationMinutes, current.durationMinutes);
     await this.requireVisibleStudent(scope, dto.studentId);
     await this.prisma.counselingSession.update({
       where: { id },
@@ -252,9 +255,10 @@ export class CounselingService {
     const facultyId = this.requireTeacher(scope);
     const row = await this.prisma.counselingSession.findFirst({
       where: { id, schoolId: scope.schoolId, counselorFacultyId: facultyId },
-      select: { id: true },
+      select: { id: true, durationMinutes: true },
     });
     if (!row) throw new NotFoundException('Session not found');
+    return row;
   }
 
   private async requireStudent(schoolId: string, studentId: string) {
@@ -301,9 +305,17 @@ function counselorKey(s: { counselorUserId: string | null; counselorFacultyId: s
   return null;
 }
 
-function filters(query: CounselingQuery): Prisma.CounselingSessionWhereInput {
+/** PRD 5.14: a teacher logs 15 to 90 minutes (admins may schedule longer). An unchanged duration is kept. */
+function teacherDuration(minutes: number, current?: number) {
+  if (minutes !== current && (minutes < 15 || minutes > 90)) {
+    throw new BadRequestException('Duration must be between 15 and 90 minutes');
+  }
+}
+
+/** `byCounselor: false` ignores the counselor filter (a teacher only sees their own sessions anyway). */
+function filters(query: CounselingQuery, byCounselor = true): Prisma.CounselingSessionWhereInput {
   const q = query.q?.trim();
-  const [kind, id] = query.counselor?.split(':') ?? [];
+  const [kind, id] = (byCounselor && query.counselor?.split(':')) || [];
   return {
     ...(query.status && { status: query.status }),
     ...(query.type && { type: query.type }),

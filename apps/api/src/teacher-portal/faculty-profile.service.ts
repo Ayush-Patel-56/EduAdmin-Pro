@@ -48,6 +48,8 @@ function facultyClash(dto: { email?: string | null; employeeId?: string | null }
     if (hit('email')) return `Another faculty profile already uses ${dto.email}`;
     if (hit('employeeId'))
       return `Employee ID ${dto.employeeId} is already used by another faculty member`;
+    if (hit('photoFileId'))
+      return 'That photo is already used by another faculty member; upload it again';
     return 'Someone changed this profile at the same time. Refresh and try again.';
   };
 }
@@ -177,7 +179,7 @@ export class FacultyProfileService {
   }
 
   /** Edit Faculty: every field, plus the batch list (new ones join as Primary). */
-  async update(schoolId: string, facultyId: string, dto: FacultyDto) {
+  async update(schoolId: string, userId: string, facultyId: string, dto: FacultyDto) {
     const current = await this.prisma.faculty.findFirst({
       where: { id: facultyId, schoolId },
       select: {
@@ -204,7 +206,7 @@ export class FacultyProfileService {
     if (batches.length !== new Set(dto.batchIds).size) {
       throw new BadRequestException('Select batches from this school');
     }
-    await this.checkPhoto(schoolId, dto.photoFileId, current.photoFileId);
+    await this.checkPhoto(schoolId, userId, dto.photoFileId, current.photoFileId);
 
     // The edited subject becomes the primary one; other subjects stay.
     const subjects = cleanSubjects([dto.subject, ...current.subjects]);
@@ -245,8 +247,9 @@ export class FacultyProfileService {
         }),
       facultyClash(dto),
     );
+    // The profile is saved; a photo that can't be removed now is left for the cleanup.
     if (current.photo && current.photoFileId !== data.photoFileId) {
-      await this.files.discard([current.photo]);
+      await this.files.discardQuietly([current.photo]);
     }
     return { id: facultyId };
   }
@@ -311,17 +314,20 @@ export class FacultyProfileService {
     return this.get(schoolId, facultyId);
   }
 
-  async updateOwn(schoolId: string, facultyId: string, dto: OwnProfileDto) {
+  async updateOwn(schoolId: string, userId: string, facultyId: string, dto: OwnProfileDto) {
     const current = await this.prisma.faculty.findFirst({
       where: { id: facultyId, schoolId },
       select: { photoFileId: true, photo: { select: { id: true, key: true } } },
     });
     if (!current) throw new NotFoundException('Faculty profile not found');
-    await this.checkPhoto(schoolId, dto.photoFileId, current.photoFileId);
+    await this.checkPhoto(schoolId, userId, dto.photoFileId, current.photoFileId);
     const data = contactData(dto);
-    await this.prisma.faculty.update({ where: { id: facultyId }, data });
+    await duplicateAsConflict(
+      () => this.prisma.faculty.update({ where: { id: facultyId }, data }),
+      facultyClash({}),
+    );
     if (current.photo && current.photoFileId !== data.photoFileId) {
-      await this.files.discard([current.photo]);
+      await this.files.discardQuietly([current.photo]);
     }
     return { id: facultyId };
   }
@@ -337,10 +343,9 @@ export class FacultyProfileService {
     return faculty;
   }
 
-  private async checkPhoto(schoolId: string, next: string | null | undefined, current: string | null) {
-    if (next && next !== current) {
-      await this.files.findReady(schoolId, next, 'FACULTY_PHOTO');
-    }
+  /** A new photo must be this user's own READY upload that nothing else uses. */
+  private async checkPhoto(schoolId: string, userId: string, next: string | null | undefined, current: string | null) {
+    if (next) await this.files.claim(schoolId, next, 'FACULTY_PHOTO', userId, current);
   }
 
   private async unassign(

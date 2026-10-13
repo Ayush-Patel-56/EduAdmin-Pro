@@ -135,6 +135,17 @@ New tables (study material, assignments with staff-recorded submissions, counsel
 
 Study material accepts PDF, DOCX, ZIP and MP4 up to 50 MB; question sheets and submitted work accept PDF, DOCX and images up to 10 MB. With R2, the bucket's CORS rule below covers these uploads too.
 
+## Teacher portal hardening (`20261013160000_teacher_portal_hardening`)
+
+One transaction: unique indexes so an uploaded file belongs to one record (`Faculty.photoFileId`, `StudyMaterial.fileId`, `Assignment.questionFileId`, `AssignmentSubmission.fileId`). The API already checks this before attaching a file; the indexes decide when two requests race past that check (the loser gets a 409). They fail if duplicates exist, so check first and expect no rows:
+
+```sql
+SELECT "photoFileId", count(*) FROM "Faculty" WHERE "photoFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "fileId", count(*) FROM "StudyMaterial" GROUP BY 1 HAVING count(*) > 1;
+SELECT "questionFileId", count(*) FROM "Assignment" WHERE "questionFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "fileId", count(*) FROM "AssignmentSubmission" WHERE "fileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+```
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

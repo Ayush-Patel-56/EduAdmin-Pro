@@ -72,7 +72,7 @@ export class TeacherPortalController {
     @Body() dto: FacultyDto,
   ) {
     await this.access.assertAdmin(auth.userId, schoolId);
-    return this.profiles.update(schoolId, facultyId, dto);
+    return this.profiles.update(schoolId, auth.userId, facultyId, dto);
   }
 
   @Put('faculty/:facultyId/subjects')
@@ -146,6 +146,6 @@ export class TeacherProfileController {
   @Patch()
   async update(@Auth() auth: AuthContext, @Body() dto: OwnProfileDto) {
     const { schoolId, facultyId } = await this.me(auth);
-    return this.profiles.updateOwn(schoolId, facultyId, dto);
+    return this.profiles.updateOwn(schoolId, auth.userId, facultyId, dto);
   }
 }

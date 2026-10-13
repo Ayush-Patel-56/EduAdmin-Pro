@@ -64,9 +64,10 @@ export class FilesController {
       case 'STUDY_MATERIAL':
       case 'ASSIGNMENT_SHEET':
       case 'SUBMISSION': {
-        // Teaching uploads come from active faculty of this school.
-        const teacher = await this.access.teacherScope(userId);
-        if (teacher.schoolId !== schoolId || !teacher.active) {
+        // Teaching uploads come from active faculty of this school (admins
+        // see and preview them, they don't upload them).
+        const teacher = await this.access.teacherScope(userId).catch(() => null);
+        if (!teacher || teacher.schoolId !== schoolId || !teacher.active) {
           throw new ForbiddenException('Only active faculty of this school can upload this');
         }
         return;

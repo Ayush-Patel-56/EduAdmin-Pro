@@ -428,7 +428,7 @@ model Faculty {
   status          FacultyStatus      @default(ACTIVE)
   bio             String?
   profileImageUrl String?
-  photoFileId     String? // an uploaded photo (takes precedence over the link)
+  photoFileId     String?            @unique // an uploaded photo (takes precedence over the link)
   designation     FacultyDesignation @default(TEACHER)
   primarySubject  String? // one of `subjects`, starred on the profile
   primaryStream   String? // e.g. Science, Commerce
@@ -849,7 +849,7 @@ model StudyMaterial {
   chapter     String? // chapter / topic
   type        MaterialType
   isPublic    Boolean      @default(true)
-  fileId      String
+  fileId      String       @unique // one record per uploaded file
   facultyId   String? // the uploading teacher; null once their profile is deleted
   createdAt   DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
@@ -876,7 +876,7 @@ model Assignment {
   type           AssignmentType
   dueAt          DateTime       @db.Timestamptz(3) // due date + time, entered in IST
   totalMarks     Int
-  questionFileId String?
+  questionFileId String?        @unique
   facultyId      String? // the teacher who set it
   createdAt      DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
@@ -901,7 +901,7 @@ model AssignmentSubmission {
   status       SubmissionStatus @default(PENDING)
   score        Decimal?         @db.Decimal(6, 2)
   feedback     String?
-  fileId       String?
+  fileId       String?          @unique
   submittedOn  DateTime?        @db.Date
   gradedAt     DateTime?        @db.Timestamptz(3)
   gradedById   String? // user id

@@ -144,6 +144,29 @@ describe('FilesService', () => {
   });
 });
 
+describe('FilesService.claim', () => {
+  it("a file is attached only if it's this user's READY upload for that purpose and nothing uses it yet", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const files = new FilesService({ fileObject: { findFirst } } as unknown as PrismaService, config({ NODE_ENV: 'development' }));
+    await expect(files.claim('s1', 'f1', 'STUDY_MATERIAL', 'teacher-1')).rejects.toThrow('Upload the file again');
+    expect(findFirst.mock.calls[0][0].where).toEqual({
+      id: 'f1',
+      schoolId: 's1',
+      purpose: 'STUDY_MATERIAL',
+      status: 'READY',
+      uploadedById: 'teacher-1',
+      students: { none: {} },
+      faculty: { none: {} },
+      materials: { none: {} },
+      assignments: { none: {} },
+      submissions: { none: {} },
+    });
+    // The record's own current file can be saved again.
+    await expect(files.claim('s1', 'f1', 'STUDY_MATERIAL', 'teacher-1', 'f1')).resolves.toBeUndefined();
+    expect(findFirst).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('FilesService: teaching uploads', () => {
   let root: string;
   beforeEach(async () => {
@@ -207,6 +230,9 @@ describe('FilesController: who may upload what', () => {
     await expect(otherSchool.create(auth, 's1', body('SUBMISSION'))).rejects.toBeInstanceOf(ForbiddenException);
     const ok = build({ teacherScope: vi.fn().mockResolvedValue({ schoolId: 's1', active: true }) });
     await expect(ok.create(auth, 's1', body('ASSIGNMENT_SHEET'))).resolves.toBeDefined();
+    // An admin (no faculty profile) is told plainly, not "Join a school".
+    const admin = build({ teacherScope: vi.fn().mockRejectedValue(new ForbiddenException('Join a school')) });
+    await expect(admin.create(auth, 's1', body('STUDY_MATERIAL'))).rejects.toThrow('Only active faculty of this school can upload this');
   });
 
   it('a faculty photo: a teacher of the school, otherwise only an admin', async () => {

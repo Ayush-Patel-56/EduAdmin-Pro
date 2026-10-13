@@ -12,10 +12,11 @@ import {
   parseDate,
   toIsoDate,
 } from '../common/dates.js';
-import type {
-  AssignmentType,
-  MaterialType,
+import { duplicateAsConflict } from '../common/unique-violation.js';
+import {
   Prisma,
+  type AssignmentType,
+  type MaterialType,
 } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { FilesService } from '../storage/files.service.js';
@@ -29,6 +30,24 @@ import {
 } from './workspace.dto.js';
 
 type FileRow = { key: string; originalName: string; contentType: string; size: number };
+type Db = Prisma.TransactionClient;
+
+/** A unique file index decided a race: the file went to another record first. */
+const fileClash = (names: string[]) =>
+  names.some((n) => /fileId/i.test(n))
+    ? 'That file is already attached to something else; upload it again'
+    : 'Someone else saved this at the same time. Refresh and try again.';
+
+/**
+ * Locks the assignment row until the transaction ends. Edits take it FOR
+ * UPDATE and grading FOR SHARE, so total marks and the scores checked against
+ * them never change under each other (graders don't block one another).
+ */
+async function lockAssignment(tx: Db, schoolId: string, id: string, mode: 'UPDATE' | 'SHARE') {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Assignment" WHERE "id" = ${id} AND "schoolId" = ${schoolId} FOR ${Prisma.raw(mode)}`;
+  if (rows.length === 0) throw new NotFoundException('Assignment not found');
+}
 
 const materialInclude = {
   batch: { select: { id: true, name: true } },
@@ -97,10 +116,14 @@ export class WorkspaceService {
     const facultyId = this.requireTeacher(scope);
     this.requireBatch(scope, dto.batchId);
     await this.files.claim(scope.schoolId, dto.fileId, 'STUDY_MATERIAL', userId);
-    const row = await this.prisma.studyMaterial.create({
-      data: { schoolId: scope.schoolId, facultyId, ...materialData(dto) },
-      select: { id: true },
-    });
+    const row = await duplicateAsConflict(
+      () =>
+        this.prisma.studyMaterial.create({
+          data: { schoolId: scope.schoolId, facultyId, ...materialData(dto) },
+          select: { id: true },
+        }),
+      fileClash,
+    );
     return { id: row.id };
   }
 
@@ -108,15 +131,18 @@ export class WorkspaceService {
     const current = await this.ownMaterial(scope, id);
     this.requireBatch(scope, dto.batchId);
     await this.files.claim(scope.schoolId, dto.fileId, 'STUDY_MATERIAL', userId, current.fileId);
-    await this.prisma.studyMaterial.update({ where: { id }, data: materialData(dto) });
-    if (current.fileId !== dto.fileId) await this.files.discard([current.file]);
+    await duplicateAsConflict(
+      () => this.prisma.studyMaterial.update({ where: { id }, data: materialData(dto) }),
+      fileClash,
+    );
+    if (current.fileId !== dto.fileId) await this.files.discardQuietly([current.file]);
     return { id };
   }
 
   async deleteMaterial(scope: TeacherScope, id: string) {
     const current = await this.ownMaterial(scope, id);
     await this.prisma.studyMaterial.delete({ where: { id } });
-    await this.files.discard([current.file]);
+    await this.files.discardQuietly([current.file]);
     return { ok: true };
   }
 
@@ -148,49 +174,67 @@ export class WorkspaceService {
     if (dto.questionFileId) {
       await this.files.claim(scope.schoolId, dto.questionFileId, 'ASSIGNMENT_SHEET', userId);
     }
-    const row = await this.prisma.assignment.create({
-      data: { schoolId: scope.schoolId, facultyId, ...assignmentData(dto) },
-      select: { id: true },
-    });
+    const row = await duplicateAsConflict(
+      () =>
+        this.prisma.assignment.create({
+          data: { schoolId: scope.schoolId, facultyId, ...assignmentData(dto) },
+          select: { id: true },
+        }),
+      fileClash,
+    );
     return { id: row.id };
   }
 
   async updateAssignment(scope: TeacherScope, userId: string, id: string, dto: AssignmentDto) {
-    const current = await this.ownAssignment(scope, id);
     this.requireBatch(scope, dto.batchId);
-    if (dto.batchId !== current.batchId && current._count.submissions > 0) {
-      throw new BadRequestException(
-        'Grades are already recorded for this assignment, so it stays with its batch',
-      );
-    }
-    const highest = await this.prisma.assignmentSubmission.aggregate({
-      where: { assignmentId: id },
-      _max: { score: true },
-    });
-    if (highest._max.score !== null && Number(highest._max.score) > dto.totalMarks) {
-      throw new BadRequestException(
-        `A student already scored ${Number(highest._max.score)}; total marks can't be lower`,
-      );
-    }
-    if (dto.questionFileId) {
-      await this.files.claim(scope.schoolId, dto.questionFileId, 'ASSIGNMENT_SHEET', userId, current.questionFileId);
-    }
-    await this.prisma.assignment.update({ where: { id }, data: assignmentData(dto) });
-    if (current.questionFile && current.questionFileId !== (dto.questionFileId ?? null)) {
-      await this.files.discard([current.questionFile]);
-    }
+    const replaced = await duplicateAsConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          // Locked first: a grade saved meanwhile waits, then sees the new total.
+          await lockAssignment(tx, scope.schoolId, id, 'UPDATE');
+          const current = await this.ownAssignment(scope, id, tx);
+          if (dto.batchId !== current.batchId && current._count.submissions > 0) {
+            throw new BadRequestException(
+              'Grades are already recorded for this assignment, so it stays with its batch',
+            );
+          }
+          const highest = await tx.assignmentSubmission.aggregate({
+            where: { assignmentId: id },
+            _max: { score: true },
+          });
+          if (highest._max.score !== null && Number(highest._max.score) > dto.totalMarks) {
+            throw new BadRequestException(
+              `A student already scored ${Number(highest._max.score)}; total marks can't be lower`,
+            );
+          }
+          if (dto.questionFileId) {
+            await this.files.claim(scope.schoolId, dto.questionFileId, 'ASSIGNMENT_SHEET', userId, current.questionFileId);
+          }
+          await tx.assignment.update({ where: { id }, data: assignmentData(dto) });
+          return current.questionFile && current.questionFileId !== (dto.questionFileId ?? null)
+            ? current.questionFile
+            : null;
+        }),
+      fileClash,
+    );
+    if (replaced) await this.files.discardQuietly([replaced]);
     return { id };
   }
 
   /** Deletes the assignment with its recorded submissions and their files. */
   async deleteAssignment(scope: TeacherScope, id: string) {
-    const current = await this.ownAssignment(scope, id);
-    const files = await this.prisma.fileObject.findMany({
-      where: { submissions: { some: { assignmentId: id } } },
-      select: { id: true, key: true },
+    const files = await this.prisma.$transaction(async (tx) => {
+      // Locked, so no grade (and its file) is added after the files are listed.
+      await lockAssignment(tx, scope.schoolId, id, 'UPDATE');
+      const current = await this.ownAssignment(scope, id, tx);
+      const submitted = await tx.fileObject.findMany({
+        where: { submissions: { some: { assignmentId: id } } },
+        select: { id: true, key: true },
+      });
+      await tx.assignment.delete({ where: { id } });
+      return [...submitted, ...(current.questionFile ? [current.questionFile] : [])];
     });
-    await this.prisma.assignment.delete({ where: { id } });
-    await this.files.discard([...files, ...(current.questionFile ? [current.questionFile] : [])]);
+    await this.files.discardQuietly(files);
     return { ok: true };
   }
 
@@ -256,26 +300,7 @@ export class WorkspaceService {
     dto: SubmissionDto,
   ) {
     this.requireTeacher(scope);
-    const assignment = await this.visibleAssignment(scope, assignmentId);
-    const [student, existing] = await Promise.all([
-      this.prisma.student.findFirst({
-        where: {
-          id: studentId,
-          schoolId: scope.schoolId,
-          OR: [{ batchId: assignment.batchId }, { submissions: { some: { assignmentId } } }],
-        },
-        select: { id: true },
-      }),
-      this.prisma.assignmentSubmission.findUnique({
-        where: { assignmentId_studentId: { assignmentId, studentId } },
-        select: { fileId: true, file: { select: { id: true, key: true } } },
-      }),
-    ]);
-    if (!student) throw new NotFoundException('That student isn’t in this assignment’s batch');
     const score = dto.score ?? null;
-    if (score !== null && score > assignment.totalMarks) {
-      throw new BadRequestException(`Score can be at most ${assignment.totalMarks}`);
-    }
     if (dto.status === 'GRADED' && score === null) {
       throw new BadRequestException('Enter a score to mark it graded');
     }
@@ -284,26 +309,53 @@ export class WorkspaceService {
     if (submittedOn && submittedOn > istToday()) {
       throw new BadRequestException("Submitted on can't be in the future");
     }
-    if (dto.fileId) {
-      await this.files.claim(scope.schoolId, dto.fileId, 'SUBMISSION', userId, existing?.fileId);
-    }
-    const data = {
-      status,
-      score,
-      feedback: dto.feedback ?? null,
-      submittedOn: status === 'PENDING' ? null : submittedOn,
-      fileId: dto.fileId ?? null,
-      gradedAt: status === 'GRADED' ? new Date() : null,
-      gradedById: status === 'GRADED' ? userId : null,
-    };
-    await this.prisma.assignmentSubmission.upsert({
-      where: { assignmentId_studentId: { assignmentId, studentId } },
-      create: { schoolId: scope.schoolId, assignmentId, studentId, ...data },
-      update: data,
-    });
-    if (existing?.file && existing.fileId !== data.fileId) {
-      await this.files.discard([existing.file]);
-    }
+    const replaced = await duplicateAsConflict(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          // Total marks are read under the lock, so an edit can't lower them
+          // below this score in the meantime.
+          await lockAssignment(tx, scope.schoolId, assignmentId, 'SHARE');
+          const assignment = await this.visibleAssignment(scope, assignmentId, tx);
+          const [student, existing] = await Promise.all([
+            tx.student.findFirst({
+              where: {
+                id: studentId,
+                schoolId: scope.schoolId,
+                OR: [{ batchId: assignment.batchId }, { submissions: { some: { assignmentId } } }],
+              },
+              select: { id: true },
+            }),
+            tx.assignmentSubmission.findUnique({
+              where: { assignmentId_studentId: { assignmentId, studentId } },
+              select: { fileId: true, file: { select: { id: true, key: true } } },
+            }),
+          ]);
+          if (!student) throw new NotFoundException('That student isn’t in this assignment’s batch');
+          if (score !== null && score > assignment.totalMarks) {
+            throw new BadRequestException(`Score can be at most ${assignment.totalMarks}`);
+          }
+          if (dto.fileId) {
+            await this.files.claim(scope.schoolId, dto.fileId, 'SUBMISSION', userId, existing?.fileId);
+          }
+          const data = {
+            status,
+            score,
+            feedback: dto.feedback ?? null,
+            submittedOn: status === 'PENDING' ? null : submittedOn,
+            fileId: dto.fileId ?? null,
+            gradedAt: status === 'GRADED' ? new Date() : null,
+            gradedById: status === 'GRADED' ? userId : null,
+          };
+          await tx.assignmentSubmission.upsert({
+            where: { assignmentId_studentId: { assignmentId, studentId } },
+            create: { schoolId: scope.schoolId, assignmentId, studentId, ...data },
+            update: data,
+          });
+          return existing?.file && existing.fileId !== data.fileId ? existing.file : null;
+        }),
+      fileClash,
+    );
+    if (replaced) await this.files.discardQuietly([replaced]);
     return { status, score };
   }
 
@@ -330,20 +382,28 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Material the teacher uploaded, in a batch that is still theirs: a teacher
+   * taken off a batch no longer changes (or deletes) what is in it.
+   */
   private async ownMaterial(scope: TeacherScope, id: string) {
     const facultyId = this.requireTeacher(scope);
     const row = await this.prisma.studyMaterial.findFirst({
       where: { id, schoolId: scope.schoolId },
-      select: { facultyId: true, fileId: true, file: { select: { id: true, key: true } } },
+      select: { facultyId: true, batchId: true, fileId: true, file: { select: { id: true, key: true } } },
     });
     if (!row) throw new NotFoundException('Study material not found');
     if (row.facultyId !== facultyId) throw new ForbiddenException('Only the teacher who uploaded it can change it');
+    if (!scope.batchIds.includes(row.batchId)) {
+      throw new ForbiddenException('That batch is no longer assigned to you');
+    }
     return row;
   }
 
-  private async ownAssignment(scope: TeacherScope, id: string) {
+  /** Like `ownMaterial`: set by this teacher, in one of their batches. */
+  private async ownAssignment(scope: TeacherScope, id: string, db: Db = this.prisma) {
     const facultyId = this.requireTeacher(scope);
-    const row = await this.prisma.assignment.findFirst({
+    const row = await db.assignment.findFirst({
       where: { id, schoolId: scope.schoolId },
       select: {
         facultyId: true,
@@ -355,12 +415,15 @@ export class WorkspaceService {
     });
     if (!row) throw new NotFoundException('Assignment not found');
     if (row.facultyId !== facultyId) throw new ForbiddenException('Only the teacher who set it can change it');
+    if (!scope.batchIds.includes(row.batchId)) {
+      throw new ForbiddenException('That batch is no longer assigned to you');
+    }
     return row;
   }
 
   /** Any assignment of the teacher's batches (all their teachers grade it). */
-  private async visibleAssignment(scope: TeacherScope, id: string) {
-    const row = await this.prisma.assignment.findFirst({
+  private async visibleAssignment(scope: TeacherScope, id: string, db: Db = this.prisma) {
+    const row = await db.assignment.findFirst({
       where: { id, schoolId: scope.schoolId, batchId: { in: scope.active ? scope.batchIds : [] } },
       include: { batch: { select: { name: true } } },
     });

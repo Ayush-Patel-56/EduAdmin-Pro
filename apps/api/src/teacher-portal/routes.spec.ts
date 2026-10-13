@@ -90,7 +90,7 @@ describe('TeacherProfileController', () => {
     await controller.get(auth);
     await controller.update(auth, {});
     expect(own).toHaveBeenCalledWith('their-school', 'their-profile');
-    expect(updateOwn).toHaveBeenCalledWith('their-school', 'their-profile', {});
+    expect(updateOwn).toHaveBeenCalledWith('their-school', auth.userId, 'their-profile', {});
   });
 
   it('a teacher without a faculty profile gets a clear 403', async () => {

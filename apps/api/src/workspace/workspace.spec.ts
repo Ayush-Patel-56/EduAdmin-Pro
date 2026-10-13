@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { realUniqueError } from '../common/prisma-errors.fixture.js';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { FilesService } from '../storage/files.service.js';
@@ -25,8 +26,12 @@ function build() {
     assignmentSubmission: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue(null), upsert: vi.fn(), aggregate: vi.fn().mockResolvedValue({ _max: { score: null } }) },
     student: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(), groupBy: vi.fn().mockResolvedValue([]) },
     fileObject: { findMany: vi.fn().mockResolvedValue([]) },
+    // The row lock; the transaction runs against the same mocks.
+    $queryRaw: vi.fn().mockResolvedValue([{ id: 'a1' }]),
+    $transaction: vi.fn(),
   };
-  const files = { claim: vi.fn(), discard: vi.fn(), url: vi.fn() };
+  prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => unknown) => run(prisma));
+  const files = { claim: vi.fn(), discardQuietly: vi.fn(), url: vi.fn() };
   const service = new WorkspaceService(prisma as unknown as PrismaService, files as unknown as FilesService);
   return { prisma, files, service };
 }
@@ -78,10 +83,27 @@ describe('WorkspaceService: study material', () => {
 
   it('replacing the file deletes the old one', async () => {
     const { service, prisma, files } = build();
-    prisma.studyMaterial.findFirst.mockResolvedValue({ facultyId: 'fac-1', fileId: 'old', file: { id: 'old', key: 'k-old' } });
+    prisma.studyMaterial.findFirst.mockResolvedValue({ facultyId: 'fac-1', batchId: 'b-mine', fileId: 'old', file: { id: 'old', key: 'k-old' } });
     await service.updateMaterial(scope(), 'u', 'm1', material({ fileId: 'new' }));
     expect(files.claim).toHaveBeenCalledWith('school-1', 'new', 'STUDY_MATERIAL', 'u', 'old');
-    expect(files.discard).toHaveBeenCalledWith([{ id: 'old', key: 'k-old' }]);
+    expect(files.discardQuietly).toHaveBeenCalledWith([{ id: 'old', key: 'k-old' }]);
+  });
+
+  it('two records racing for one file: the unique index decides, the loser gets a 409', async () => {
+    const { service, prisma } = build();
+    prisma.studyMaterial.create.mockRejectedValue(realUniqueError('StudyMaterial_fileId_key', 'StudyMaterial'));
+    await expect(service.createMaterial(scope(), 'u', material())).rejects.toEqual(
+      new ConflictException('That file is already attached to something else; upload it again'),
+    );
+    prisma.assignment.create.mockRejectedValue(realUniqueError('Assignment_questionFileId_key', 'Assignment'));
+    await expect(service.createAssignment(scope(), 'u', assignment({ questionFileId: 'f' }))).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("a teacher taken off the batch can't change or delete what they uploaded there", async () => {
+    const { service, prisma } = build();
+    prisma.studyMaterial.findFirst.mockResolvedValue({ facultyId: 'fac-1', batchId: 'b-old', fileId: 'f', file: { id: 'f', key: 'k' } });
+    await expect(service.deleteMaterial(scope(), 'm1')).rejects.toThrow('no longer assigned');
+    expect(prisma.studyMaterial.delete).not.toHaveBeenCalled();
   });
 });
 
@@ -93,6 +115,52 @@ describe('WorkspaceService: assignments and grading', () => {
   });
 
   const visible = { id: 'a1', batchId: 'b-mine', totalMarks: 50, title: 'DPP', dueAt: new Date(), batch: { name: 'Batch A' } };
+
+  it("only the teacher who set it can edit or delete an assignment, and only while it's in their batch", async () => {
+    const { service, prisma } = build();
+    prisma.assignment.findFirst.mockResolvedValue({ facultyId: 'fac-2', batchId: 'b-mine', questionFileId: null, questionFile: null, _count: { submissions: 0 } });
+    await expect(service.deleteAssignment(scope(), 'a1')).rejects.toThrow('Only the teacher who set it');
+    // Removed from the batch: deleting would wipe the other teachers' grades.
+    prisma.assignment.findFirst.mockResolvedValue({ facultyId: 'fac-1', batchId: 'b-old', questionFileId: null, questionFile: null, _count: { submissions: 4 } });
+    await expect(service.deleteAssignment(scope(), 'a1')).rejects.toThrow('no longer assigned');
+    expect(prisma.assignment.delete).not.toHaveBeenCalled();
+  });
+
+  it('deleting an assignment locks it first, then removes its files (quietly: the delete already happened)', async () => {
+    const { service, prisma, files } = build();
+    prisma.assignment.findFirst.mockResolvedValue({ facultyId: 'fac-1', batchId: 'b-mine', questionFileId: 'q', questionFile: { id: 'q', key: 'kq' }, _count: { submissions: 1 } });
+    prisma.fileObject.findMany.mockResolvedValue([{ id: 's1', key: 'ks' }]);
+    await expect(service.deleteAssignment(scope(), 'a1')).resolves.toEqual({ ok: true });
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.assignment.findFirst.mock.invocationCallOrder[0]);
+    expect(files.discardQuietly).toHaveBeenCalledWith([{ id: 's1', key: 'ks' }, { id: 'q', key: 'kq' }]);
+  });
+
+  it('grading reads total marks under a shared lock; editing takes an exclusive one', async () => {
+    const { service, prisma } = build();
+    prisma.assignment.findFirst.mockResolvedValue(visible);
+    prisma.student.findFirst.mockResolvedValue({ id: 'st-1' });
+    await service.saveSubmission(scope(), 'u', 'a1', 'st-1', { status: 'SUBMITTED', score: 10 });
+    const sql = (i: number) => (prisma.$queryRaw.mock.calls[i][0] as string[]).join('?');
+    expect(sql(0)).toMatch(/FROM "Assignment" WHERE "id" = \? AND "schoolId" = \? FOR \?/);
+    expect(prisma.$queryRaw.mock.calls[0].slice(1, 3)).toEqual(['a1', 'school-1']);
+    expect(prisma.$queryRaw.mock.calls[0][3]).toMatchObject({ strings: ['SHARE'] });
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.assignment.findFirst.mock.invocationCallOrder[0]);
+    prisma.assignment.findFirst.mockResolvedValue({ facultyId: 'fac-1', batchId: 'b-mine', questionFileId: null, questionFile: null, _count: { submissions: 0 } });
+    await service.updateAssignment(scope(), 'u', 'a1', assignment());
+    expect(prisma.$queryRaw.mock.calls[1][3]).toMatchObject({ strings: ['UPDATE'] });
+  });
+
+  it("only a student of the assignment's batch (or already graded on it) can be graded", async () => {
+    const { service, prisma } = build();
+    prisma.assignment.findFirst.mockResolvedValue(visible);
+    prisma.student.findFirst.mockResolvedValue({ id: 'st-1' });
+    await service.saveSubmission(scope(), 'u', 'a1', 'st-1', { status: 'SUBMITTED' });
+    expect(prisma.student.findFirst.mock.calls[0][0].where).toEqual({
+      id: 'st-1',
+      schoolId: 'school-1',
+      OR: [{ batchId: 'b-mine' }, { submissions: { some: { assignmentId: 'a1' } } }],
+    });
+  });
 
   it('grading: score above total, or Graded without a score, is refused', async () => {
     const { service, prisma } = build();
@@ -124,6 +192,7 @@ describe('WorkspaceService: assignments and grading', () => {
   it("total marks can't drop below a score already given, and a graded assignment keeps its batch", async () => {
     const { service, prisma } = build();
     prisma.assignment.findFirst.mockResolvedValue({ facultyId: 'fac-1', batchId: 'b-mine', questionFileId: null, questionFile: null, _count: { submissions: 3 } });
+    // The highest score is read inside the locked transaction.
     prisma.assignmentSubmission.aggregate.mockResolvedValue({ _max: { score: 45 } });
     await expect(service.updateAssignment(scope(), 'u', 'a1', assignment({ totalMarks: 40 }))).rejects.toThrow('scored 45');
     await expect(service.updateAssignment(scope({ batchIds: ['b-mine', 'b-two'] }), 'u', 'a1', assignment({ batchId: 'b-two' }))).rejects.toThrow('stays with its batch');

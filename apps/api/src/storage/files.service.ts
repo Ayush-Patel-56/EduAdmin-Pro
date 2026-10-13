@@ -317,6 +317,19 @@ export class FilesService {
     );
   }
 
+  /**
+   * `discard` after the record that used the files is already gone: the
+   * request succeeded, so a failure here is logged (the abandoned-file
+   * cleanup retries) instead of turning that success into a 500.
+   */
+  async discardQuietly(files: { id: string; key: string; schoolId?: string }[]) {
+    await this.discard(files).catch((err: unknown) => {
+      this.logger.warn(
+        `Could not remove files ${files.map((f) => f.id).join(', ')}: ${(err as Error).message}`,
+      );
+    });
+  }
+
   /** Whether an upload key still belongs to a PENDING file (development storage checks this before accepting bytes). */
   async acceptsUpload(key: string) {
     const match = UPLOAD_KEY.exec(key);
