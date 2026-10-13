@@ -7,6 +7,62 @@ import { toIsoDate } from '../common/dates.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type { PromotionStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { CLASS_OPTIONS } from '../schools/school-options.js';
+
+type Db = Pick<PrismaService, 'student'>;
+
+/** The class a student moves up to: the next grade, if the school offers it. 12th and later aren't promoted. */
+export function nextClass(classLevel: string, offered: string[]) {
+  const i = CLASS_OPTIONS.indexOf(classLevel as (typeof CLASS_OPTIONS)[number]);
+  if (i === -1 || i >= CLASS_OPTIONS.indexOf('12th')) return null;
+  const next = CLASS_OPTIONS[i + 1];
+  return offered.includes(next) ? next : null;
+}
+
+/**
+ * Who moves where this cycle. Active students admitted before the boundary
+ * move up one class; new admissions (admitted on or after it) are held, Class
+ * 12 is left for the school to handle, and students without a class (or whose
+ * next class the school doesn't offer) stay where they are.
+ */
+export async function planPromotion(
+  db: Db,
+  schoolId: string,
+  offered: string[],
+  boundaryDate: Date,
+) {
+  const students = await db.student.findMany({
+    where: { schoolId, status: 'ACTIVE' },
+    select: { id: true, classLevel: true, admissionDate: true },
+  });
+  const groups = new Map<string, { toClass: string; ids: string[] }>();
+  let heldNewAdmissions = 0;
+  let class12Excluded = 0;
+  let notPromoted = 0;
+  for (const s of students) {
+    if (s.admissionDate && s.admissionDate >= boundaryDate) heldNewAdmissions++;
+    else if (s.classLevel === '12th') class12Excluded++;
+    else {
+      const to = s.classLevel ? nextClass(s.classLevel, offered) : null;
+      if (!to) notPromoted++;
+      else {
+        const group = groups.get(s.classLevel!) ?? { toClass: to, ids: [] };
+        group.ids.push(s.id);
+        groups.set(s.classLevel!, group);
+      }
+    }
+  }
+  const order = (c: string) => CLASS_OPTIONS.indexOf(c as (typeof CLASS_OPTIONS)[number]);
+  return {
+    studentsTracked: students.length > 0,
+    groups: [...groups.entries()]
+      .sort(([a], [b]) => order(a) - order(b))
+      .map(([fromClass, g]) => ({ fromClass, toClass: g.toClass, ids: g.ids })),
+    heldNewAdmissions,
+    class12Excluded,
+    notPromoted,
+  };
+}
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -40,7 +96,7 @@ export class PromotionService {
   async overview(schoolId: string) {
     const school = await this.prisma.school.findUniqueOrThrow({
       where: { id: schoolId },
-      select: { academicYearStartMonth: true },
+      select: { academicYearStartMonth: true, classes: true },
     });
     const { academicYear, boundaryDate } = currentAcademicYear(
       school.academicYearStartMonth,
@@ -51,23 +107,26 @@ export class PromotionService {
       take: 20,
     });
     const decided = history.some((c) => c.academicYear === academicYear);
+    const plan = decided
+      ? null
+      : await planPromotion(this.prisma, schoolId, school.classes, boundaryDate);
     return {
       checkedAt: new Date().toISOString(),
-      pending: decided
-        ? null
-        : {
+      pending: plan
+        ? {
             academicYear,
             boundaryDate: toIsoDate(boundaryDate),
-            // Filled from student records once the Students module exists.
-            studentsTracked: false,
-            rows: [] as {
-              fromClass: string;
-              toClass: string;
-              students: number;
-            }[],
-            heldNewAdmissions: 0,
-            class12Excluded: 0,
-          },
+            studentsTracked: plan.studentsTracked,
+            rows: plan.groups.map((g) => ({
+              fromClass: g.fromClass,
+              toClass: g.toClass,
+              students: g.ids.length,
+            })),
+            heldNewAdmissions: plan.heldNewAdmissions,
+            class12Excluded: plan.class12Excluded,
+            notPromoted: plan.notPromoted,
+          }
+        : null,
       history: history.map((c) => ({
         id: c.id,
         academicYear: c.academicYear,
@@ -100,17 +159,40 @@ export class PromotionService {
         'Promotion can be confirmed once student records exist. Until then you can dismiss it.',
       );
     }
+    const boundaryDate = new Date(`${pending.boundaryDate}T00:00:00Z`);
     try {
-      await this.prisma.promotionCycle.create({
-        data: {
-          schoolId,
-          academicYear,
-          boundaryDate: new Date(`${pending.boundaryDate}T00:00:00Z`),
-          status,
-          studentCount: 0,
-          decidedById: userId,
-        },
-      });
+      await this.prisma.$transaction(async (tx) => {
+        const school = await tx.school.findUniqueOrThrow({
+          where: { id: schoolId },
+          select: { classes: true },
+        });
+        // Planned again inside the transaction, so it moves exactly the
+        // students that exist now.
+        const plan =
+          status === 'CONFIRMED'
+            ? await planPromotion(tx, schoolId, school.classes, boundaryDate)
+            : null;
+        // The cycle row goes first: a second confirm hits its unique key and
+        // rolls back before any student moves.
+        await tx.promotionCycle.create({
+          data: {
+            schoolId,
+            academicYear,
+            boundaryDate,
+            status,
+            studentCount:
+              plan?.groups.reduce((sum, g) => sum + g.ids.length, 0) ?? 0,
+            decidedById: userId,
+          },
+        });
+        // Each group was collected before any update, so nobody moves twice.
+        for (const group of plan?.groups ?? []) {
+          await tx.student.updateMany({
+            where: { id: { in: group.ids }, schoolId },
+            data: { classLevel: group.toClass },
+          });
+        }
+      }, { timeout: 60_000, maxWait: 10_000 });
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&

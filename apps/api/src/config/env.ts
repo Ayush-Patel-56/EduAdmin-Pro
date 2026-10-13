@@ -5,6 +5,12 @@ type Env = Record<string, unknown>;
 
 const NODE_ENVS = ['development', 'production', 'test'];
 const BOOLEANS = ['true', 'false'];
+export const R2_KEYS = [
+  'R2_ACCOUNT_ID',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+  'R2_BUCKET',
+];
 
 export function validateEnv(env: Env): Env {
   const errors: string[] = [];
@@ -39,6 +45,14 @@ export function validateEnv(env: Env): Env {
     errors.push(
       'TRUST_PROXY must be the number of proxy hops in front of the API, e.g. 1',
     );
+  }
+
+  // Cloudflare R2 (file uploads): all of these or none. Without them, uploads
+  // go to a local folder in development and are switched off in production.
+  const r2 = R2_KEYS.filter((key) => str(key));
+  if (r2.length > 0 && r2.length < R2_KEYS.length) {
+    const missing = R2_KEYS.filter((key) => !str(key));
+    errors.push(`R2 storage needs ${missing.join(', ')} as well`);
   }
 
   if (str('NODE_ENV') === 'production') {

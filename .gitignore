@@ -12,3 +12,6 @@ coverage
 .vscode/*
 !.vscode/extensions.json
 *.tsbuildinfo
+
+# Uploaded files in development (LocalDriver)
+.storage

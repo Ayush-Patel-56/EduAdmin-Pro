@@ -18,6 +18,7 @@ import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
 import { unlinkProgramChapters } from '../curriculum/unlink-program-chapters.js';
+import { FilesService } from '../storage/files.service.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
   CLASS_OPTIONS,
@@ -39,6 +40,7 @@ export class SchoolsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: AccessService,
+    private readonly files: FilesService,
   ) {}
 
   options() {
@@ -290,6 +292,7 @@ export class SchoolsService {
         const ids = removed.map((p) => p.id);
         // Curriculum chapters keep existing without a program (409 if that would duplicate one).
         await unlinkProgramChapters(tx, schoolId, ids);
+        await tx.student.updateMany({ where: { schoolId, programId: { in: ids } }, data: { programId: null } });
         await tx.program.deleteMany({ where: { schoolId, id: { in: ids } } });
       }
       const existingKeys = new Set(existing.map((p) => p.name.toLowerCase()));
@@ -325,7 +328,7 @@ export class SchoolsService {
   /** What Clear All Data would remove, shown before the owner confirms. */
   async clearPreview(auth: AuthContext, schoolId: string) {
     await this.access.assertOwner(auth.userId, schoolId);
-    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts, recruitment] = await Promise.all([
+    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts, students, recruitment] = await Promise.all([
       this.prisma.program.count({ where: { schoolId } }),
       this.prisma.batch.count({ where: { schoolId } }),
       this.prisma.syllabusItem.count({ where: { schoolId } }),
@@ -334,6 +337,7 @@ export class SchoolsService {
       this.prisma.promotionCycle.count({ where: { schoolId } }),
       this.prisma.curriculumChapter.count({ where: { schoolId } }),
       this.prisma.curriculumConcept.count({ where: { schoolId } }),
+      this.prisma.student.count({ where: { schoolId } }),
       Promise.all([
         this.prisma.jobRequirement.count({ where: { schoolId } }),
         this.prisma.candidate.count({ where: { schoolId } }),
@@ -351,6 +355,7 @@ export class SchoolsService {
       promotionCycles,
       chapters,
       concepts,
+      students,
       requirements,
       candidates,
       interviews,
@@ -365,7 +370,7 @@ export class SchoolsService {
   async clearAllData(auth: AuthContext, schoolId: string, confirmName: string) {
     await this.access.assertOwner(auth.userId, schoolId);
     await this.assertConfirmName(schoolId, confirmName);
-    await this.prisma.$transaction(async (tx) => {
+    const fileKeys = await this.prisma.$transaction(async (tx) => {
       const removed = await Promise.all([
         tx.jobRequirement.count({ where: { schoolId } }),
         tx.candidate.count({ where: { schoolId } }),
@@ -384,7 +389,11 @@ export class SchoolsService {
         summary: `Clear All Data: removed ${removed[0]} requirements, ${removed[1]} candidates (with interviews), ${removed[2]} appraisals`,
       });
       // Same transaction as the recruitment wipe above: either everything is
-      // cleared (and audited) or nothing is.
+      // cleared (and audited) or nothing is. Students (with guardians and
+      // batch history) go before the batches and programs they point at.
+      await tx.student.deleteMany({ where: { schoolId } });
+      const files = await tx.fileObject.findMany({ where: { schoolId }, select: { key: true } });
+      await tx.fileObject.deleteMany({ where: { schoolId } });
       await tx.syllabusItem.deleteMany({ where: { schoolId } });
       await tx.curriculumConcept.deleteMany({ where: { schoolId } });
       await tx.curriculumChapter.deleteMany({ where: { schoolId } });
@@ -395,7 +404,10 @@ export class SchoolsService {
       await tx.promotionCycle.deleteMany({ where: { schoolId } });
       await tx.announcement.deleteMany({ where: { schoolId } });
       await tx.faculty.deleteMany({ where: { schoolId, userId: null } });
+      return files.map((f) => f.key);
     }, { timeout: 60_000, maxWait: 10_000 });
+    // Stored bytes go once the rows are gone (best effort; nothing points at them any more).
+    await this.files.removeObjects(fileKeys);
     return { ok: true };
   }
 
@@ -403,7 +415,8 @@ export class SchoolsService {
   async deleteSchool(auth: AuthContext, schoolId: string, confirmName: string) {
     await this.access.assertOwner(auth.userId, schoolId);
     await this.assertConfirmName(schoolId, confirmName);
-    await this.prisma.$transaction(async (tx) => {
+    const fileKeys = await this.prisma.$transaction(async (tx) => {
+      const files = await tx.fileObject.findMany({ where: { schoolId }, select: { key: true } });
       // Sessions only hold the id as a preference; drop it so nobody is left
       // pointing at a deleted school.
       await tx.session.updateMany({ where: { activeSchoolId: schoolId }, data: { activeSchoolId: null } });
@@ -415,7 +428,9 @@ export class SchoolsService {
         summary: `Deleted school "${confirmName.trim()}" with all its recruitment and appraisal records`,
       });
       await tx.school.delete({ where: { id: schoolId } });
+      return files.map((f) => f.key);
     }, { timeout: 30_000 });
+    await this.files.removeObjects(fileKeys);
     return { ok: true };
   }
 

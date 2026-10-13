@@ -51,4 +51,19 @@ describe('validateEnv', () => {
       }),
     ).toBeTruthy();
   });
+
+  it('takes R2 settings all together or not at all', () => {
+    expect(() => validateEnv({ ...base, R2_BUCKET: 'files' })).toThrow(
+      /R2 storage needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY/,
+    );
+    expect(
+      validateEnv({
+        ...base,
+        R2_ACCOUNT_ID: 'acc',
+        R2_ACCESS_KEY_ID: 'key',
+        R2_SECRET_ACCESS_KEY: 'secret',
+        R2_BUCKET: 'files',
+      }),
+    ).toBeTruthy();
+  });
 });

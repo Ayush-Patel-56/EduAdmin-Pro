@@ -16,6 +16,8 @@ type Overview = {
     rows: { fromClass: string; toClass: string; students: number }[]
     heldNewAdmissions: number
     class12Excluded: number
+    /** No class set, or the next class isn't offered by the school. */
+    notPromoted: number
   } | null
   history: { id: string; academicYear: string; boundaryDate: string; status: 'CONFIRMED' | 'DISMISSED'; studentCount: number; decidedAt: string }[]
 }
@@ -74,6 +76,11 @@ export function PromotionTab() {
             )}
             <p className="mt-3 text-xs text-slate-600">{pending.heldNewAdmissions} new admissions held to next year.</p>
             <p className="text-xs text-slate-600">{pending.class12Excluded} Class 12 students excluded — handle manually.</p>
+            {pending.notPromoted > 0 && (
+              <p className="text-xs text-slate-600">
+                {pending.notPromoted} student{pending.notPromoted === 1 ? '' : 's'} stay in place: no class set, or the next class isn’t offered by this school.
+              </p>
+            )}
             <div className="mt-5 flex gap-3">
               <button
                 type="button"

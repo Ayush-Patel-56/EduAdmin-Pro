@@ -189,7 +189,7 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
       $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     } as unknown as PrismaService;
     const access = { assertOwner: vi.fn() } as unknown as AccessService;
-    const schools = new SchoolsService(prisma, access);
+    const schools = new SchoolsService(prisma, access, {} as never);
     await expect(
       schools.updateSchool({ userId: 'u1' } as AuthContext, 's1', {
         name: 'S',

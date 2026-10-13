@@ -113,6 +113,24 @@ Migration folders must sort in the order they were created: use timestamps later
 
 - The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
 
+## Students (`20261013090000_students`)
+
+New tables only (students, guardians, batch history, uploaded-file metadata), wrapped in a transaction, so there is nothing to check before deploying.
+
+## File storage (Cloudflare R2)
+
+Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.
+
+1. Create an R2 bucket (keep public access off) and an API token with Object Read & Write on it.
+2. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` on the API (all four, or none).
+3. Add a CORS rule to the bucket so the web app can upload and show files:
+
+   ```json
+   [{ "AllowedOrigins": ["https://<your web origin>"], "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["Content-Type"], "MaxAgeSeconds": 3600 }]
+   ```
+
+Without these settings, production refuses uploads with a clear message (everything else works); development uses `apps/api/.storage` instead (git-ignored, served through the API with signed links that stop working when the API restarts). Uploads that are never completed, and photos never attached to a student, are removed after a day; deleting a student, Clear All Data and deleting a school remove their files too.
+
 ## After deploying the invite-code change: review existing admins
 
 Before this change, any admin account that entered a school's invite code, the same code teachers use, became an ADMIN of that school. Nothing records which code was used, so review every admin who is not the school's owner:

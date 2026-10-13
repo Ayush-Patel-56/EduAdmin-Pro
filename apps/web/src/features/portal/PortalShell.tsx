@@ -4,7 +4,7 @@ import { Bell, BellOff, HelpCircle, LogOut, Menu, Settings, X, type LucideIcon }
 import { useDismiss } from '@/components/ui/useDismiss'
 import { useLogout } from '@/features/auth/session'
 import { preferencesOf, type AccentTheme, type Me } from '@/features/auth/types'
-import { GlobalSearch, type SearchItem } from './GlobalSearch'
+import { GlobalSearch, type RemoteSearch, type SearchItem } from './GlobalSearch'
 import { HelpCenterDialog } from './HelpCenterDialog'
 import { PreferencesDialog } from './PreferencesDialog'
 
@@ -31,6 +31,8 @@ type PortalShellProps = {
   /** School / program / batch pickers above the navigation. */
   selectors: ReactNode
   avatarClassName: string
+  /** Finds records (e.g. students) for the header search. */
+  searchRemote?: RemoteSearch
   /** The menu that opens under the avatar. */
   renderProfileMenu: (actions: ProfileMenuActions) => ReactNode
   children: ReactNode
@@ -49,6 +51,7 @@ export function PortalShell({
   extraPages = [],
   selectors,
   avatarClassName,
+  searchRemote,
   renderProfileMenu,
   children,
 }: PortalShellProps) {
@@ -158,7 +161,7 @@ export function PortalShell({
             <Menu className="size-5" />
           </button>
           <div className="hidden min-w-0 flex-1 sm:block">
-            <GlobalSearch items={searchItems} />
+            <GlobalSearch items={searchItems} remote={searchRemote} />
           </div>
           <div className="ml-auto flex items-center gap-4 sm:gap-5">
             <HeaderButton icon={HelpCircle} label="Help Center" onClick={() => setDialog('help')} />

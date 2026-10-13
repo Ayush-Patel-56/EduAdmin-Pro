@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { AccessService } from '../academic/access.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { FilesService } from '../storage/files.service.js';
 import { SchoolsService } from './schools.service.js';
 
 const auth = { userId: 'owner-1', sessionId: 's', activeSchoolId: null };
@@ -8,6 +9,8 @@ const auth = { userId: 'owner-1', sessionId: 's', activeSchoolId: null };
 describe('Clear All Data is one transaction', () => {
   const deleteMany = vi.fn().mockResolvedValue({ count: 1 });
   const count = vi.fn().mockResolvedValue(1);
+  const findMany = vi.fn().mockResolvedValue([{ key: 'schools/s/photo/1' }]);
+  const removeObjects = vi.fn();
   const tx = new Proxy(
     {
       user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ fullName: 'Owner' }) },
@@ -15,7 +18,7 @@ describe('Clear All Data is one transaction', () => {
     } as Record<string, unknown>,
     {
       get: (target, key: string) =>
-        key in target ? target[key] : { deleteMany, count },
+        key in target ? target[key] : { deleteMany, count, findMany },
     },
   );
   const transaction = vi.fn(async (run: (t: unknown) => unknown) => run(tx));
@@ -40,6 +43,7 @@ describe('Clear All Data is one transaction', () => {
       .useMocker((token) => {
         if (token === PrismaService) return prisma;
         if (token === AccessService) return { assertOwner: vi.fn() };
+        if (token === FilesService) return { removeObjects };
         return {};
       })
       .compile();
@@ -50,8 +54,10 @@ describe('Clear All Data is one transaction', () => {
     await schools.clearAllData(auth, 'school-1', 'Demo School');
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(outside).not.toHaveBeenCalled();
-    // recruitment (4) + academic (10) deletes all went through the transaction
-    expect(deleteMany.mock.calls.length).toBeGreaterThanOrEqual(14);
+    // recruitment (4) + students, files and academic (12) deletes all went through the transaction
+    expect(deleteMany.mock.calls.length).toBeGreaterThanOrEqual(16);
+    // Stored files are removed only after the rows are gone.
+    expect(removeObjects).toHaveBeenCalledWith(['schools/s/photo/1']);
   });
 
   it('a failure part-way rolls everything back: no second transaction, nothing committed outside', async () => {
@@ -65,5 +71,7 @@ describe('Clear All Data is one transaction', () => {
     ).rejects.toThrow('boom');
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(outside).not.toHaveBeenCalled();
+    // Nothing was committed, so no stored file may be deleted.
+    expect(removeObjects).not.toHaveBeenCalled();
   });
 });

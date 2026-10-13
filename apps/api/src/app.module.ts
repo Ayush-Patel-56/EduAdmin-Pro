@@ -10,6 +10,8 @@ import { CurriculumModule } from './curriculum/curriculum.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RecruitmentModule } from './recruitment/recruitment.module.js';
 import { SchoolsModule } from './schools/schools.module.js';
+import { StorageModule } from './storage/storage.module.js';
+import { StudentsModule } from './students/students.module.js';
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import { SchoolsModule } from './schools/schools.module.js';
     AcademicModule,
     CurriculumModule,
     RecruitmentModule,
+    StorageModule,
+    StudentsModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
