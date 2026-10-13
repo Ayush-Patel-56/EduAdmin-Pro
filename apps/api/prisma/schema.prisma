@@ -718,7 +718,7 @@ model Student {
   fullName           String
   admissionNumber    String? // stored upper-cased
   aadharNumber       String? // 12 digits, stored without spaces or dashes
-  rollNumber         String?
+  rollNumber         String? // stored upper-cased (unique per batch)
   email              String? // lower-cased
   phone              String? // 10-digit mobile
   parentContact      String? // 10-digit mobile
@@ -730,7 +730,7 @@ model Student {
   gender             String? // Male / Female / Other
   bloodGroup         String?
   profileImageUrl    String? // an external https image
-  photoFileId        String? // or an uploaded photo (takes precedence)
+  photoFileId        String?       @unique // or an uploaded photo (takes precedence)
   previousSchool     String?
   previousPercentage Decimal?      @db.Decimal(5, 2)
   classLevel         String? // one of the school's classes, e.g. "9th"
@@ -785,19 +785,24 @@ model StudentGuardian {
 }
 
 // Batch history: one open row (endedOn null) for the current batch, closed
-// when the student moves or is unassigned.
+// when the student moves or is unassigned. The batch and program names are
+// kept, so the history still reads right after a batch is deleted (batchId
+// is then cleared). A plain FK (not composite) so the delete can clear it;
+// rows are only ever written for a batch of the student's own school.
 model StudentEnrollment {
-  id         String    @id @default(uuid())
-  schoolId   String
-  studentId  String
-  batchId    String
-  rollNumber String?
-  enrolledOn DateTime  @db.Date
-  endedOn    DateTime? @db.Date
-  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  id          String    @id @default(uuid())
+  schoolId    String
+  studentId   String
+  batchId     String?
+  batchName   String
+  programName String
+  rollNumber  String?
+  enrolledOn  DateTime  @db.Date
+  endedOn     DateTime? @db.Date
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  batch   Batch   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch   Batch?  @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
   @@index([studentId])
   @@index([batchId])

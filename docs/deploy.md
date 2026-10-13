@@ -117,6 +117,18 @@ Migration folders must sort in the order they were created: use timestamps later
 
 New tables only (students, guardians, batch history, uploaded-file metadata), wrapped in a transaction, so there is nothing to check before deploying.
 
+## Students hardening (`20261013100000_students_hardening`)
+
+One transaction: a unique index on `Student.photoFileId` (a photo belongs to one student), batch history that keeps the batch and program names and survives deleting the batch (`StudentEnrollment.batchId` becomes nullable, `ON DELETE SET NULL`), and roll numbers stored upper-cased. The unique indexes fail if duplicates already exist, so check first and expect no rows:
+
+```sql
+SELECT "photoFileId", count(*) FROM "Student" WHERE "photoFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "batchId", upper("rollNumber"), count(*) FROM "Student"
+WHERE "batchId" IS NOT NULL AND "rollNumber" IS NOT NULL GROUP BY 1, 2 HAVING count(*) > 1;
+```
+
+If either returns rows, fix those students (another photo, another roll number) and run the check again. A failed run rolls back completely, so after fixing the data, `prisma migrate resolve --rolled-back 20261013100000_students_hardening` and `migrate deploy` again.
+
 ## Teacher portal (`20261013150000_teacher_portal`)
 
 New tables (study material, assignments with staff-recorded submissions, counseling sessions), new nullable or defaulted faculty columns (designation, primary subject and stream, uploaded photo) and four new upload kinds. Wrapped in a transaction; nothing to check before deploying. Adding enum values inside a transaction needs PostgreSQL 12 or later (Neon runs 16+).
@@ -135,7 +147,9 @@ Uploaded files (student photos now) are private. The browser uploads straight to
    [{ "AllowedOrigins": ["https://<your web origin>"], "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["Content-Type"], "MaxAgeSeconds": 3600 }]
    ```
 
-Without these settings, production refuses uploads with a clear message (everything else works); development uses `apps/api/.storage` instead (git-ignored, served through the API with signed links that stop working when the API restarts). Uploads that are never completed, and photos never attached to a student, are removed after a day; deleting a student, Clear All Data and deleting a school remove their files too.
+4. Add a lifecycle rule that deletes objects under the `uploads/` prefix after 1 day. The browser uploads to `uploads/<school>/<file>`; completing the upload checks the bytes and moves them to the key they are served from. The signed upload URL stays valid for its few minutes even after that, so a second PUT with it could leave bytes behind under `uploads/`. They are never served, and this rule removes them.
+
+Without these settings, production refuses uploads with a clear message (everything else works). For development without R2, set `FILE_STORAGE=local` (the API refuses to start with it in production): files then go to `apps/api/.storage` (git-ignored, served through the API with signed links that stop working when the API restarts), and an upload link stops working once its file is completed. Uploads that are never completed, and photos never attached to a student, are removed after a day; deleting a student, Clear All Data and deleting a school remove their files too.
 
 ## After deploying the invite-code change: review existing admins
 

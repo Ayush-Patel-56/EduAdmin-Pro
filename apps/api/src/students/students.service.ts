@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { TeacherScope } from '../academic/access.service.js';
@@ -18,6 +19,10 @@ import type {
 
 type Tx = Prisma.TransactionClient;
 
+const EXPORT_PAGE = 1000;
+const GUARDIAN_RACE =
+  "Someone else changed this student's guardians at the same time. Refresh and try again.";
+
 /** The 409 for a unique index a student write hit (admission no., Aadhaar, roll no.). */
 export function studentClash(dto: {
   admissionNumber?: string | null;
@@ -32,6 +37,8 @@ export function studentClash(dto: {
       return 'This Aadhaar number is already recorded for another student';
     if (hit('rollNumber'))
       return `Roll number ${dto.rollNumber} is already taken in this batch`;
+    if (hit('photoFileId'))
+      return 'That photo is already used by another student; upload it again for this one';
     return 'Another student already has these details. Refresh and try again.';
   };
 }
@@ -50,14 +57,7 @@ const listInclude = {
 const detailInclude = {
   ...listInclude,
   guardians: { orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }] },
-  enrollments: {
-    orderBy: [{ enrolledOn: 'desc' }, { createdAt: 'desc' }],
-    include: {
-      batch: {
-        select: { id: true, name: true, program: { select: { name: true } } },
-      },
-    },
-  },
+  enrollments: { orderBy: [{ enrolledOn: 'desc' }, { createdAt: 'desc' }] },
 } satisfies Prisma.StudentInclude;
 
 type ListRow = Prisma.StudentGetPayload<{ include: typeof listInclude }>;
@@ -70,6 +70,8 @@ type DetailRow = Prisma.StudentGetPayload<{ include: typeof detailInclude }>;
  */
 @Injectable()
 export class StudentsService {
+  private readonly logger = new Logger(StudentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly files: FilesService,
@@ -91,7 +93,7 @@ export class StudentsService {
   }
 
   async create(schoolId: string, userId: string, dto: StudentDto) {
-    const data = await this.resolve(schoolId, dto);
+    const data = await this.resolve(schoolId, userId, dto);
     const id = await duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
@@ -99,17 +101,7 @@ export class StudentsService {
             data: { schoolId, ...data, createdById: userId },
             select: { id: true },
           });
-          if (data.batchId) {
-            await tx.studentEnrollment.create({
-              data: {
-                schoolId,
-                studentId: student.id,
-                batchId: data.batchId,
-                rollNumber: data.rollNumber,
-                enrolledOn: istToday(),
-              },
-            });
-          }
+          await moveEnrollment(tx, schoolId, student.id, { batchId: null, rollNumber: null }, data);
           return student.id;
         }),
       studentClash(dto),
@@ -117,32 +109,32 @@ export class StudentsService {
     return { id };
   }
 
-  async update(schoolId: string, studentId: string, dto: StudentDto) {
-    const current = await this.prisma.student.findFirst({
-      where: { id: studentId, schoolId },
-      select: {
-        id: true,
-        classLevel: true,
-        batchId: true,
-        rollNumber: true,
-        photoFileId: true,
-        photo: { select: { id: true, key: true } },
-      },
-    });
-    if (!current) throw new NotFoundException('Student not found');
-    const data = await this.resolve(schoolId, dto, current);
-    await duplicateAsConflict(
+  async update(schoolId: string, userId: string, studentId: string, dto: StudentDto) {
+    const replaced = await duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
+          // Locked and read inside the transaction, so the batch history and
+          // the photo are updated against what is really there.
+          await lockStudent(tx, schoolId, studentId);
+          const current = await tx.student.findUniqueOrThrow({
+            where: { id: studentId },
+            select: {
+              classLevel: true,
+              batchId: true,
+              rollNumber: true,
+              photoFileId: true,
+              photo: { select: { id: true, key: true } },
+            },
+          });
+          const data = await this.resolve(schoolId, userId, dto, current);
           await tx.student.update({ where: { id: studentId }, data });
           await moveEnrollment(tx, schoolId, studentId, current, data);
+          return current.photo && current.photoFileId !== data.photoFileId ? current.photo : null;
         }),
       studentClash(dto),
     );
     // The old photo is no longer used once the new one is saved.
-    if (current.photo && current.photoFileId !== data.photoFileId) {
-      await this.files.discard([current.photo]);
-    }
+    if (replaced) await this.discardQuietly(replaced);
     return { id: studentId };
   }
 
@@ -154,15 +146,25 @@ export class StudentsService {
     });
     if (!student) throw new NotFoundException('Student not found');
     await this.prisma.student.delete({ where: { id: studentId } });
-    if (student.photo) await this.files.discard([student.photo]);
+    // The student is gone either way; a photo that can't be removed now is
+    // left for the abandoned-upload cleanup rather than failing the delete.
+    if (student.photo) await this.discardQuietly(student.photo);
     return { ok: true };
+  }
+
+  private async discardQuietly(file: { id: string; key: string }) {
+    await this.files.discard([file]).catch((err: unknown) => {
+      this.logger.warn(`Could not remove photo ${file.id}: ${(err as Error).message}`);
+    });
   }
 
   // Guardians
 
   async addGuardian(schoolId: string, studentId: string, dto: GuardianDto) {
-    await this.findStudent(schoolId, studentId);
-    return this.prisma.$transaction(async (tx) => {
+    return duplicateAsConflict(() => this.prisma.$transaction(async (tx) => {
+      // One guardian change per student at a time, so "first guardian" and
+      // "make primary" decisions see each other.
+      await lockStudent(tx, schoolId, studentId);
       const others = await tx.studentGuardian.count({ where: { studentId } });
       // The first guardian is the primary contact until another is chosen.
       const isPrimary = dto.isPrimary || others === 0;
@@ -177,7 +179,7 @@ export class StudentsService {
         select: { id: true },
       });
       return { id: guardian.id };
-    });
+    }), GUARDIAN_RACE);
   }
 
   async updateGuardian(
@@ -186,8 +188,13 @@ export class StudentsService {
     guardianId: string,
     dto: GuardianDto,
   ) {
-    const guardian = await this.findGuardian(schoolId, studentId, guardianId);
-    await this.prisma.$transaction(async (tx) => {
+    await duplicateAsConflict(() => this.prisma.$transaction(async (tx) => {
+      await lockStudent(tx, schoolId, studentId);
+      const guardian = await tx.studentGuardian.findFirst({
+        where: { id: guardianId, studentId, schoolId },
+        select: { isPrimary: true },
+      });
+      if (!guardian) throw new NotFoundException('Guardian not found');
       if (dto.isPrimary && !guardian.isPrimary) {
         await tx.studentGuardian.updateMany({
           where: { studentId, isPrimary: true },
@@ -199,7 +206,7 @@ export class StudentsService {
         // Unticking the only primary leaves the student without one; that's allowed.
         data: { ...guardianData(dto), isPrimary: dto.isPrimary },
       });
-    });
+    }), GUARDIAN_RACE);
     return { id: guardianId };
   }
 
@@ -209,18 +216,24 @@ export class StudentsService {
     return { ok: true };
   }
 
-  /** Every matching student with export columns (Aadhaar masked). */
+  /**
+   * One page of matching students with export columns (Aadhaar masked). The
+   * web app fetches pages until `hasMore` is false, so nothing is cut off.
+   */
   async exportRows(schoolId: string, query: StudentListQuery) {
+    const page = query.page ?? 1;
     const students = await this.prisma.student.findMany({
       where: { schoolId, ...filtersWhere(query) },
-      orderBy: [{ classLevel: 'asc' }, { rollNumber: 'asc' }, { fullName: 'asc' }],
+      orderBy: [{ classLevel: 'asc' }, { rollNumber: 'asc' }, { fullName: 'asc' }, { id: 'asc' }],
       include: {
         ...listInclude,
         guardians: { where: { isPrimary: true }, take: 1 },
       },
-      take: 5000,
+      skip: (page - 1) * EXPORT_PAGE,
+      take: EXPORT_PAGE + 1,
     });
-    return students.map((s) => {
+    const hasMore = students.length > EXPORT_PAGE;
+    const rows = students.slice(0, EXPORT_PAGE).map((s) => {
       const guardian = s.guardians[0];
       return {
         fullName: s.fullName,
@@ -252,6 +265,7 @@ export class StudentsService {
         guardianEmail: guardian?.email ?? null,
       };
     });
+    return { rows, hasMore };
   }
 
   // Faculty (read-only)
@@ -321,6 +335,8 @@ export class StudentsService {
       previousPercentage: detail.previousPercentage,
       admissionDate: detail.admissionDate,
       status: detail.status,
+      // PRD 5.5 lists notes in the faculty view (they're about the student's learning).
+      notes: detail.notes,
       enrollments: detail.enrollments,
     };
   }
@@ -406,8 +422,10 @@ export class StudentsService {
       })),
       enrollments: s.enrollments.map((e) => ({
         id: e.id,
-        batch: e.batch.name,
-        program: e.batch.program.name,
+        batch: e.batchName,
+        program: e.programName,
+        // false once the batch itself was deleted (the history stays).
+        batchExists: e.batchId !== null,
         rollNumber: e.rollNumber,
         enrolledOn: toIsoDate(e.enrolledOn),
         endedOn: toIsoDate(e.endedOn),
@@ -426,6 +444,7 @@ export class StudentsService {
   /** Checks the form against this school's classes, programs and batches; returns the row to save. */
   private async resolve(
     schoolId: string,
+    userId: string,
     dto: StudentDto,
     current?: { classLevel: string | null; photoFileId: string | null },
   ) {
@@ -433,7 +452,7 @@ export class StudentsService {
       where: { id: schoolId },
       select: { classes: true },
     });
-    const classLevel = dto.classLevel ?? null;
+    let classLevel = dto.classLevel ?? null;
     // A class the school stopped offering stays valid on students who already have it.
     if (
       classLevel &&
@@ -450,9 +469,21 @@ export class StudentsService {
     if (batchId) {
       const batch = await this.prisma.batch.findFirst({
         where: { id: batchId, schoolId },
-        select: { programId: true, program: { select: { name: true } } },
+        select: { name: true, classLevel: true, programId: true, program: { select: { name: true } } },
       });
       if (!batch) throw new BadRequestException('Select a batch from this school');
+      // A batch for one class only takes students of that class (and fills it in when blank).
+      if (batch.classLevel !== null) {
+        const grade = gradeOf(classLevel);
+        if (classLevel && grade !== batch.classLevel) {
+          throw new BadRequestException(
+            `${batch.name} is a class ${batch.classLevel} batch; this student is in ${classLevel}`,
+          );
+        }
+        if (!classLevel && school.classes.includes(`${batch.classLevel}th`)) {
+          classLevel = `${batch.classLevel}th`;
+        }
+      }
       if (programId && programId !== batch.programId) {
         throw new BadRequestException(
           `That batch belongs to ${batch.program.name}; pick it as the program or choose another batch`,
@@ -468,9 +499,11 @@ export class StudentsService {
         throw new BadRequestException('Select a program from this school');
     }
 
+    // A photo this admin uploaded that nothing uses yet (the unique index on
+    // photoFileId catches a race between two saves).
     const photoFileId = dto.photoFileId ?? null;
-    if (photoFileId && photoFileId !== current?.photoFileId) {
-      await this.files.findReady(schoolId, photoFileId, 'STUDENT_PHOTO');
+    if (photoFileId) {
+      await this.files.claim(schoolId, photoFileId, 'STUDENT_PHOTO', userId, current?.photoFileId);
     }
 
     const dateOfBirth = dto.dateOfBirth
@@ -510,15 +543,6 @@ export class StudentsService {
       status: dto.status,
       notes: dto.notes ?? null,
     };
-  }
-
-  private async findStudent(schoolId: string, studentId: string) {
-    const student = await this.prisma.student.findFirst({
-      where: { id: studentId, schoolId },
-      select: { id: true },
-    });
-    if (!student) throw new NotFoundException('Student not found');
-    return student;
   }
 
   private async findGuardian(
@@ -583,16 +607,35 @@ export async function moveEnrollment(
     data: { endedOn: today },
   });
   if (after.batchId) {
+    const batch = await tx.batch.findUniqueOrThrow({
+      where: { id: after.batchId },
+      select: { name: true, program: { select: { name: true } } },
+    });
     await tx.studentEnrollment.create({
       data: {
         schoolId,
         studentId,
         batchId: after.batchId,
+        batchName: batch.name,
+        programName: batch.program.name,
         rollNumber: after.rollNumber,
         enrolledOn: today,
       },
     });
   }
+}
+
+/** Locks the student's row for the rest of the transaction (404 if it isn't in this school). */
+export async function lockStudent(tx: Tx, schoolId: string, studentId: string) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Student" WHERE "id" = ${studentId} AND "schoolId" = ${schoolId} FOR UPDATE`;
+  if (rows.length === 0) throw new NotFoundException('Student not found');
+}
+
+/** "11th" -> 11; "12th Pass", "Repeater" or nothing -> null. */
+export function gradeOf(classLevel: string | null) {
+  const match = classLevel ? /^(\d{1,2})th$/.exec(classLevel) : null;
+  return match ? Number(match[1]) : null;
 }
 
 function guardianData(dto: GuardianDto) {

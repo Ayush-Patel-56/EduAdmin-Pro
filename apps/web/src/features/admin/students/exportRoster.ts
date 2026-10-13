@@ -36,8 +36,16 @@ type ExportRow = {
 
 const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'school'
 
+/** Large rosters come in pages; keep asking until the API says there are no more. */
 async function fetchRows(schoolId: string, filters: Omit<RosterFilters, 'page'>) {
-  const rows = await api<ExportRow[]>(`/schools/${schoolId}/students/export${rosterQuery(filters)}`)
+  const rows: ExportRow[] = []
+  for (let page = 1; ; page++) {
+    const chunk = await api<{ rows: ExportRow[]; hasMore: boolean }>(
+      `/schools/${schoolId}/students/export${rosterQuery({ ...filters, page })}`,
+    )
+    rows.push(...chunk.rows)
+    if (!chunk.hasMore) break
+  }
   if (rows.length === 0) throw new Error('No students match these filters')
   return rows
 }

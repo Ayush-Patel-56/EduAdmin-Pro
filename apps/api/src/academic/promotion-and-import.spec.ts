@@ -36,6 +36,7 @@ describe('PromotionService: confirm needs students', () => {
   const create = vi.fn();
   const studentFindMany = vi.fn();
   const updateMany = vi.fn();
+  const enrollmentUpdateMany = vi.fn();
   const school = {
     findUniqueOrThrow: vi
       .fn()
@@ -45,6 +46,7 @@ describe('PromotionService: confirm needs students', () => {
     school,
     promotionCycle: { create },
     student: { findMany: studentFindMany, updateMany },
+    studentEnrollment: { updateMany: enrollmentUpdateMany },
   };
   const prisma = {
     school,
@@ -59,6 +61,7 @@ describe('PromotionService: confirm needs students', () => {
   beforeEach(() => {
     create.mockReset();
     updateMany.mockReset();
+    enrollmentUpdateMany.mockReset();
     studentFindMany.mockResolvedValue([]);
   });
 
@@ -104,6 +107,23 @@ describe('PromotionService: confirm needs students', () => {
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(
       updateMany.mock.invocationCallOrder[0],
     );
+  });
+
+  it('students in a batch for one class leave it when they move up; open batches keep them', async () => {
+    studentFindMany.mockResolvedValue([
+      { id: 'a', classLevel: '9th', admissionDate: before, batch: { classLevel: 9 } },
+      { id: 'b', classLevel: '9th', admissionDate: before, batch: { classLevel: null } },
+      { id: 'c', classLevel: '9th', admissionDate: before, batch: null },
+    ]);
+    await promotion.decide('school-1', 'user-1', academicYear, 'CONFIRMED');
+    expect(updateMany.mock.calls.map((c) => c[0])).toContainEqual({
+      where: { id: { in: ['a'] }, schoolId: 'school-1' },
+      data: { batchId: null },
+    });
+    expect(enrollmentUpdateMany.mock.calls[0][0]).toEqual({
+      where: { studentId: { in: ['a'] }, schoolId: 'school-1', endedOn: null },
+      data: { endedOn: boundaryDate },
+    });
   });
 
   it('rejects a year that is not the pending one', async () => {

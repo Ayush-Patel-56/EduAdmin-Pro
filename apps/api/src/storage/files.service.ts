@@ -22,6 +22,10 @@ const DOCX =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const IMAGES = ['image/jpeg', 'image/png', 'image/webp'];
 
+/** Where the browser PUTs a file's bytes before they are checked. */
+export const uploadKey = (fileId: string, schoolId: string) => `uploads/${schoolId}/${fileId}`;
+const UPLOAD_KEY = /^uploads\/([0-9a-f-]{36})\/([0-9a-f-]{36})$/;
+
 /** File signatures ("magic bytes"): the start of a real file of each type. */
 const SIGNATURES: Record<string, (head: Buffer) => boolean> = {
   'image/jpeg': (h) => h[0] === 0xff && h[1] === 0xd8 && h[2] === 0xff,
@@ -121,12 +125,14 @@ export class FilesService {
         get('R2_SECRET_ACCESS_KEY'),
         get('R2_BUCKET'),
       );
-    } else if (get('NODE_ENV') !== 'production') {
+    } else if (get('FILE_STORAGE') === 'local') {
+      // Opt-in only (env validation refuses it in production), so a server
+      // that's missing settings fails closed instead of writing to its disk.
       this.driver = new LocalDriver(localStorageRoot());
     } else {
       this.driver = null;
       this.logger.warn(
-        'File uploads are off: set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET to enable them.',
+        'File uploads are off: set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET (or FILE_STORAGE=local in development).',
       );
     }
   }
@@ -181,7 +187,10 @@ export class FilesService {
     });
     return {
       fileId: file.id,
-      upload: await driver.uploadUrl(key, contentType, rule.maxBytes),
+      // The browser writes to a separate upload key; only completion moves the
+      // checked bytes to the key the file is served from, so re-using the
+      // upload URL afterwards can't change a READY file.
+      upload: await driver.uploadUrl(uploadKey(file.id, schoolId), contentType, input.size),
     };
   }
 
@@ -203,7 +212,8 @@ export class FilesService {
     if (file.status === 'READY') return summary(file);
 
     const rule = PURPOSES[file.purpose];
-    const size = await driver.size(file.key);
+    const pending = uploadKey(file.id, schoolId);
+    const size = await driver.size(pending);
     const reject = async (message: string) => {
       await this.discard([file]);
       throw new BadRequestException(message);
@@ -213,14 +223,19 @@ export class FilesService {
       return reject(`The file must be at most ${rule.maxBytes / MB} MB`);
     }
     const check = SIGNATURES[file.contentType];
-    if (!check || !check(await driver.readStart(file.key, 16))) {
+    if (!check || !check(await driver.readStart(pending, 16))) {
       return reject(`That file isn't ${rule.describe}`);
     }
-    const ready = await this.prisma.fileObject.update({
-      where: { id: file.id },
+    // Claim the row first: of two simultaneous completions only one moves the bytes.
+    const claimed = await this.prisma.fileObject.updateMany({
+      where: { id: file.id, status: 'PENDING' },
       data: { status: 'READY', size },
     });
-    return summary(ready);
+    if (claimed.count === 0) {
+      return summary(await this.prisma.fileObject.findUniqueOrThrow({ where: { id: file.id } }));
+    }
+    await driver.move(pending, file.key);
+    return summary({ ...file, size });
   }
 
   /** A READY file of this school and purpose, or a 400 naming the problem. */
@@ -291,12 +306,26 @@ export class FilesService {
   }
 
   /** Deletes the rows and, best effort, the bytes (a missing object is fine). */
-  async discard(files: { id: string; key: string }[]) {
+  async discard(files: { id: string; key: string; schoolId?: string }[]) {
     if (files.length === 0) return;
     await this.prisma.fileObject.deleteMany({
       where: { id: { in: files.map((f) => f.id) } },
     });
-    await this.removeObjects(files.map((f) => f.key));
+    // A file that never completed only has bytes under its upload key.
+    await this.removeObjects(
+      files.flatMap((f) => [f.key, ...(f.schoolId ? [uploadKey(f.id, f.schoolId)] : [])]),
+    );
+  }
+
+  /** Whether an upload key still belongs to a PENDING file (development storage checks this before accepting bytes). */
+  async acceptsUpload(key: string) {
+    const match = UPLOAD_KEY.exec(key);
+    if (!match) return false;
+    const file = await this.prisma.fileObject.findFirst({
+      where: { id: match[2], schoolId: match[1], status: 'PENDING' },
+      select: { id: true },
+    });
+    return file !== null;
   }
 
   /** For after a database delete that already removed the rows (e.g. a school). */
@@ -336,7 +365,7 @@ export class FilesService {
             },
           ],
         },
-        select: { id: true, key: true },
+        select: { id: true, key: true, schoolId: true },
         take: 100,
       });
       await this.discard(stale);

@@ -13,7 +13,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { AADHAAR, ADMISSION_NUMBER, PINCODE } from './students.dto.js';
 import type { StudentImportDto, StudentImportRow } from './students.dto.js';
 import { BLOOD_GROUPS, GENDERS } from './students-options.js';
-import { moveEnrollment } from './students.service.js';
+import { gradeOf, moveEnrollment } from './students.service.js';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -84,16 +84,21 @@ export class StudentImportService {
       }),
       this.prisma.batch.findMany({
         where: { schoolId },
-        select: { id: true, name: true, programId: true },
+        select: { id: true, name: true, programId: true, classLevel: true },
       }),
       this.prisma.student.findMany({
         where: { schoolId },
         select: {
           id: true,
+          fullName: true,
           admissionNumber: true,
           aadharNumber: true,
           batchId: true,
           rollNumber: true,
+          classLevel: true,
+          dateOfBirth: true,
+          phone: true,
+          parentContact: true,
         },
       }),
     ]);
@@ -122,8 +127,18 @@ export class StudentImportService {
     const rollOwner = new Map(
       existing
         .filter((s) => s.batchId && s.rollNumber)
-        .map((s) => [`${s.batchId}|${s.rollNumber!.toLowerCase()}`, s.id]),
+        .map((s) => [`${s.batchId}|${s.rollNumber!.toUpperCase()}`, s.id]),
     );
+    // Students without an admission number or Aadhaar are matched to nobody,
+    // so a re-import would duplicate them; spot the likely ones instead.
+    const lookalike = (name: string, dob: Date | null, phones: (string | null)[]) =>
+      existing.find(
+        (s) =>
+          s.fullName.toLowerCase() === name.toLowerCase() &&
+          ((dob && s.dateOfBirth?.getTime() === dob.getTime()) ||
+            phones.some((p) => p && (p === s.phone || p === s.parentContact))),
+      );
+    const seenPerson = new Map<string, number>();
     const seenAdmission = new Map<string, number>();
     const seenAadhaar = new Map<string, number>();
     const seenRoll = new Map<string, number>();
@@ -250,7 +265,8 @@ export class StudentImportService {
       if (statusText && !status)
         errors.push('Status must be Active, Inactive, Transferred or Completed');
 
-      const rollNumber = text(raw.rollNumber);
+      // Upper-cased like the form, so "r5" and "R5" are one roll number.
+      const rollNumber = text(raw.rollNumber)?.toUpperCase() ?? null;
       const notes = text(raw.notes);
 
       const guardianName = text(raw.guardianName);
@@ -272,6 +288,31 @@ export class StudentImportService {
       if (viaAdmission && viaAadhaar && viaAdmission.id !== viaAadhaar.id)
         errors.push('Admission number and Aadhaar belong to two different students');
       const match = viaAdmission ?? viaAadhaar;
+      // Never change a stored identifier silently.
+      if (viaAadhaar && !viaAdmission && admissionNumber && viaAadhaar.admissionNumber) {
+        errors.push(
+          `This Aadhaar number belongs to ${viaAadhaar.fullName} (admission number ${viaAadhaar.admissionNumber}); fix the admission number or leave it blank`,
+        );
+      }
+      if (viaAdmission && !viaAadhaar && aadharNumber && viaAdmission.aadharNumber) {
+        errors.push(
+          `Admission number ${admissionNumber} belongs to ${viaAdmission.fullName}, who has a different Aadhaar number`,
+        );
+      }
+      if (!admissionNumber && !aadharNumber && fullName) {
+        const twin = lookalike(fullName, dateOfBirth, [phone, parentContact]);
+        if (twin) {
+          errors.push(
+            `Looks like ${twin.fullName}, already on the roster (same name and ${dateOfBirth && twin.dateOfBirth?.getTime() === dateOfBirth.getTime() ? 'date of birth' : 'phone'}). Add their admission number to update them`,
+          );
+        }
+        const person = [fullName.toLowerCase(), dateOfBirth?.toISOString() ?? phone ?? parentContact ?? ''].join('|');
+        if (person.split('|')[1]) {
+          const first = seenPerson.get(person);
+          if (first) errors.push(`Same student as row ${first}`);
+          else seenPerson.set(person, row);
+        }
+      }
 
       // Duplicates inside the file.
       const once = (seen: Map<string, number>, key: string | null, message: string) => {
@@ -294,8 +335,18 @@ export class StudentImportService {
         batches.find((b) => b.id === match.batchId)?.programId !== program.id;
       const finalBatchId = batch?.id ?? (match && !leavesBatch ? match.batchId : null);
       const finalRoll = rollNumber ?? match?.rollNumber ?? null;
+      // A batch for one class only takes students of that class.
+      const finalBatch = finalBatchId ? batches.find((b) => b.id === finalBatchId) : undefined;
+      let finalClass = classLevel ?? match?.classLevel ?? null;
+      if (finalBatch?.classLevel != null) {
+        if (finalClass && gradeOf(finalClass) !== finalBatch.classLevel) {
+          errors.push(`${finalBatch.name} is a class ${finalBatch.classLevel} batch; this student is in ${finalClass}`);
+        } else if (!finalClass && school.classes.includes(`${finalBatch.classLevel}th`)) {
+          finalClass = `${finalBatch.classLevel}th`;
+        }
+      }
       if (finalBatchId && finalRoll) {
-        const key = `${finalBatchId}|${finalRoll.toLowerCase()}`;
+        const key = `${finalBatchId}|${finalRoll.toUpperCase()}`;
         once(seenRoll, key, `Roll number ${finalRoll} is used in the same batch`);
         const owner = rollOwner.get(key);
         if (owner && owner !== match?.id)
@@ -330,7 +381,7 @@ export class StudentImportService {
           profileImageUrl,
           previousSchool: text(raw.previousSchool),
           previousPercentage,
-          classLevel,
+          classLevel: classLevel ?? (match ? null : finalClass),
           programId: program?.id ?? null,
           batchId: batch?.id ?? null,
           admissionDate,
@@ -385,11 +436,18 @@ export class StudentImportService {
               });
               const enrollments = creates.filter((r) => r.fields!.batchId);
               if (enrollments.length > 0) {
+                const names = await tx.batch.findMany({
+                  where: { id: { in: enrollments.map((r) => r.fields!.batchId!) } },
+                  select: { id: true, name: true, program: { select: { name: true } } },
+                });
+                const nameOf = new Map(names.map((b) => [b.id, b]));
                 await tx.studentEnrollment.createMany({
                   data: enrollments.map((r) => ({
                     schoolId,
                     studentId: ids.get(r.row)!,
                     batchId: r.fields!.batchId!,
+                    batchName: nameOf.get(r.fields!.batchId!)!.name,
+                    programName: nameOf.get(r.fields!.batchId!)!.program.name,
                     rollNumber: r.fields!.rollNumber,
                     enrolledOn: today,
                   })),

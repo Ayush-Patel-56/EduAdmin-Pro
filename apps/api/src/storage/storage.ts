@@ -1,8 +1,9 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, rm, stat } from 'node:fs/promises';
+import { mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -29,12 +30,13 @@ export type DownloadOptions = {
 /** Where file bytes live. Metadata is always in Postgres (FileObject). */
 export interface StorageDriver {
   readonly kind: 'r2' | 'local';
-  /** `maxBytes`: the most the upload may contain (enforced again at completion). */
-  uploadUrl(
-    key: string,
-    contentType: string,
-    maxBytes: number,
-  ): Promise<UploadTicket>;
+  /**
+   * A URL to PUT exactly `size` bytes to `key` (an upload key, never the
+   * key a file is served from).
+   */
+  uploadUrl(key: string, contentType: string, size: number): Promise<UploadTicket>;
+  /** Moves the object from `from` to `to` (the upload key to the final key). */
+  move(from: string, to: string): Promise<void>;
   /** The stored size, or null when nothing was uploaded under `key`. */
   size(key: string): Promise<number | null>;
   /** The first `bytes` bytes, to check the file signature. */
@@ -79,17 +81,22 @@ export class R2Driver implements StorageDriver {
     });
   }
 
-  async uploadUrl(key: string, contentType: string): Promise<UploadTicket> {
-    // R2 can't cap the size of a presigned PUT; completion checks it instead.
+  async uploadUrl(key: string, contentType: string, size: number): Promise<UploadTicket> {
     assertKey(key);
+    // Content-Length is part of the signature, so the PUT must carry exactly
+    // the size that was approved (the browser sets it from the file).
     const url = await getSignedUrl(
       this.client,
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
         ContentType: contentType,
+        ContentLength: size,
       }),
-      { expiresIn: UPLOAD_TTL_SECONDS },
+      {
+        expiresIn: UPLOAD_TTL_SECONDS,
+        signableHeaders: new Set(['content-type', 'content-length']),
+      },
     );
     return {
       url,
@@ -129,6 +136,19 @@ export class R2Driver implements StorageDriver {
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
     );
+  }
+
+  async move(from: string, to: string) {
+    assertKey(from);
+    assertKey(to);
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        Key: to,
+        CopySource: `${this.bucket}/${from}`,
+      }),
+    );
+    await this.remove(from);
   }
 
   downloadUrl(key: string, options: DownloadOptions) {
@@ -206,7 +226,7 @@ export class LocalDriver implements StorageDriver {
   uploadUrl(
     key: string,
     contentType: string,
-    maxBytes: number,
+    size: number,
   ): Promise<UploadTicket> {
     const exp = Math.floor(Date.now() / 1000) + UPLOAD_TTL_SECONDS;
     const token = this.sign({
@@ -214,7 +234,7 @@ export class LocalDriver implements StorageDriver {
       key,
       exp,
       ct: contentType,
-      max: maxBytes,
+      max: size,
     });
     return Promise.resolve({
       url: `/api/files/local/${token}`,
@@ -245,6 +265,10 @@ export class LocalDriver implements StorageDriver {
 
   async remove(key: string) {
     await rm(this.path(key), { force: true });
+  }
+
+  async move(from: string, to: string) {
+    await rename(this.path(from), await this.prepare(to));
   }
 
   downloadUrl(key: string, options: DownloadOptions) {

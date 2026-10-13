@@ -116,7 +116,7 @@ export class StudentsController {
     @Body() dto: StudentDto,
   ) {
     await this.access.assertAdmin(auth.userId, schoolId);
-    return this.students.update(schoolId, studentId, dto);
+    return this.students.update(schoolId, auth.userId, studentId, dto);
   }
 
   @Delete(':studentId')

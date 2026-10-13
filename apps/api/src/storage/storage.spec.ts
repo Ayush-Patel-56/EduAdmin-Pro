@@ -7,11 +7,11 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { AccessService } from '../academic/access.service.js';
-import { FilesController } from './files.controller.js';
+import { FilesController, LocalFilesController } from './files.controller.js';
 import type { ConfigService } from '@nestjs/config';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import { FilesService } from './files.service.js';
-import { LocalDriver, assertKey, contentDisposition } from './storage.js';
+import { FilesService, uploadKey } from './files.service.js';
+import { LocalDriver, R2Driver, assertKey, contentDisposition } from './storage.js';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0]);
 const config = (env: Record<string, string>) =>
@@ -56,8 +56,9 @@ describe('FilesService', () => {
   const findFirst = vi.fn();
   const update = vi.fn();
   const deleteMany = vi.fn();
+  const updateMany = vi.fn().mockResolvedValue({ count: 1 });
   const prisma = {
-    fileObject: { create, findFirst, update, deleteMany, findMany: vi.fn().mockResolvedValue([]) },
+    fileObject: { create, findFirst, update, updateMany, deleteMany, findMany: vi.fn().mockResolvedValue([]) },
   } as unknown as PrismaService;
 
   beforeEach(async () => {
@@ -96,15 +97,17 @@ describe('FilesService', () => {
     originalName: 'photo.png', contentType: 'image/png', size: 16, uploadedById: 'u',
   });
 
-  it('completes a real PNG and marks it READY with the stored size', async () => {
+  it('completes a real PNG: checks the upload, then moves it to the key it is served from', async () => {
     const files = service();
     const key = 'schools/s/student-photo/1';
     const driver = files.driver as LocalDriver;
-    await writeFile(await driver.prepare(key), PNG);
+    await writeFile(await driver.prepare(uploadKey('f1', 's')), PNG);
     findFirst.mockResolvedValue(pending(key));
-    update.mockImplementation(({ data }: { data: object }) => ({ ...pending(key), ...data }));
     await expect(files.complete('s', 'u', 'f1', 'STUDENT_PHOTO')).resolves.toMatchObject({ id: 'f1', size: 16 });
-    expect(update.mock.calls[0][0].data).toEqual({ status: 'READY', size: 16 });
+    expect(updateMany.mock.calls[0][0]).toEqual({ where: { id: 'f1', status: 'PENDING' }, data: { status: 'READY', size: 16 } });
+    expect(await driver.size(key)).toBe(16);
+    // The upload key is empty now: re-using the upload URL can't touch the served file.
+    expect(await driver.size(uploadKey('f1', 's'))).toBeNull();
     // Only the uploader, in this school, can complete it.
     expect(findFirst.mock.calls[0][0].where).toEqual({ id: 'f1', schoolId: 's', purpose: 'STUDENT_PHOTO', uploadedById: 'u' });
   });
@@ -113,12 +116,24 @@ describe('FilesService', () => {
     const files = service();
     const key = 'schools/s/student-photo/2';
     const driver = files.driver as LocalDriver;
-    await writeFile(await driver.prepare(key), Buffer.from('%PDF-1.7 not an image'));
+    await writeFile(await driver.prepare(uploadKey('f1', 's')), Buffer.from('%PDF-1.7 not an image'));
     findFirst.mockResolvedValue(pending(key));
-    await expect(files.complete('s', 'u', 'f1', 'STUDENT_PHOTO')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(files.complete('s', 'u', 'f1', 'STUDENT_PHOTO')).rejects.toThrow(/isn't a JPG, PNG or WebP/);
     expect(deleteMany).toHaveBeenCalled();
+    expect(await driver.size(uploadKey('f1', 's'))).toBeNull();
     expect(await driver.size(key)).toBeNull();
-    expect(update).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('of two simultaneous completions only one moves the bytes', async () => {
+    const files = service();
+    const driver = files.driver as LocalDriver;
+    await writeFile(await driver.prepare(uploadKey('f1', 's')), PNG);
+    findFirst.mockResolvedValue(pending('schools/s/student-photo/3'));
+    updateMany.mockResolvedValueOnce({ count: 0 });
+    (prisma.fileObject as unknown as { findUniqueOrThrow: unknown }).findUniqueOrThrow = vi.fn().mockResolvedValue({ ...pending('schools/s/student-photo/3'), status: 'READY' });
+    await files.complete('s', 'u', 'f1', 'STUDENT_PHOTO');
+    expect(await driver.size('schools/s/student-photo/3')).toBeNull();
   });
 
   it('a missing upload is reported, and its record removed', async () => {
@@ -142,14 +157,14 @@ describe('FilesService: teaching uploads', () => {
     const prisma = {
       fileObject: {
         findFirst: vi.fn().mockResolvedValue(file),
-        update: vi.fn().mockImplementation(({ data }: { data: object }) => ({ ...file, ...data })),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         deleteMany: vi.fn(),
       },
     } as unknown as PrismaService;
     const files = new FilesService(prisma, config({ NODE_ENV: 'development' }));
     const driver = new LocalDriver(root);
     (files as unknown as { driver: LocalDriver }).driver = driver;
-    await writeFile(await driver.prepare(key), bytes);
+    await writeFile(await driver.prepare(uploadKey('f1', 's')), bytes);
     return files.complete('s', 'u', 'f1', purpose);
   };
   const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.alloc(8)]);
@@ -207,5 +222,30 @@ describe('FilesController: who may upload what', () => {
     const assertAdmin = vi.fn().mockRejectedValue(new ForbiddenException('admins only'));
     const teacher = build({ teacherScope: vi.fn().mockResolvedValue({ schoolId: 's1', facultyId: 'f', active: true }), assertAdmin });
     await expect(teacher.create(auth, 's1', body('STUDENT_PHOTO'))).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe('upload URLs', () => {
+  it('R2: the signed PUT carries Content-Length, so a bigger file is refused by R2 itself', async () => {
+    const r2 = new R2Driver('acc', 'key', 'secret', 'bucket');
+    const { url, headers } = await r2.uploadUrl('uploads/s/f1', 'image/png', 1234);
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toContain('content-length');
+    expect(headers).toEqual({ 'Content-Type': 'image/png' });
+  });
+
+  it('local: the upload link is dead once the file is no longer pending', async () => {
+    const acceptsUpload = vi.fn().mockResolvedValue(false);
+    const driver = new LocalDriver(join(tmpdir(), 'eduadmin-test'));
+    const controller = new LocalFilesController({ driver, acceptsUpload } as unknown as FilesService);
+    const { url } = await driver.uploadUrl('uploads/s/f1', 'image/png', 16);
+    await expect(controller.upload(url.split('/').pop()!, { headers: { 'content-length': '16' } } as never)).rejects.toThrow('already finished');
+    expect(acceptsUpload).toHaveBeenCalledWith('uploads/s/f1');
+  });
+
+  it('local: the PUT must be exactly the approved size', async () => {
+    const driver = new LocalDriver(join(tmpdir(), 'eduadmin-test'));
+    const controller = new LocalFilesController({ driver, acceptsUpload: vi.fn().mockResolvedValue(true) } as unknown as FilesService);
+    const { url } = await driver.uploadUrl('uploads/s/f2', 'image/png', 16);
+    await expect(controller.upload(url.split('/').pop()!, { headers: { 'content-length': '5000000' } } as never)).rejects.toThrow('does not match');
   });
 });

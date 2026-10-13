@@ -55,7 +55,14 @@ export function validateEnv(env: Env): Env {
     errors.push(`R2 storage needs ${missing.join(', ')} as well`);
   }
 
+  if (str('FILE_STORAGE') && str('FILE_STORAGE') !== 'local') {
+    errors.push('FILE_STORAGE must be "local" or left unset');
+  }
+
   if (str('NODE_ENV') === 'production') {
+    if (str('FILE_STORAGE') === 'local') {
+      errors.push('FILE_STORAGE=local is for development only; use R2 in production');
+    }
     // Production always verifies email; the flag may only be left unset or true.
     if (str('REQUIRE_EMAIL_VERIFICATION') === 'false') {
       errors.push(

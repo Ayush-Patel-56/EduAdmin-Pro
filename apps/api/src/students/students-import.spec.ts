@@ -31,7 +31,7 @@ describe('StudentImportService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     studentFindMany.mockResolvedValue([
-      { id: 'st-rahul', admissionNumber: 'ADM-101', aadharNumber: '234567890123', batchId: 'b-neet-b', rollNumber: '101' },
+      { id: 'st-rahul', fullName: 'Rahul Sharma', admissionNumber: 'ADM-101', aadharNumber: '234567890123', batchId: 'b-neet-b', rollNumber: '101', classLevel: '9th', dateOfBirth: new Date('2010-04-12T00:00:00Z'), phone: '9876500001', parentContact: null },
     ]);
   });
 
@@ -65,8 +65,8 @@ describe('StudentImportService', () => {
 
   it('flags an admission number and an Aadhaar that belong to two different students', async () => {
     studentFindMany.mockResolvedValue([
-      { id: 'a', admissionNumber: 'ADM-1', aadharNumber: null, batchId: null, rollNumber: null },
-      { id: 'b', admissionNumber: null, aadharNumber: '234567890123', batchId: null, rollNumber: null },
+      { id: 'a', fullName: 'A', admissionNumber: 'ADM-1', aadharNumber: null, batchId: null, rollNumber: null, classLevel: null, dateOfBirth: null, phone: null, parentContact: null },
+      { id: 'b', fullName: 'B', admissionNumber: null, aadharNumber: '234567890123', batchId: null, rollNumber: null, classLevel: null, dateOfBirth: null, phone: null, parentContact: null },
     ]);
     const result = await preview([{ fullName: 'X', admissionNumber: 'ADM-1', aadharNumber: '234567890123' }]);
     expect(result.rows[0].errors).toContain('Admission number and Aadhaar belong to two different students');
@@ -126,6 +126,7 @@ describe('StudentImportService', () => {
     const tx = {
       student: { createMany: vi.fn(), update: vi.fn() },
       studentEnrollment: { createMany: vi.fn(), updateMany: vi.fn(), create: vi.fn() },
+      batch: { findMany: vi.fn().mockResolvedValue([{ id: 'b-neet-b', name: 'Batch B', program: { name: 'NEET' } }]) },
       studentGuardian: { createMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), count: vi.fn(), create: vi.fn() },
     };
     transaction.mockImplementation((run: (t: typeof tx) => unknown) => run(tx));
@@ -136,7 +137,58 @@ describe('StudentImportService', () => {
     expect(result).toMatchObject({ applied: true, created: 1 });
     const student = tx.student.createMany.mock.calls[0][0].data[0];
     expect(student).toMatchObject({ fullName: 'Amit', programId: 'p-neet', batchId: 'b-neet-b', status: 'ACTIVE', schoolId: 'school-1' });
-    expect(tx.studentEnrollment.createMany.mock.calls[0][0].data[0]).toMatchObject({ studentId: student.id, batchId: 'b-neet-b', rollNumber: '5' });
+    // The history keeps the batch and program names (they outlive the batch).
+    expect(tx.studentEnrollment.createMany.mock.calls[0][0].data[0]).toMatchObject({ studentId: student.id, batchId: 'b-neet-b', batchName: 'Batch B', programName: 'NEET', rollNumber: '5' });
     expect(tx.studentGuardian.createMany.mock.calls[0][0].data[0]).toMatchObject({ studentId: student.id, name: 'Ravi', isPrimary: true });
+  });
+
+  it('never changes a stored identifier silently', async () => {
+    studentFindMany.mockResolvedValue([
+      { id: 'st-1', fullName: 'Isha', admissionNumber: 'I-1', aadharNumber: '234567890123', batchId: null, rollNumber: null, classLevel: null, dateOfBirth: null, phone: null, parentContact: null },
+    ]);
+    const result = await preview([
+      { fullName: 'Isha', aadharNumber: '234567890123', admissionNumber: 'I-999' },
+      { fullName: 'Isha', admissionNumber: 'I-1', aadharNumber: '334567890123' },
+    ]);
+    expect(result.rows[0].errors[0]).toMatch(/belongs to Isha \(admission number I-1\)/);
+    expect(result.rows[1].errors[0]).toMatch(/different Aadhaar/);
+    // Adding a missing identifier is fine.
+    studentFindMany.mockResolvedValue([
+      { id: 'st-1', fullName: 'Isha', admissionNumber: null, aadharNumber: '234567890123', batchId: null, rollNumber: null, classLevel: null, dateOfBirth: null, phone: null, parentContact: null },
+    ]);
+    expect((await preview([{ fullName: 'Isha', aadharNumber: '234567890123', admissionNumber: 'I-2' }])).rows[0].action).toBe('update');
+  });
+
+  it('a row without identifiers that looks like a saved student (name + DOB or phone) is flagged, not duplicated', async () => {
+    const result = await preview([
+      { fullName: 'rahul sharma', dateOfBirth: '2010-04-12' },
+      { fullName: 'Rahul Sharma', phone: '9876500001' },
+      { fullName: 'Rahul Sharma', dateOfBirth: '2011-01-01' },
+      { fullName: 'New Kid', dateOfBirth: '2011-01-01' },
+      { fullName: 'new kid', dateOfBirth: '2011-01-01' },
+    ]);
+    expect(result.rows[0].errors[0]).toMatch(/Looks like Rahul Sharma.*date of birth/);
+    expect(result.rows[1].errors[0]).toMatch(/Looks like Rahul Sharma.*phone/);
+    expect(result.rows[2].action).toBe('create'); // a different date of birth: another Rahul
+    expect(result.rows[3].action).toBe('create');
+    expect(result.rows[4].errors[0]).toBe('Same student as row 5');
+  });
+
+  it('roll numbers are upper-cased, so r101 clashes with R101/101 rules case-blind', async () => {
+    studentFindMany.mockResolvedValue([
+      { id: 'st-1', fullName: 'A', admissionNumber: null, aadharNumber: null, batchId: 'b-neet-b', rollNumber: 'R5', classLevel: null, dateOfBirth: null, phone: null, parentContact: null },
+    ]);
+    const result = await preview([{ fullName: 'B', batch: 'Batch B', rollNumber: 'r5' }]);
+    expect(result.rows[0].errors[0]).toMatch(/Roll number R5 is already taken/);
+  });
+
+  it("a class-specific batch refuses another class, and fills the class when it's blank", async () => {
+    vi.mocked(prisma.batch.findMany as never as () => unknown).mockResolvedValueOnce([...batches.map((b) => ({ ...b, classLevel: null })), { id: 'b-10', name: 'Class 10 A', programId: 'p-jee', classLevel: 10 }] as never);
+    const result = await importer.import('school-1', {
+      rows: [{ fullName: 'X', batch: 'Class 10 A', classLevel: '9' }, { fullName: 'Y', batch: 'Class 10 A' }],
+      dryRun: true,
+    } as never);
+    expect(result.rows[0].errors[0]).toBe('Class 10 A is a class 10 batch; this student is in 9th');
+    expect(result.rows[1].action).toBe('create');
   });
 });
