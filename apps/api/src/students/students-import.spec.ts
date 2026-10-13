@@ -17,10 +17,11 @@ const batches = [
 describe('StudentImportService', () => {
   const studentFindMany = vi.fn();
   const transaction = vi.fn();
+  const batchFindMany = vi.fn().mockResolvedValue(batches);
   const prisma = {
     school: { findUniqueOrThrow: vi.fn().mockResolvedValue({ classes: ['9th', '10th'] }) },
     program: { findMany: vi.fn().mockResolvedValue(programs) },
-    batch: { findMany: vi.fn().mockResolvedValue(batches) },
+    batch: { findMany: batchFindMany },
     student: { findMany: studentFindMany },
     $transaction: transaction,
   } as unknown as PrismaService;
@@ -183,7 +184,7 @@ describe('StudentImportService', () => {
   });
 
   it("a class-specific batch refuses another class, and fills the class when it's blank", async () => {
-    vi.mocked(prisma.batch.findMany as never as () => unknown).mockResolvedValueOnce([...batches.map((b) => ({ ...b, classLevel: null })), { id: 'b-10', name: 'Class 10 A', programId: 'p-jee', classLevel: 10 }] as never);
+    batchFindMany.mockResolvedValueOnce([...batches.map((b) => ({ ...b, classLevel: null })), { id: 'b-10', name: 'Class 10 A', programId: 'p-jee', classLevel: 10 }] as never);
     const result = await importer.import('school-1', {
       rows: [{ fullName: 'X', batch: 'Class 10 A', classLevel: '9' }, { fullName: 'Y', batch: 'Class 10 A' }],
       dryRun: true,
