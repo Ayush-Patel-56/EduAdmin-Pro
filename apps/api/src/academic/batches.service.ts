@@ -141,6 +141,13 @@ export class BatchesService {
             'Set an end date for the batch instead, or have its teachers delete those assignments first.',
         );
       }
+      // Attendance is a record too, and nobody can delete it.
+      const classesMarked = await tx.classOccurrence.count({ where: { schoolId, batchId } });
+      if (classesMarked > 0) {
+        throw new ConflictException(
+          `Attendance is recorded for ${classesMarked} class${classesMarked === 1 ? '' : 'es'} of this batch. Set an end date for the batch instead.`,
+        );
+      }
       const teachers = await tx.facultyBatch.findMany({
         where: { batchId },
         select: { facultyId: true },

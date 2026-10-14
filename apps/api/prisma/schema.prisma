@@ -232,6 +232,7 @@ model User {
   announcements      Announcement[]
   facultyProfiles    Faculty[]
   counselingSessions CounselingSession[]
+  markedOccurrences  ClassOccurrence[]
 }
 
 // Opaque login sessions. Only a SHA-256 hash of the cookie token is stored,
@@ -322,6 +323,10 @@ model School {
   materials       StudyMaterial[]
   assignments     Assignment[]
   counseling      CounselingSession[]
+  scheduleSlots   ScheduleSlot[]
+  specialClasses  SpecialClass[]
+  occurrences     ClassOccurrence[]
+  attendance      AttendanceRecord[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -397,6 +402,9 @@ model Batch {
   enrollments    StudentEnrollment[]
   materials      StudyMaterial[]
   assignments    Assignment[]
+  scheduleSlots  ScheduleSlot[]
+  specialClasses SpecialClass[]
+  occurrences    ClassOccurrence[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -446,6 +454,9 @@ model Faculty {
   materials          StudyMaterial[]
   assignments        Assignment[]
   counselingSessions CounselingSession[]
+  scheduleSlots      ScheduleSlot[]
+  specialClasses     SpecialClass[]
+  occurrences        ClassOccurrence[]
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -753,6 +764,7 @@ model Student {
   enrollments StudentEnrollment[]
   submissions AssignmentSubmission[]
   counseling  CounselingSession[]
+  attendance  AttendanceRecord[]
 
   @@unique([schoolId, admissionNumber])
   @@unique([schoolId, aadharNumber])
@@ -946,4 +958,139 @@ model CounselingSession {
   @@index([schoolId, scheduledAt])
   @@index([studentId])
   @@index([counselorFacultyId])
+}
+
+enum SpecialClassType {
+  EXTRA
+  DOUBT
+  REVISION
+  MAKEUP
+  ORIENTATION
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+// A weekly recurring class (PRD 4.1 / 5.2). Times are minutes after midnight,
+// Indian time; the day is 0 (Sunday) to 6. Checks in the migration keep the
+// day, the times (end after start) and the effective period valid.
+model ScheduleSlot {
+  id            String    @id @default(uuid())
+  schoolId      String
+  facultyId     String
+  batchId       String
+  subject       String
+  dayOfWeek     Int
+  startMinute   Int
+  endMinute     Int
+  room          String?
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  active        Boolean   @default(true)
+  createdById   String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+
+  school      School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  faculty     Faculty           @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch       Batch             @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  occurrences ClassOccurrence[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, dayOfWeek])
+  @@index([facultyId])
+  @@index([batchId])
+}
+
+// A one-off class (Extra, Doubt, Revision, Makeup, Orientation) on one date.
+model SpecialClass {
+  id          String           @id @default(uuid())
+  schoolId    String
+  title       String
+  type        SpecialClassType @default(EXTRA)
+  subject     String?
+  batchId     String
+  // Optional: an admin may schedule it before a teacher is chosen. Then any
+  // teacher of the batch can take its attendance.
+  facultyId   String?
+  date        DateTime         @db.Date
+  startMinute Int
+  endMinute   Int
+  room        String?
+  notes       String?
+  createdById String?
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
+
+  school      School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch       Batch             @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  faculty     Faculty?          @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  occurrences ClassOccurrence[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, date])
+  @@index([batchId])
+  @@index([facultyId])
+}
+
+// One class on one date: the attendance sheet. It keeps what the class was
+// (title, times, room, batch), so attendance history reads the same after the
+// slot or special class is edited or deleted. A batch with occurrences can't
+// be deleted (NoAction; the batch service explains why).
+model ClassOccurrence {
+  id             String            @id @default(uuid())
+  schoolId       String
+  date           DateTime          @db.Date
+  batchId        String
+  slotId         String?
+  specialClassId String?
+  facultyId      String?
+  title          String
+  subject        String?
+  type           SpecialClassType? // null for a weekly slot
+  startMinute    Int
+  endMinute      Int
+  room           String?
+  markedById     String?
+  submittedAt    DateTime          @db.Timestamptz(3)
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @db.Timestamptz(3)
+
+  school       School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch        Batch              @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  slot         ScheduleSlot?      @relation(fields: [slotId], references: [id], onDelete: SetNull)
+  specialClass SpecialClass?      @relation(fields: [specialClassId], references: [id], onDelete: SetNull)
+  faculty      Faculty?           @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  markedBy     User?              @relation(fields: [markedById], references: [id], onDelete: SetNull)
+  records      AttendanceRecord[]
+
+  @@unique([slotId, date])
+  @@unique([specialClassId])
+  @@unique([id, schoolId])
+  @@index([schoolId, date])
+  @@index([batchId, date])
+}
+
+// One student's status in one class occurrence.
+model AttendanceRecord {
+  id           String           @id @default(uuid())
+  schoolId     String
+  occurrenceId String
+  studentId    String
+  status       AttendanceStatus
+  note         String?
+  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime         @updatedAt @db.Timestamptz(3)
+
+  school     School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  occurrence ClassOccurrence @relation(fields: [occurrenceId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  student    Student         @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@unique([occurrenceId, studentId])
+  @@index([studentId])
+  @@index([schoolId])
 }

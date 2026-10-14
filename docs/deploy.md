@@ -146,6 +146,12 @@ SELECT "questionFileId", count(*) FROM "Assignment" WHERE "questionFileId" IS NO
 SELECT "fileId", count(*) FROM "AssignmentSubmission" WHERE "fileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
 ```
 
+## Schedule and attendance (`20261014090000_schedule_attendance`)
+
+New tables only (weekly slots, special classes, class occurrences and attendance records), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep the weekday (0–6), times (minutes after midnight, end after start) and effective periods valid.
+
+Attendance is kept as a record: a slot or special class with attendance can't be deleted (end it or mark it inactive), and a batch with attendance can't be deleted (set its end date). Clear All Data removes schedules and attendance with the rest of the academic data.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

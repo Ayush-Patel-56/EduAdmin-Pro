@@ -189,7 +189,7 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
       $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     } as unknown as PrismaService;
     const access = { assertOwner: vi.fn() } as unknown as AccessService;
-    const schools = new SchoolsService(prisma, access, {} as never);
+    const schools = new SchoolsService(prisma, access, {} as never, {} as never);
     await expect(
       schools.updateSchool({ userId: 'u1' } as AuthContext, 's1', {
         name: 'S',
@@ -203,10 +203,11 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
 });
 
 describe('BatchesService.remove: student history and grades', () => {
-  const build = (graded: number) => {
+  const build = (graded: number, classesMarked = 0) => {
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([]),
       assignmentSubmission: { count: vi.fn().mockResolvedValue(graded) },
+      classOccurrence: { count: vi.fn().mockResolvedValue(classesMarked) },
       facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
       student: { updateMany: vi.fn() },
       studentEnrollment: { updateMany: vi.fn() },
@@ -226,6 +227,13 @@ describe('BatchesService.remove: student history and grades', () => {
     // Counted after locking the batch and its assignments, so no grade slips in.
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('a batch with recorded attendance is not deleted either', async () => {
+    const { tx, batches } = build(0, 2);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('Attendance is recorded for 2 classes');
+    expect(tx.classOccurrence.count.mock.calls[0][0].where).toEqual({ schoolId: 's1', batchId: 'b1' });
     expect(tx.batch.delete).not.toHaveBeenCalled();
   });
 
