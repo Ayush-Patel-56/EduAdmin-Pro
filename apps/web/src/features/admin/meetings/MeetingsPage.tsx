@@ -42,7 +42,8 @@ export function MeetingsPage() {
   }, [search])
   const list = useMeetings(schoolId, q)
   const picked = params.get('meeting')
-  const selectedId = list.data?.some((m) => m.id === picked) ? picked : (list.data?.[0]?.id ?? null)
+  const meetings = list.data?.items
+  const selectedId = meetings?.some((m) => m.id === picked) ? picked : (meetings?.[0]?.id ?? null)
   const meeting = useMeeting(schoolId, selectedId)
   const invalidate = useInvalidateMeetings(schoolId)
   const [dialog, setDialog] = useState<{ kind: 'meeting'; meeting?: Meeting } | null>(null)
@@ -66,11 +67,11 @@ export function MeetingsPage() {
             <ErrorBanner message={list.error.message} />
           ) : list.isPending ? (
             <div className="flex justify-center py-8"><Loader2 className="size-5 animate-spin text-slate-300" aria-label="Loading" /></div>
-          ) : list.data!.length === 0 ? (
+          ) : meetings!.length === 0 ? (
             <p className="px-2 py-6 text-center text-xs text-slate-400 italic">{q ? `No meeting matches “${q}”.` : 'No meetings logged yet. Use + to log one.'}</p>
           ) : (
             <ul className="space-y-2">
-              {list.data!.map((m) => (
+              {meetings!.map((m) => (
                 <li key={m.id}>
                   <button
                     type="button"
@@ -90,6 +91,11 @@ export function MeetingsPage() {
                 </li>
               ))}
             </ul>
+          )}
+          {list.data && list.data.total > list.data.items.length && (
+            <p className="px-2 pt-3 text-center text-xs text-slate-400">
+              Showing the latest {list.data.items.length} of {list.data.total} meetings. Search to find older ones.
+            </p>
           )}
         </div>
       </aside>
