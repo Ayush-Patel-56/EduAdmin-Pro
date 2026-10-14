@@ -25,12 +25,17 @@ export function splitAttendees(text: string | null | undefined) {
   return names;
 }
 
+/** The log shows this many meetings; a search narrows it. */
+export const MEETING_LIST_LIMIT = 500;
+
 const agendaOrder = [{ createdAt: 'asc' }, { id: 'asc' }] satisfies Prisma.MeetingAgendaItemOrderByWithRelationInput[];
 
 /**
  * Meetings (PRD 4.14), admin only: the Meetings Log and each meeting's agenda
  * items, which are its minutes. Everything is looked up with the school, so
- * another school's ids answer 404.
+ * another school's ids answer 404. Writes are scoped to the school (and the
+ * meeting, for items) in the same statement, so a row deleted meanwhile is a
+ * 404 too.
  */
 @Injectable()
 export class MeetingsService {
@@ -38,31 +43,46 @@ export class MeetingsService {
 
   async list(schoolId: string, query: MeetingQuery) {
     const q = query.q?.trim();
-    const rows = await this.prisma.meeting.findMany({
-      where: {
-        schoolId,
-        ...(q && {
-          OR: [
-            { title: { contains: q, mode: 'insensitive' } },
-            { venue: { contains: q, mode: 'insensitive' } },
-            { minutesPreparedBy: { contains: q, mode: 'insensitive' } },
-            { attendees: { has: q } },
-            { agendaItems: { some: { title: { contains: q, mode: 'insensitive' } } } },
-          ],
-        }),
-      },
-      orderBy: [{ date: 'desc' }, { startMinute: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
-      select: { id: true, title: true, type: true, date: true, startMinute: true, _count: { select: { agendaItems: true } } },
-      take: 500,
-    });
-    return rows.map((m) => ({
-      id: m.id,
-      title: m.title,
-      type: m.type,
-      date: toIsoDate(m.date)!,
-      time: m.startMinute === null ? null : HH_MM(m.startMinute),
-      agendaCount: m._count.agendaItems,
-    }));
+    const where: Prisma.MeetingWhereInput = { schoolId };
+    if (q) {
+      where.OR = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { venue: { contains: q, mode: 'insensitive' } },
+        { minutesPreparedBy: { contains: q, mode: 'insensitive' } },
+        { id: { in: await this.attendeeMatches(schoolId, q) } },
+        { agendaItems: { some: { title: { contains: q, mode: 'insensitive' } } } },
+      ];
+    }
+    const [total, rows] = await Promise.all([
+      this.prisma.meeting.count({ where }),
+      this.prisma.meeting.findMany({
+        where,
+        orderBy: [{ date: 'desc' }, { startMinute: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+        select: { id: true, title: true, type: true, date: true, startMinute: true, _count: { select: { agendaItems: true } } },
+        take: MEETING_LIST_LIMIT,
+      }),
+    ]);
+    return {
+      total,
+      items: rows.map((m) => ({
+        id: m.id,
+        title: m.title,
+        type: m.type,
+        date: toIsoDate(m.date)!,
+        time: m.startMinute === null ? null : HH_MM(m.startMinute),
+        agendaCount: m._count.agendaItems,
+      })),
+    };
+  }
+
+  /** Meetings with an attendee containing the text, in any letter case (like the other search fields). */
+  private async attendeeMatches(schoolId: string, q: string) {
+    const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+    const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT m."id" FROM "Meeting" m
+      WHERE m."schoolId" = ${schoolId}
+        AND EXISTS (SELECT 1 FROM unnest(m."attendees") AS a(name) WHERE a.name ILIKE ${pattern})`;
+    return rows.map((r) => r.id);
   }
 
   async get(schoolId: string, id: string) {
@@ -105,15 +125,15 @@ export class MeetingsService {
   }
 
   async update(schoolId: string, id: string, dto: MeetingDto) {
-    await this.find(schoolId, id);
-    await this.prisma.meeting.update({ where: { id }, data: meetingData(dto) });
+    const { count } = await this.prisma.meeting.updateMany({ where: { id, schoolId }, data: meetingData(dto) });
+    if (!count) throw new NotFoundException('Meeting not found');
     return { id };
   }
 
   /** Removes the meeting with its agenda items. */
   async remove(schoolId: string, id: string) {
-    await this.find(schoolId, id);
-    await this.prisma.meeting.delete({ where: { id } });
+    const { count } = await this.prisma.meeting.deleteMany({ where: { id, schoolId } });
+    if (!count) throw new NotFoundException('Meeting not found');
     return { ok: true };
   }
 
@@ -133,38 +153,30 @@ export class MeetingsService {
   }
 
   async updateAgendaItem(schoolId: string, meetingId: string, itemId: string, dto: AgendaItemDto) {
-    await this.findItem(schoolId, meetingId, itemId);
-    await this.prisma.meetingAgendaItem.update({ where: { id: itemId }, data: agendaData(dto) });
+    const { count } = await this.prisma.meetingAgendaItem.updateMany({ where: { id: itemId, meetingId, schoolId }, data: agendaData(dto) });
+    if (!count) throw new NotFoundException('Agenda item not found');
     return { id: itemId };
   }
 
   async setAgendaState(schoolId: string, meetingId: string, itemId: string, dto: AgendaStateDto) {
     if (!dto.status && !dto.priority) throw new BadRequestException('Choose a status or a priority');
-    await this.findItem(schoolId, meetingId, itemId);
-    await this.prisma.meetingAgendaItem.update({
-      where: { id: itemId },
+    const { count } = await this.prisma.meetingAgendaItem.updateMany({
+      where: { id: itemId, meetingId, schoolId },
       data: { ...(dto.status && { status: dto.status }), ...(dto.priority && { priority: dto.priority }) },
     });
+    if (!count) throw new NotFoundException('Agenda item not found');
     return { id: itemId };
   }
 
   async removeAgendaItem(schoolId: string, meetingId: string, itemId: string) {
-    await this.findItem(schoolId, meetingId, itemId);
-    await this.prisma.meetingAgendaItem.delete({ where: { id: itemId } });
+    const { count } = await this.prisma.meetingAgendaItem.deleteMany({ where: { id: itemId, meetingId, schoolId } });
+    if (!count) throw new NotFoundException('Agenda item not found');
     return { ok: true };
   }
 
   private async find(schoolId: string, id: string) {
     const row = await this.prisma.meeting.findFirst({ where: { id, schoolId }, select: { id: true } });
     if (!row) throw new NotFoundException('Meeting not found');
-  }
-
-  private async findItem(schoolId: string, meetingId: string, itemId: string) {
-    const row = await this.prisma.meetingAgendaItem.findFirst({
-      where: { id: itemId, meetingId, schoolId },
-      select: { id: true },
-    });
-    if (!row) throw new NotFoundException('Agenda item not found');
   }
 }
 

@@ -26,6 +26,8 @@ export const STATUS_STYLE: Record<AgendaStatus, string> = {
 }
 
 export type MeetingSummary = { id: string; title: string; type: MeetingType; date: string; time: string | null; agendaCount: number }
+/** The newest meetings that match; `total` counts them all, so the log can say when it shows only some. */
+export type MeetingList = { total: number; items: MeetingSummary[] }
 
 export type AgendaItem = {
   id: string
@@ -58,7 +60,7 @@ export const meetingsPath = (schoolId: string) => `/schools/${schoolId}/meetings
 export function useMeetings(schoolId: string, q: string) {
   return useQuery({
     queryKey: [schoolId, 'meetings', 'list', q],
-    queryFn: () => api<MeetingSummary[]>(`${meetingsPath(schoolId)}${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+    queryFn: () => api<MeetingList>(`${meetingsPath(schoolId)}${q ? `?q=${encodeURIComponent(q)}` : ''}`),
     placeholderData: keepPreviousData,
   })
 }
