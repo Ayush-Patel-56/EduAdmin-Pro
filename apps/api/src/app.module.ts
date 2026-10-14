@@ -19,6 +19,7 @@ import { ScheduleModule } from './schedule/schedule.module.js';
 import { AttendanceModule } from './attendance/attendance.module.js';
 import { FeesModule } from './fees/fees.module.js';
 import { MeetingsModule } from './meetings/meetings.module.js';
+import { CalendarModule } from './calendar/calendar.module.js';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { MeetingsModule } from './meetings/meetings.module.js';
     AttendanceModule,
     FeesModule,
     MeetingsModule,
+    CalendarModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

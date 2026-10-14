@@ -333,6 +333,7 @@ model School {
   receiptCounters FeeReceiptCounter[]
   meetings        Meeting[]
   agendaItems     MeetingAgendaItem[]
+  calendarEvents  CalendarEvent[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -374,6 +375,7 @@ model Program {
   chapters        CurriculumChapter[]
   students        Student[]
   feeStructures   FeeStructure[]
+  calendarEvents  CalendarEvent[]
 
   @@unique([schoolId, name])
   @@unique([schoolId, code])
@@ -413,6 +415,7 @@ model Batch {
   specialClasses SpecialClass[]
   occurrences    ClassOccurrence[]
   feeStructures  FeeStructure[]
+  calendarEvents CalendarEvent[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -1324,4 +1327,48 @@ model MeetingAgendaItem {
 
   @@index([meetingId])
   @@index([schoolId])
+}
+
+enum CalendarEventType {
+  HOLIDAY
+  EXAM
+  EVENT
+  PARENT_MEETING
+}
+
+enum EventRepeat {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// The Academic Calendar (PRD 4.15): holidays, exams, events and parent
+// meetings. Dates are school-local calendar dates. A repeating event recurs
+// from its start (until repeatUntil, or indefinitely); the API expands it
+// into the dates being viewed. Scope: the whole school, one program or one
+// batch (a scoped event goes when its program or batch is deleted).
+model CalendarEvent {
+  id          String            @id @default(uuid())
+  schoolId    String
+  title       String
+  type        CalendarEventType
+  programId   String?
+  batchId     String?
+  startDate   DateTime          @db.Date
+  endDate     DateTime          @db.Date
+  description String?
+  repeat      EventRepeat       @default(NONE)
+  repeatUntil DateTime?         @db.Date
+  createdById String?
+  createdAt   DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime          @updatedAt @db.Timestamptz(3)
+
+  school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  program Program? @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch   Batch?   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([schoolId, startDate])
+  @@index([programId])
+  @@index([batchId])
 }

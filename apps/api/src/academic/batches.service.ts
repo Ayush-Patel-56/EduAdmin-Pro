@@ -30,6 +30,7 @@ export class BatchesService {
             students: true,
             materials: true,
             assignments: true,
+            calendarEvents: true,
           },
         },
       },
@@ -48,6 +49,7 @@ export class BatchesService {
       studentCount: b._count.students,
       materialCount: b._count.materials,
       assignmentCount: b._count.assignments,
+      eventCount: b._count.calendarEvents,
     }));
   }
 

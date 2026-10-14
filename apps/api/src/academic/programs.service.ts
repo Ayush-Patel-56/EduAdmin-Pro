@@ -20,7 +20,7 @@ export class ProgramsService {
     const programs = await this.prisma.program.findMany({
       where: { schoolId },
       orderBy: { sortOrder: 'asc' },
-      include: { _count: { select: { batches: true, facultyPrograms: true } } },
+      include: { _count: { select: { batches: true, facultyPrograms: true, calendarEvents: true } } },
     });
     return programs.map(({ _count, ...p }) => ({
       id: p.id,
@@ -33,6 +33,7 @@ export class ProgramsService {
       isActive: p.isActive,
       batchCount: _count.batches,
       facultyCount: _count.facultyPrograms,
+      eventCount: _count.calendarEvents,
     }));
   }
 
