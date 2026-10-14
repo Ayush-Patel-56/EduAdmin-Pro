@@ -274,6 +274,7 @@ function deletedWith(b: Batch) {
     plural(b.chapterCount, 'syllabus chapter'),
     ...(b.materialCount > 0 ? [plural(b.materialCount, 'study material')] : []),
     ...(b.assignmentCount > 0 ? [plural(b.assignmentCount, 'assignment')] : []),
+    ...(b.eventCount > 0 ? [plural(b.eventCount, 'calendar event')] : []),
   ]
   return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
 }

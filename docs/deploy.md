@@ -166,7 +166,9 @@ New tables only (meetings and their agenda items), wrapped in a transaction, so 
 
 ## Academic Calendar (`20261014200000_calendar_events`)
 
-A new table only (calendar events), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep each event's end on or after its start, allow Repeat Until only for repeating events, and stop a repeating event from overlapping its own next repeat (daily: one day; weekly: under 7 days; monthly: under 28 days). Repeats are expanded when read, so nothing is generated ahead of time. An event scoped to a program or batch is deleted with it; Clear All Data removes events.
+A new table only (calendar events), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep each event's end on or after its start, allow Repeat Until only for repeating events, and stop a repeating event from overlapping its own next repeat (daily: one day; weekly: under 7 days; monthly: under 28 days). Repeats are expanded when read, so nothing is generated ahead of time. An event scoped to a program or batch is deleted with it (the delete confirmations say how many); Clear All Data removes events.
+
+`20261014210000_calendar_batch_scope` makes a batch event store only its batch: its program is read through the batch, so moving a batch to another program takes its events along, and deleting the old program can't delete them. It clears `programId` on existing batch events and adds a CHECK that an event has a program or a batch, not both. Nothing to check before deploying.
 
 ## File storage (Cloudflare R2)
 

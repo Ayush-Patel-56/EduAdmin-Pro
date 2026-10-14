@@ -9,9 +9,10 @@ const DAY = 86_400_000;
 /** The widest range one request may expand (a month view asks for six weeks). */
 const MAX_RANGE_DAYS = 400;
 
+// A batch event stores only its batch; its program is always the batch's current one.
 const include = {
   program: { select: { id: true, name: true } },
-  batch: { select: { id: true, name: true } },
+  batch: { select: { id: true, name: true, program: { select: { id: true, name: true } } } },
 } satisfies Prisma.CalendarEventInclude;
 type EventRow = Prisma.CalendarEventGetPayload<{ include: typeof include }>;
 
@@ -48,16 +49,16 @@ export class CalendarService {
     return { id: row.id };
   }
 
-  /** Changes a repeating event's whole series. */
+  /** Changes a repeating event's whole series. Scoped in the write, so one deleted meanwhile is a 404. */
   async update(schoolId: string, id: string, dto: CalendarEventDto) {
-    await this.find(schoolId, id);
-    await this.prisma.calendarEvent.update({ where: { id }, data: await this.eventData(schoolId, dto) });
+    const { count } = await this.prisma.calendarEvent.updateMany({ where: { id, schoolId }, data: await this.eventData(schoolId, dto) });
+    if (!count) throw new NotFoundException('Event not found');
     return { id };
   }
 
   async remove(schoolId: string, id: string) {
-    await this.find(schoolId, id);
-    await this.prisma.calendarEvent.delete({ where: { id } });
+    const { count } = await this.prisma.calendarEvent.deleteMany({ where: { id, schoolId } });
+    if (!count) throw new NotFoundException('Event not found');
     return { ok: true };
   }
 
@@ -94,7 +95,8 @@ export class CalendarService {
 
   /**
    * The sidebar's Program / Batch filter: school-wide events, plus those for
-   * the chosen program (and its batches) or the chosen batch (and its program).
+   * the chosen program (and its batches, found through each batch's current
+   * program) or the chosen batch (and its program).
    */
   private async scopeWhere(schoolId: string, q: { programId?: string | null; batchId?: string | null }): Promise<Prisma.CalendarEventWhereInput> {
     const schoolWide = { programId: null, batchId: null };
@@ -103,16 +105,11 @@ export class CalendarService {
       if (!batch) throw new NotFoundException('Batch not found');
       return { OR: [schoolWide, { batchId: q.batchId }, { programId: batch.programId, batchId: null }] };
     }
-    if (q.programId) return { OR: [schoolWide, { programId: q.programId }] };
+    if (q.programId) return { OR: [schoolWide, { programId: q.programId }, { batch: { programId: q.programId } }] };
     return {};
   }
 
-  private async find(schoolId: string, id: string) {
-    const row = await this.prisma.calendarEvent.findFirst({ where: { id, schoolId }, select: { id: true } });
-    if (!row) throw new NotFoundException('Event not found');
-  }
-
-  /** Checks the dates, the repeat and the scope (a batch brings its program). */
+  /** Checks the dates, the repeat and the scope (a batch event stores only the batch). */
   private async eventData(schoolId: string, dto: CalendarEventDto) {
     const startDate = parseDate(dto.startDate, 'Start date');
     const endDate = parseDate(dto.endDate, 'End date');
@@ -122,10 +119,9 @@ export class CalendarService {
     let programId: string | null = null;
     let batchId: string | null = null;
     if (dto.scope === 'BATCH') {
-      const batch = await this.prisma.batch.findFirst({ where: { id: dto.batchId!, schoolId }, select: { id: true, programId: true } });
+      const batch = await this.prisma.batch.findFirst({ where: { id: dto.batchId!, schoolId }, select: { id: true } });
       if (!batch) throw new BadRequestException('Select a batch of this school');
       batchId = batch.id;
-      programId = batch.programId;
     } else if (dto.scope === 'PROGRAM') {
       const program = await this.prisma.program.findFirst({ where: { id: dto.programId!, schoolId }, select: { id: true } });
       if (!program) throw new BadRequestException('Select a program of this school');
@@ -152,8 +148,8 @@ function toEvent(e: EventRow) {
     type: e.type,
     description: e.description,
     scope: e.batch ? ('BATCH' as const) : e.program ? ('PROGRAM' as const) : ('SCHOOL' as const),
-    program: e.program,
-    batch: e.batch,
+    program: e.batch ? e.batch.program : e.program,
+    batch: e.batch && { id: e.batch.id, name: e.batch.name },
     startDate: toIsoDate(e.startDate)!,
     endDate: toIsoDate(e.endDate)!,
     repeat: e.repeat,

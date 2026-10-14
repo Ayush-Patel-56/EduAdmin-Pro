@@ -42,6 +42,8 @@ export type Program = {
   isActive: boolean
   batchCount: number
   facultyCount: number
+  /** Calendar events for the whole program (deleted with it). */
+  eventCount: number
 }
 
 export type Batch = {
@@ -58,6 +60,8 @@ export type Batch = {
   studentCount: number
   materialCount: number
   assignmentCount: number
+  /** Calendar events for this batch (deleted with it). */
+  eventCount: number
 }
 
 export type Faculty = {
