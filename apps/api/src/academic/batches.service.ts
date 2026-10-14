@@ -58,6 +58,7 @@ export class BatchesService {
     return duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
+          await lockProgram(tx, schoolId, data.programId);
           const batch = await tx.batch.create({ data: { schoolId, ...data } });
           if (data.coordinatorId)
             await assignFaculty(
@@ -79,6 +80,7 @@ export class BatchesService {
     return duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
+          if (data.programId !== current.programId) await lockProgram(tx, schoolId, data.programId);
           await tx.batch.update({ where: { id: batchId }, data });
           if (
             data.coordinatorId &&
@@ -293,4 +295,14 @@ export function batchClash(dto: { name: string }) {
     names.some((n) => n === 'name' || n.startsWith('Batch_'))
       ? `This program already has a batch named ${dto.name}`
       : 'Someone else changed this batch at the same time. Refresh and try again.';
+}
+
+/**
+ * Locks the program a batch is joining (shared, so batches can still be added
+ * side by side) and checks it still exists: a program being deleted holds it
+ * FOR UPDATE, so this waits and then gets a clear 400 instead of a foreign-key 500.
+ */
+async function lockProgram(tx: Tx, schoolId: string, programId: string) {
+  const rows = await tx.$queryRaw<unknown[]>`SELECT 1 FROM "Program" WHERE "id" = ${programId} AND "schoolId" = ${schoolId} FOR SHARE`;
+  if (!rows.length) throw new BadRequestException('Select a program from this school');
 }

@@ -132,6 +132,20 @@ describe('MeetingsService', () => {
     const where = prisma.meeting.findMany.mock.calls[0][0].where;
     expect(where.schoolId).toBe('school-1');
     expect(where.OR).toContainEqual({ id: { in: ['m7'] } });
-    expect(where.OR).toContainEqual({ title: { contains: 'princ_100%', mode: 'insensitive' } });
+    expect(where.OR).toContainEqual({ title: { contains: 'princ\\_100\\%', mode: 'insensitive' } });
+  });
+
+  it('% and _ are taken literally in every search field, not only attendees (#24)', async () => {
+    const { service, prisma } = build();
+    prisma.$queryRaw.mockResolvedValue([]);
+    await service.list('school-1', { q: '50%_off\\' });
+    const text = { contains: '50\\%\\_off\\\\', mode: 'insensitive' };
+    expect(prisma.meeting.findMany.mock.calls[0][0].where.OR).toEqual([
+      { title: text },
+      { venue: text },
+      { minutesPreparedBy: text },
+      { id: { in: [] } },
+      { agendaItems: { some: { title: text } } },
+    ]);
   });
 });

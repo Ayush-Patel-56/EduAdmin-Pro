@@ -45,12 +45,14 @@ export class MeetingsService {
     const q = query.q?.trim();
     const where: Prisma.MeetingWhereInput = { schoolId };
     if (q) {
+      // Prisma's `contains` is a LIKE, so % and _ are escaped to be taken literally.
+      const text = { contains: likeEscape(q), mode: 'insensitive' } as const;
       where.OR = [
-        { title: { contains: q, mode: 'insensitive' } },
-        { venue: { contains: q, mode: 'insensitive' } },
-        { minutesPreparedBy: { contains: q, mode: 'insensitive' } },
+        { title: text },
+        { venue: text },
+        { minutesPreparedBy: text },
         { id: { in: await this.attendeeMatches(schoolId, q) } },
-        { agendaItems: { some: { title: { contains: q, mode: 'insensitive' } } } },
+        { agendaItems: { some: { title: text } } },
       ];
     }
     const [total, rows] = await Promise.all([
@@ -77,7 +79,7 @@ export class MeetingsService {
 
   /** Meetings with an attendee containing the text, in any letter case (like the other search fields). */
   private async attendeeMatches(schoolId: string, q: string) {
-    const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+    const pattern = `%${likeEscape(q)}%`;
     const rows = await this.prisma.$queryRaw<{ id: string }[]>`
       SELECT m."id" FROM "Meeting" m
       WHERE m."schoolId" = ${schoolId}
@@ -208,4 +210,9 @@ function agendaData(dto: AgendaItemDto) {
     priority: dto.priority,
     status: dto.status,
   };
+}
+
+/** Escapes LIKE's wildcards (and its escape character), so the text matches literally. */
+function likeEscape(text: string) {
+  return text.replace(/[\\%_]/g, '\\$&');
 }
