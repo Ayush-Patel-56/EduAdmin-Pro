@@ -152,6 +152,14 @@ New tables only (weekly slots, special classes, class occurrences and attendance
 
 Attendance is kept as a record: a slot or special class with attendance can't be deleted (end it or mark it inactive), a batch with attendance can't be deleted (set its end date), and a student with attendance can't be deleted (set them Inactive or Transferred). `20261014120000_attendance_keeps_students` makes the student foreign key NO ACTION to back that up; nothing to check before deploying it. Clear All Data removes schedules and attendance with the rest of the academic data.
 
+## Fee Management (`20261014150000_fees`)
+
+New tables only (fee structures, student dues, payments, receipt counters), wrapped in a transaction, so there is nothing to check before deploying. Money is stored as whole paise (integers). CHECK constraints keep amounts non-negative, keep each due's net payable equal to amount − discount + late fee, and require a reason for a status override and for a voided payment. Unique indexes keep fee names (any letter case) and receipt numbers unique per school, and a live transaction reference can't be recorded twice.
+
+Fee records are kept: a payment is voided (with who, when and why), never deleted; a due with payment history, a fee structure with dues, and a student with dues can't be deleted. A program or batch that a fee structure is scoped to can't be deleted until the fee is moved. Clear All Data removes all fee data with the rest of the academic data.
+
+`20261014160000_fees_paid_check` adds a CHECK that a due's paid total never exceeds its net payable (the API already refuses it under a lock). Before deploying, expect no rows from `SELECT "id" FROM "FeeDue" WHERE "paidPaise" > "netPaise";`.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

@@ -18,9 +18,20 @@ describe('Clear All Data is one transaction', () => {
     } as Record<string, unknown>,
     {
       get: (target, key: string) =>
-        key in target ? target[key] : { deleteMany, count, findMany },
+        key in target
+          ? target[key]
+          : {
+              deleteMany: (...args: unknown[]) => {
+                deleted.push(key);
+                return deleteMany(...args);
+              },
+              count,
+              findMany,
+            },
     },
   );
+  /** Which models were cleared, in order. */
+  const deleted: string[] = [];
   const transaction = vi.fn(async (run: (t: unknown) => unknown) => run(tx));
   // Outside the transaction, no model may be written.
   const outside = vi.fn();
@@ -38,6 +49,7 @@ describe('Clear All Data is one transaction', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    deleted.length = 0;
     deleteMany.mockResolvedValue({ count: 1 });
     const moduleRef = await Test.createTestingModule({ providers: [SchoolsService] })
       .useMocker((token) => {
@@ -48,6 +60,15 @@ describe('Clear All Data is one transaction', () => {
       })
       .compile();
     schools = moduleRef.get(SchoolsService);
+  });
+
+  it('clears fee records, payments before the dues and fees they point at', async () => {
+    await schools.clearAllData(auth, 'school-1', 'Demo School');
+    const at = (model: string) => deleted.indexOf(model);
+    for (const model of ['feePayment', 'feeDue', 'feeStructure', 'feeReceiptCounter']) expect(at(model)).toBeGreaterThanOrEqual(0);
+    expect(at('feePayment')).toBeLessThan(at('feeDue'));
+    expect(at('feeDue')).toBeLessThan(at('feeStructure'));
+    expect(at('feeDue')).toBeLessThan(at('student'));
   });
 
   it('clears recruitment and academic data in the same transaction', async () => {

@@ -152,6 +152,13 @@ export class StudentsService {
           `Attendance is recorded for this student in ${marked} class${marked === 1 ? '' : 'es'}, so they can't be deleted. Set their status to Inactive or Transferred instead.`,
         );
       }
+      // Fee dues and payments are financial records, kept the same way.
+      const dues = await tx.feeDue.count({ where: { schoolId, studentId } });
+      if (dues > 0) {
+        throw new ConflictException(
+          `This student has ${dues} fee due${dues === 1 ? '' : 's'} on record, so they can't be deleted. Set their status to Inactive or Transferred instead.`,
+        );
+      }
       const row = await tx.student.findUniqueOrThrow({
         where: { id: studentId },
         select: { photo: { select: { id: true, key: true } } },

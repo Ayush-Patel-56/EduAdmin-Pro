@@ -13,6 +13,8 @@ export type Dashboard = {
     board: string
     classes: string[]
     classesLabel: string
+    /** 1-12: the month the academic year starts (April by default). */
+    academicYearStartMonth: number
     mouStartDate: string | null
     mouEndDate: string | null
     mouStatus: MouStatus

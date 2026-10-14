@@ -203,11 +203,12 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
 });
 
 describe('BatchesService.remove: student history and grades', () => {
-  const build = (graded: number, classesMarked = 0) => {
+  const build = (graded: number, classesMarked = 0, fees = 0) => {
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([]),
       assignmentSubmission: { count: vi.fn().mockResolvedValue(graded) },
       classOccurrence: { count: vi.fn().mockResolvedValue(classesMarked) },
+      feeStructure: { count: vi.fn().mockResolvedValue(fees) },
       facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
       student: { updateMany: vi.fn() },
       studentEnrollment: { updateMany: vi.fn() },
@@ -227,6 +228,13 @@ describe('BatchesService.remove: student history and grades', () => {
     // Counted after locking the batch and its assignments, so no grade slips in.
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('a batch that fee structures are scoped to is not deleted', async () => {
+    const { tx, batches } = build(0, 0, 1);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 fee structure is set up for this batch');
+    expect(tx.feeStructure.count.mock.calls[0][0].where).toEqual({ schoolId: 's1', batchId: 'b1' });
     expect(tx.batch.delete).not.toHaveBeenCalled();
   });
 
