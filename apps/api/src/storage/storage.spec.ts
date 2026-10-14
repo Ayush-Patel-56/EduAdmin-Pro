@@ -57,9 +57,16 @@ describe('FilesService', () => {
   const update = vi.fn();
   const deleteMany = vi.fn();
   const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+  // The row lock taken by `complete`; the transaction runs against the same mocks.
+  const queryRaw = vi.fn().mockResolvedValue([{ status: 'PENDING' }]);
+  const findUniqueOrThrow = vi.fn();
   const prisma = {
-    fileObject: { create, findFirst, update, updateMany, deleteMany, findMany: vi.fn().mockResolvedValue([]) },
-  } as unknown as PrismaService;
+    fileObject: { create, findFirst, update, updateMany, deleteMany, findUniqueOrThrow, findMany: vi.fn().mockResolvedValue([]) },
+    $queryRaw: queryRaw,
+    $transaction: vi.fn(),
+  } as unknown as PrismaService & { $transaction: ReturnType<typeof vi.fn> };
+  prisma.$transaction.mockImplementation((run: (tx: unknown) => unknown) => run(prisma));
+  update.mockImplementation(({ data }: { data: object }) => ({ ...pending('schools/s/student-photo/x'), ...data }));
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -97,19 +104,44 @@ describe('FilesService', () => {
     originalName: 'photo.png', contentType: 'image/png', size: 16, uploadedById: 'u',
   });
 
-  it('completes a real PNG: checks the upload, then moves it to the key it is served from', async () => {
+  it('completes a real PNG: moves it to the key it is served from, then checks those bytes', async () => {
     const files = service();
     const key = 'schools/s/student-photo/1';
     const driver = files.driver as LocalDriver;
     await writeFile(await driver.prepare(uploadKey('f1', 's')), PNG);
     findFirst.mockResolvedValue(pending(key));
     await expect(files.complete('s', 'u', 'f1', 'STUDENT_PHOTO')).resolves.toMatchObject({ id: 'f1', size: 16 });
-    expect(updateMany.mock.calls[0][0]).toEqual({ where: { id: 'f1', status: 'PENDING' }, data: { status: 'READY', size: 16 } });
+    // Under a row lock, so two completions can't interleave.
+    expect((queryRaw.mock.calls[0][0] as string[]).join('?')).toMatch(/FROM "FileObject" WHERE "id" = \? FOR UPDATE/);
+    expect(update.mock.calls[0][0]).toEqual({ where: { id: 'f1' }, data: { status: 'READY', size: 16 } });
     expect(await driver.size(key)).toBe(16);
     // The upload key is empty now: re-using the upload URL can't touch the served file.
     expect(await driver.size(uploadKey('f1', 's'))).toBeNull();
     // Only the uploader, in this school, can complete it.
     expect(findFirst.mock.calls[0][0].where).toEqual({ id: 'f1', schoolId: 's', purpose: 'STUDENT_PHOTO', uploadedById: 'u' });
+  });
+
+  it('an upload sent while completing can never become the served file (#17)', async () => {
+    const files = service();
+    const key = 'schools/s/student-photo/race';
+    const driver = files.driver as LocalDriver;
+    await writeFile(await driver.prepare(uploadKey('f1', 's')), PNG);
+    findFirst.mockResolvedValue(pending(key));
+    // Another PUT of the same size lands under the upload key right after the bytes are checked.
+    const evil = Buffer.concat([Buffer.from('%PDF-1.7'), Buffer.alloc(8)]);
+    const readStart = driver.readStart.bind(driver);
+    const spy = vi.spyOn(driver, 'readStart').mockImplementation(async (k: string, n: number) => {
+      const start = await readStart(k, n);
+      await writeFile(await driver.prepare(uploadKey('f1', 's')), evil);
+      return start;
+    });
+    await expect(files.complete('s', 'u', 'f1', 'STUDENT_PHOTO')).resolves.toMatchObject({ id: 'f1' });
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    // What is served is exactly what was checked.
+    expect(await driver.readStart(key, 16)).toEqual(PNG);
+    // The late bytes are removed, not left behind.
+    expect(await driver.size(uploadKey('f1', 's'))).toBeNull();
   });
 
   it('a file that is not what it claims (a renamed PDF) is deleted, not kept', async () => {
@@ -122,18 +154,22 @@ describe('FilesService', () => {
     expect(deleteMany).toHaveBeenCalled();
     expect(await driver.size(uploadKey('f1', 's'))).toBeNull();
     expect(await driver.size(key)).toBeNull();
-    expect(updateMany).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 
-  it('of two simultaneous completions only one moves the bytes', async () => {
+  it('a completion that waited for another one returns the READY file without touching the bytes', async () => {
     const files = service();
     const driver = files.driver as LocalDriver;
-    await writeFile(await driver.prepare(uploadKey('f1', 's')), PNG);
-    findFirst.mockResolvedValue(pending('schools/s/student-photo/3'));
-    updateMany.mockResolvedValueOnce({ count: 0 });
-    (prisma.fileObject as unknown as { findUniqueOrThrow: unknown }).findUniqueOrThrow = vi.fn().mockResolvedValue({ ...pending('schools/s/student-photo/3'), status: 'READY' });
-    await files.complete('s', 'u', 'f1', 'STUDENT_PHOTO');
-    expect(await driver.size('schools/s/student-photo/3')).toBeNull();
+    const key = 'schools/s/student-photo/3';
+    await writeFile(await driver.prepare(key), PNG); // moved and checked by the first completion
+    findFirst.mockResolvedValue(pending(key));
+    queryRaw.mockResolvedValueOnce([{ status: 'READY' }]);
+    findUniqueOrThrow.mockResolvedValue({ ...pending(key), status: 'READY' });
+    const move = vi.spyOn(driver, 'move');
+    await expect(files.complete('s', 'u', 'f1', 'STUDENT_PHOTO')).resolves.toMatchObject({ id: 'f1' });
+    expect(move).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(await driver.readStart(key, 16)).toEqual(PNG);
   });
 
   it('a missing upload is reported, and its record removed', async () => {
@@ -141,6 +177,17 @@ describe('FilesService', () => {
     findFirst.mockResolvedValue(pending('schools/s/student-photo/never'));
     await expect(files.complete('s', 'u', 'f1', 'STUDENT_PHOTO')).rejects.toThrow(/did not arrive/);
     expect(deleteMany).toHaveBeenCalled();
+  });
+
+  it('the upload URL is for the upload key, never the key the file is served from', async () => {
+    const files = service();
+    create.mockResolvedValue({ id: 'f9' });
+    const out = await files.createUpload('s', 'u', { purpose: 'STUDENT_PHOTO', name: 'a.png', contentType: 'image/png', size: 16 });
+    const servedKey = create.mock.calls[0][0].data.key as string;
+    const token = out.upload.url.replace('/api/files/local/', '');
+    const grant = (files.driver as LocalDriver).verify(token, 'put');
+    expect(grant?.key).toBe(uploadKey('f9', 's'));
+    expect(grant?.key).not.toBe(servedKey);
   });
 });
 
@@ -180,11 +227,14 @@ describe('FilesService: teaching uploads', () => {
     const prisma = {
       fileObject: {
         findFirst: vi.fn().mockResolvedValue(file),
-        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        update: vi.fn(({ data }: { data: object }) => ({ ...file, ...data })),
         deleteMany: vi.fn(),
       },
-    } as unknown as PrismaService;
-    const files = new FilesService(prisma, config({ NODE_ENV: 'development' }));
+      $queryRaw: vi.fn().mockResolvedValue([{ status: 'PENDING' }]),
+      $transaction: vi.fn(),
+    };
+    prisma.$transaction.mockImplementation((go: (tx: unknown) => unknown) => go(prisma));
+    const files = new FilesService(prisma as unknown as PrismaService, config({ NODE_ENV: 'development' }));
     const driver = new LocalDriver(root);
     (files as unknown as { driver: LocalDriver }).driver = driver;
     await writeFile(await driver.prepare(uploadKey('f1', 's')), bytes);

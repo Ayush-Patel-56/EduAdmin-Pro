@@ -170,6 +170,16 @@ A new table only (calendar events), wrapped in a transaction, so there is nothin
 
 `20261014210000_calendar_batch_scope` makes a batch event store only its batch: its program is read through the batch, so moving a batch to another program takes its events along, and deleting the old program can't delete them. It clears `programId` on existing batch events and adds a CHECK that an event has a program or a batch, not both. Nothing to check before deploying.
 
+## Enrollment end dates (`20261014220000_enrollment_end_check`)
+
+Promotion used to end the open enrollment of a student leaving a class batch on the year boundary, even when they had joined the batch after it, so the history read e.g. "2026-10-13 → 2026-04-01". Promotion now ends it on `GREATEST(enrolledOn, boundary)`. This migration repairs existing rows the same way (their end becomes their start date) and adds a CHECK that an enrollment never ends before it begins. It runs in one transaction.
+
+Before deploying, see which rows it will repair (it's fine if there are some; nothing else is changed):
+
+```sql
+SELECT "id", "studentId", "batchName", "enrolledOn", "endedOn" FROM "StudentEnrollment" WHERE "endedOn" < "enrolledOn";
+```
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

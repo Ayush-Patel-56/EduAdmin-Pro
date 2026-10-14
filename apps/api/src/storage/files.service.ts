@@ -213,29 +213,46 @@ export class FilesService {
 
     const rule = PURPOSES[file.purpose];
     const pending = uploadKey(file.id, schoolId);
-    const size = await driver.size(pending);
-    const reject = async (message: string) => {
-      await this.discard([file]);
-      throw new BadRequestException(message);
-    };
-    if (size === null) return reject('The upload did not arrive. Try again.');
-    if (size === 0 || size > rule.maxBytes) {
-      return reject(`The file must be at most ${rule.maxBytes / MB} MB`);
+    let rejected: string | null = null;
+    const done = await this.prisma.$transaction(
+      async (tx) => {
+        // One completion at a time per file: a second one waits here, then sees READY.
+        const [row] = await tx.$queryRaw<{ status: string }[]>`
+          SELECT "status" FROM "FileObject" WHERE "id" = ${file.id} FOR UPDATE`;
+        if (!row) throw new NotFoundException('File not found');
+        if (row.status === 'READY') return tx.fileObject.findUniqueOrThrow({ where: { id: file.id } });
+        // Move the bytes to the key they are served from first (a local rename,
+        // an R2 copy: a snapshot either way), then check *those* bytes. A PUT to
+        // the upload URL arriving meanwhile only lands under the upload key,
+        // which is never served.
+        try {
+          await driver.move(pending, file.key);
+        } catch {
+          rejected = 'The upload did not arrive. Try again.';
+          return null;
+        }
+        const size = await driver.size(file.key);
+        if (size === null) {
+          rejected = 'The upload did not arrive. Try again.';
+        } else if (size === 0 || size > rule.maxBytes) {
+          rejected = `The file must be at most ${rule.maxBytes / MB} MB`;
+        } else {
+          const check = SIGNATURES[file.contentType];
+          if (!check || !check(await driver.readStart(file.key, 16))) rejected = `That file isn't ${rule.describe}`;
+        }
+        if (rejected) return null;
+        return tx.fileObject.update({ where: { id: file.id }, data: { status: 'READY', size: size! } });
+      },
+      // Copying a large file on R2 can take a few seconds.
+      { timeout: 60_000 },
+    );
+    if (!done) {
+      await this.discard([file]); // the row, and the bytes under both keys
+      throw new BadRequestException(rejected ?? 'The upload did not arrive. Try again.');
     }
-    const check = SIGNATURES[file.contentType];
-    if (!check || !check(await driver.readStart(pending, 16))) {
-      return reject(`That file isn't ${rule.describe}`);
-    }
-    // Claim the row first: of two simultaneous completions only one moves the bytes.
-    const claimed = await this.prisma.fileObject.updateMany({
-      where: { id: file.id, status: 'PENDING' },
-      data: { status: 'READY', size },
-    });
-    if (claimed.count === 0) {
-      return summary(await this.prisma.fileObject.findUniqueOrThrow({ where: { id: file.id } }));
-    }
-    await driver.move(pending, file.key);
-    return summary({ ...file, size });
+    // Bytes PUT after the move are left under the upload key: never served, removed here.
+    await this.removeObjects([pending]);
+    return summary(done);
   }
 
   /** A READY file of this school and purpose, or a 400 naming the problem. */
