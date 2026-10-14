@@ -17,14 +17,17 @@ import {
 } from 'lucide-react'
 import { AnnouncementList } from '@/features/portal/Announcements'
 import { formatDate } from '@/features/portal/format'
+import { SPECIAL_TYPE_LABELS } from '@/features/schedule/api'
 import { RegenerateCodeDialog } from './RegenerateCodeDialog'
 import { useAdminContext } from './adminContext'
-import type { Dashboard, MouStatus } from './useDashboard'
+import { useDashboard, type Dashboard, type MouStatus } from './useDashboard'
 
 const CURRENT_YEAR = new Date().getFullYear()
 
 export function DashboardPage() {
   const { dashboard, dashboardError, schoolId } = useAdminContext()
+  // The layout keeps the dashboard cached; opening this page refreshes today's classes.
+  useDashboard(schoolId, true)
 
   if (dashboardError) {
     return <p className="rounded-lg bg-red-50 p-4 text-sm text-red-700">{dashboardError.message}</p>
@@ -243,7 +246,7 @@ function Schedule({ rows }: { rows: Dashboard['todaySchedule'] }) {
         <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
           <CalendarClock className="size-5 text-slate-700" /> Today's Class Schedule
         </h2>
-        <Link to="/management/schedule" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
+        <Link to="/management/calendar" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
           Manage Schedule
         </Link>
       </div>
@@ -269,7 +272,14 @@ function Schedule({ rows }: { rows: Dashboard['todaySchedule'] }) {
               rows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-50 text-sm text-slate-700">
                   <td className="px-6 py-3 font-medium">{r.time}</td>
-                  <td className="px-6 py-3">{r.className}</td>
+                  <td className="px-6 py-3">
+                    <span className="font-semibold text-slate-900">{r.className}</span>
+                    {r.type && (
+                      <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-emerald-700 uppercase">
+                        {SPECIAL_TYPE_LABELS[r.type]}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-6 py-3">{r.batch}</td>
                   <td className="px-6 py-3">{r.teacher}</td>
                   <td className="px-6 py-3">{r.room}</td>

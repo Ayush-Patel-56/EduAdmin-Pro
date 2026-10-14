@@ -9,6 +9,14 @@ import {
   TeacherWorkspaceController,
 } from '../workspace/workspace.controller.js';
 import {
+  AdminAttendanceController,
+  TeacherAttendanceController,
+} from '../attendance/attendance.controller.js';
+import {
+  AdminScheduleController,
+  TeacherScheduleController,
+} from '../schedule/schedule.controller.js';
+import {
   TeacherPortalController,
   TeacherProfileController,
 } from './teacher-portal.controller.js';
@@ -43,6 +51,8 @@ describe.each([
   ['TeacherPortalController', (a: AccessService) => new TeacherPortalController(a, untouched() as never), 8],
   ['AdminCounselingController', (a: AccessService) => new AdminCounselingController(a, untouched() as never), 6],
   ['AdminWorkspaceController', (a: AccessService) => new AdminWorkspaceController(a, untouched() as never), 2],
+  ['AdminScheduleController', (a: AccessService) => new AdminScheduleController(a, untouched() as never), 9],
+  ['AdminAttendanceController', (a: AccessService) => new AdminAttendanceController(a, untouched() as never), 1],
 ])('%s: admin routes of /schools/:schoolId', (_name, build, minimum) => {
   const assertAdmin = vi.fn();
   const controller = build({ assertAdmin } as unknown as AccessService);
@@ -68,6 +78,8 @@ describe.each([
   ['TeacherWorkspaceController', (a: AccessService) => new TeacherWorkspaceController(a, untouched() as never)],
   ['TeacherCounselingController', (a: AccessService) => new TeacherCounselingController(a, untouched() as never)],
   ['TeacherProfileController', (a: AccessService) => new TeacherProfileController(a, untouched() as never)],
+  ['TeacherScheduleController', (a: AccessService) => new TeacherScheduleController(a, untouched() as never)],
+  ['TeacherAttendanceController', (a: AccessService) => new TeacherAttendanceController(a, untouched() as never)],
 ])('%s: faculty routes', (_name, build) => {
   const teacherScope = vi.fn().mockRejectedValue(new ForbiddenException('Join a school'));
   const controller = build({ teacherScope } as unknown as AccessService);

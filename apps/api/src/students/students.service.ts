@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -140,12 +141,24 @@ export class StudentsService {
 
   /** Removes the student with their guardians and batch history. */
   async remove(schoolId: string, studentId: string) {
-    const student = await this.prisma.student.findFirst({
-      where: { id: studentId, schoolId },
-      select: { id: true, photo: { select: { id: true, key: true } } },
+    const student = await this.prisma.$transaction(async (tx) => {
+      // Locked, so attendance can't be added between the check and the delete.
+      await lockStudent(tx, schoolId, studentId);
+      // Attendance is a record: a student who has some leaves the roster by
+      // status (Inactive, Transferred, Completed), not by deletion.
+      const marked = await tx.attendanceRecord.count({ where: { schoolId, studentId } });
+      if (marked > 0) {
+        throw new ConflictException(
+          `Attendance is recorded for this student in ${marked} class${marked === 1 ? '' : 'es'}, so they can't be deleted. Set their status to Inactive or Transferred instead.`,
+        );
+      }
+      const row = await tx.student.findUniqueOrThrow({
+        where: { id: studentId },
+        select: { photo: { select: { id: true, key: true } } },
+      });
+      await tx.student.delete({ where: { id: studentId } });
+      return row;
     });
-    if (!student) throw new NotFoundException('Student not found');
-    await this.prisma.student.delete({ where: { id: studentId } });
     // The student is gone either way; a photo that can't be removed now is
     // left for the abandoned-upload cleanup rather than failing the delete.
     if (student.photo) await this.discardQuietly(student.photo);

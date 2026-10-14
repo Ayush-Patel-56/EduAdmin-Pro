@@ -17,10 +17,14 @@ import { firstName } from '@/features/auth/types'
 import type { MouStatus } from '@/features/admin/useDashboard'
 import { AnnouncementList } from '@/features/portal/Announcements'
 import { formatDate, formatLongDate } from '@/features/portal/format'
-import { useTeacherContext, type TeacherDashboard } from './useTeacherDashboard'
+import { SPECIAL_TYPE_LABELS } from '@/features/schedule/api'
+import { todayIst } from '@/lib/dates'
+import { useTeacherContext, useTeacherDashboard, type TeacherDashboard } from './useTeacherDashboard'
 
 export function TeacherDashboardPage() {
   const { me, dashboard, dashboardError, openSwitchSchool } = useTeacherContext()
+  // The layout keeps the dashboard cached; opening this page refreshes today's classes.
+  useTeacherDashboard(true)
   const [today] = useState(() => new Date())
 
   if (dashboardError) {
@@ -208,13 +212,26 @@ function TodaySchedule({ rows }: { rows: TeacherDashboard['todaySchedule'] }) {
   return (
     <ol className="mt-4 ml-5 space-y-3 border-l-2 border-slate-200 pl-8">
       {rows.map((r) => (
-        <li key={r.id} className="rounded-lg border border-slate-200 bg-white p-4 text-sm">
-          <p className="font-semibold text-slate-900">
-            {r.time} · {r.className}
-          </p>
-          <p className="text-xs text-slate-500">
-            {r.batch} · Room {r.room}
-          </p>
+        <li key={r.id} className="relative flex flex-wrap items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm shadow-sm">
+          <span className="absolute top-5 -left-[39px] size-3 rounded-full border-2 border-white bg-indigo-600 ring-2 ring-indigo-100" />
+          <div>
+            <p className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+              {r.time}
+              {r.type && (
+                <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-indigo-700 uppercase">
+                  {SPECIAL_TYPE_LABELS[r.type]}
+                </span>
+              )}
+            </p>
+            <p className="mt-1 text-base font-bold text-slate-900">{r.className}</p>
+            <p className="mt-1 text-xs text-slate-500">{[r.batch, r.subject !== r.className ? r.subject : null, r.room].filter(Boolean).join(' • ')}</p>
+          </div>
+          <Link
+            to={`/teacher/attendance?date=${todayIst()}&class=${encodeURIComponent(r.id)}`}
+            className="rounded-lg bg-ink px-4 py-2 text-xs font-semibold text-white hover:bg-ink-hover"
+          >
+            Mark Attendance
+          </Link>
         </li>
       ))}
     </ol>

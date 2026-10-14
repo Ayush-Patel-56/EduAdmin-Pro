@@ -15,6 +15,8 @@ import { StudentsModule } from './students/students.module.js';
 import { CounselingModule } from './counseling/counseling.module.js';
 import { TeacherPortalModule } from './teacher-portal/teacher-portal.module.js';
 import { WorkspaceModule } from './workspace/workspace.module.js';
+import { ScheduleModule } from './schedule/schedule.module.js';
+import { AttendanceModule } from './attendance/attendance.module.js';
 
 @Module({
   imports: [
@@ -31,6 +33,8 @@ import { WorkspaceModule } from './workspace/workspace.module.js';
     TeacherPortalModule,
     WorkspaceModule,
     CounselingModule,
+    ScheduleModule,
+    AttendanceModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

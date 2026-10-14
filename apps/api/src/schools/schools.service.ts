@@ -19,6 +19,7 @@ import { normalizeIndianMobile } from '../common/validators.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
 import { unlinkProgramChapters } from '../curriculum/unlink-program-chapters.js';
 import { FilesService } from '../storage/files.service.js';
+import { ScheduleService } from '../schedule/schedule.service.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
   CLASS_OPTIONS,
@@ -41,6 +42,7 @@ export class SchoolsService {
     private readonly prisma: PrismaService,
     private readonly access: AccessService,
     private readonly files: FilesService,
+    private readonly schedule: ScheduleService,
   ) {}
 
   options() {
@@ -183,15 +185,21 @@ export class SchoolsService {
     const faculty = school
       ? await this.prisma.faculty.findUnique({
           where: { schoolId_userId: { schoolId: school.id, userId: auth.userId } },
-          select: { status: true, batchAssignments: { select: { batchId: true } } },
+          select: { id: true, status: true, batchAssignments: { select: { batchId: true } } },
         })
       : null;
     const batchIds = faculty && faculty.status !== 'INACTIVE' ? faculty.batchAssignments.map((b) => b.batchId) : [];
-    const assignmentsToGrade = batchIds.length
-      ? await this.prisma.assignmentSubmission.count({
-          where: { schoolId: school!.id, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: { in: batchIds } } },
-        })
-      : 0;
+    const [assignmentsToGrade, today] = await Promise.all([
+      batchIds.length
+        ? this.prisma.assignmentSubmission.count({
+            where: { schoolId: school!.id, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: { in: batchIds } } },
+          })
+        : 0,
+      // Today's classes: the teacher's slots and special classes in their batches.
+      school && faculty && batchIds.length
+        ? this.schedule.classesOn(school.id, istToday(), { facultyId: faculty.id, batchIds })
+        : [],
+    ]);
     return {
       school: school
         ? {
@@ -206,10 +214,18 @@ export class SchoolsService {
         : null,
       programs: school?.programs ?? [],
       announcements: school?.announcements ?? [],
-      // The other counts, the schedule and feedback are filled in as
-      // timetables, daily reports, tests and admin feedback are built.
-      stats: { todayClasses: 0, pendingDailyReports: 0, assignmentsToGrade, upcomingTests: 0 },
-      todaySchedule: [],
+      // The other counts and feedback are filled in as daily reports, tests
+      // and admin feedback are built.
+      stats: { todayClasses: today.length, pendingDailyReports: 0, assignmentsToGrade, upcomingTests: 0 },
+      todaySchedule: today.map((c) => ({
+        id: c.key,
+        time: c.time,
+        className: c.title,
+        type: c.type,
+        subject: c.subject,
+        batch: c.batch.name,
+        room: c.room,
+      })),
       adminFeedback: [],
     };
   }
@@ -243,8 +259,7 @@ export class SchoolsService {
       },
       programs: school.programs,
       announcements: school.announcements,
-      // Populated once timetables exist; kept in the response shape so the UI is final.
-      todaySchedule: [],
+      todaySchedule: await this.schedule.adminToday(schoolId),
     };
   }
 
@@ -414,6 +429,10 @@ export class SchoolsService {
       // cleared (and audited) or nothing is. Students (with guardians and
       // batch history) go before the batches and programs they point at.
       await tx.counselingSession.deleteMany({ where: { schoolId } });
+      // Attendance sheets (with their records) before the batches they point at.
+      await tx.classOccurrence.deleteMany({ where: { schoolId } });
+      await tx.specialClass.deleteMany({ where: { schoolId } });
+      await tx.scheduleSlot.deleteMany({ where: { schoolId } });
       await tx.assignment.deleteMany({ where: { schoolId } }); // with their submissions
       await tx.studyMaterial.deleteMany({ where: { schoolId } });
       await tx.student.deleteMany({ where: { schoolId } });

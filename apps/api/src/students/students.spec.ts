@@ -171,7 +171,8 @@ describe('StudentsService: records stay inside the school', () => {
   const tx = {
     $queryRaw: vi.fn(),
     batch: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: '10-A', program: { name: 'JEE' } }) },
-    student: { findUniqueOrThrow: vi.fn(), update: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'new' }) },
+    student: { findUniqueOrThrow: vi.fn(), update: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'new' }), delete: vi.fn() },
+    attendanceRecord: { count: vi.fn().mockResolvedValue(0) },
     studentGuardian: { count: vi.fn().mockResolvedValue(0), updateMany: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'g1' }), findFirst: vi.fn(), update: vi.fn() },
     studentEnrollment: { updateMany: vi.fn(), create: vi.fn() },
   };
@@ -236,15 +237,31 @@ describe('StudentsService: records stay inside the school', () => {
     await expect(service.update('school-1', 'u', 'st-x', dto())).rejects.toBeInstanceOf(NotFoundException);
     expect(tx.$queryRaw.mock.calls[0].slice(1)).toEqual(['st-x', 'school-1']);
     expect(tx.student.update).not.toHaveBeenCalled();
-    studentFindFirst.mockResolvedValue(null);
     await expect(service.remove('school-1', 'st-x')).rejects.toBeInstanceOf(NotFoundException);
-    expect(studentFindFirst.mock.calls[0][0].where).toEqual({ id: 'st-x', schoolId: 'school-1' });
+    expect(tx.$queryRaw.mock.calls[1].slice(1)).toEqual(['st-x', 'school-1']);
+    expect(tx.student.delete).not.toHaveBeenCalled();
   });
 
   it('a delete that succeeded is reported as success even if its photo cannot be removed', async () => {
-    studentFindFirst.mockResolvedValue({ id: 'st-1', photo: { id: 'f1', key: 'k' } });
+    runTx();
+    tx.$queryRaw.mockResolvedValue([{ id: 'st-1' }]);
+    tx.student.findUniqueOrThrow.mockResolvedValue({ photo: { id: 'f1', key: 'k' } });
     discard.mockRejectedValue(new Error('still referenced'));
     await expect(service.remove('school-1', 'st-1')).resolves.toEqual({ ok: true });
+  });
+
+  it('a student with recorded attendance is not deleted (attendance is a record); checked under the lock', async () => {
+    runTx();
+    tx.$queryRaw.mockResolvedValue([{ id: 'st-1' }]);
+    tx.attendanceRecord.count.mockResolvedValueOnce(3);
+    await expect(service.remove('school-1', 'st-1')).rejects.toEqual(
+      new ConflictException(
+        "Attendance is recorded for this student in 3 classes, so they can't be deleted. Set their status to Inactive or Transferred instead.",
+      ),
+    );
+    expect(tx.attendanceRecord.count.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', studentId: 'st-1' });
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.attendanceRecord.count.mock.invocationCallOrder[0]);
+    expect(tx.student.delete).not.toHaveBeenCalled();
   });
 
   it('guardian changes lock the student first, and a lost race is a 409, not a 500', async () => {

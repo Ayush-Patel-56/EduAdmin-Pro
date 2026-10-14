@@ -43,6 +43,12 @@ const MyProfilePage = lazy(() => import('@/features/teacher/MyProfilePage').then
 const TeacherAcademicPlanningPage = lazy(() =>
   import('@/features/teacher/TeacherAcademicPlanningPage').then((m) => ({ default: m.TeacherAcademicPlanningPage })),
 )
+const CalendarPage = lazy(() => import('@/features/admin/calendar/CalendarPage').then((m) => ({ default: m.CalendarPage })))
+const AttendanceOverviewPage = lazy(() =>
+  import('@/features/admin/attendance/AttendanceOverviewPage').then((m) => ({ default: m.AttendanceOverviewPage })),
+)
+const SchedulePage = lazy(() => import('@/features/teacher/SchedulePage').then((m) => ({ default: m.SchedulePage })))
+const TeacherAttendancePage = lazy(() => import('@/features/teacher/AttendancePage').then((m) => ({ default: m.AttendancePage })))
 const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
@@ -53,6 +59,10 @@ const adminPages: Record<string, ReactNode> = {
   students: lazyPage(<StudentsPage />),
   'teacher-portal': lazyPage(<TeacherPortalPage />),
   counseling: lazyPage(<CounselingPage />),
+  calendar: lazyPage(<CalendarPage />),
+  attendance: lazyPage(<AttendanceOverviewPage />),
+  // The dashboard's "Manage Schedule" used to point here; class schedules live under Calendar.
+  schedule: <Navigate to="/management/calendar" replace />,
 }
 const teacherPages: Record<string, ReactNode> = {
   'academic-planning': lazyPage(<TeacherAcademicPlanningPage />),
@@ -60,6 +70,8 @@ const teacherPages: Record<string, ReactNode> = {
   courses: lazyPage(<WorkspacePage />),
   assignments: lazyPage(<WorkspacePage />),
   'counseling-log': lazyPage(<CounselingLogPage />),
+  schedule: lazyPage(<SchedulePage />),
+  attendance: lazyPage(<TeacherAttendancePage />),
   profile: lazyPage(<MyProfilePage />),
 }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
