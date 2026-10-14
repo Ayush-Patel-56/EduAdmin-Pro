@@ -331,6 +331,8 @@ model School {
   feeDues         FeeDue[]
   feePayments     FeePayment[]
   receiptCounters FeeReceiptCounter[]
+  meetings        Meeting[]
+  agendaItems     MeetingAgendaItem[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -1253,4 +1255,73 @@ model FeeReceiptCounter {
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   @@id([schoolId, year])
+}
+
+enum MeetingType {
+  GENERAL
+  MANAGEMENT
+  PARENT_TEACHER
+  STAFF
+  DISCIPLINARY
+}
+
+enum AgendaPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AgendaStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+// A school meeting (PRD 4.14): the Meetings Log entry, with its agenda items
+// as the minutes. The time is minutes after midnight, Indian time (optional).
+model Meeting {
+  id                String      @id @default(uuid())
+  schoolId          String
+  title             String
+  type              MeetingType @default(GENERAL)
+  date              DateTime    @db.Date
+  startMinute       Int?
+  venue             String?
+  attendees         String[]    @default([])
+  minutesPreparedBy String?
+  nextMeetingDate   DateTime?   @db.Date
+  createdById       String?
+  createdAt         DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(3)
+
+  school      School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  agendaItems MeetingAgendaItem[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, date])
+}
+
+// One agenda / discussion item of a meeting, with what was decided and who
+// follows it up.
+model MeetingAgendaItem {
+  id             String         @id @default(uuid())
+  schoolId       String
+  meetingId      String
+  title          String
+  discussion     String?
+  action         String?
+  responsible    String?
+  targetDate     DateTime?      @db.Date
+  communicatedTo String?
+  communicatedBy String?
+  priority       AgendaPriority @default(MEDIUM)
+  status         AgendaStatus   @default(NOT_STARTED)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  meeting Meeting @relation(fields: [meetingId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@index([schoolId])
 }

@@ -160,6 +160,10 @@ Fee records are kept: a payment is voided (with who, when and why), never delete
 
 `20261014160000_fees_paid_check` adds a CHECK that a due's paid total never exceeds its net payable (the API already refuses it under a lock). Before deploying, expect no rows from `SELECT "id" FROM "FeeDue" WHERE "paidPaise" > "netPaise";`.
 
+## Meetings (`20261014180000_meetings`)
+
+New tables only (meetings and their agenda items), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep the meeting time valid and the next meeting date on or after the meeting. Deleting a meeting deletes its agenda items; Clear All Data removes meetings.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

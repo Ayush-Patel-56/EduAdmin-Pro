@@ -13,6 +13,7 @@ import {
   TeacherAttendanceController,
 } from '../attendance/attendance.controller.js';
 import { FeesController } from '../fees/fees.controller.js';
+import { MeetingsController } from '../meetings/meetings.controller.js';
 import {
   AdminScheduleController,
   TeacherScheduleController,
@@ -56,6 +57,8 @@ describe.each([
   ['AdminAttendanceController', (a: AccessService) => new AdminAttendanceController(a, untouched() as never), 1],
   // Fees are admin only: every route, including the reads.
   ['FeesController', (a: AccessService) => new FeesController(a, untouched() as never, untouched() as never), 14],
+  // Meetings are admin only too.
+  ['MeetingsController', (a: AccessService) => new MeetingsController(a, untouched() as never), 9],
 ])('%s: admin routes of /schools/:schoolId', (_name, build, minimum) => {
   const assertAdmin = vi.fn();
   const controller = build({ assertAdmin } as unknown as AccessService);
