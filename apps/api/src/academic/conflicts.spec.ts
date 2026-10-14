@@ -72,7 +72,7 @@ describe('ProgramsService: racing creates/updates are 409s', () => {
 });
 
 describe('BatchesService: racing creates/updates are 409s', () => {
-  const tx = { batch: { create: vi.fn(), update: vi.fn() } };
+  const tx = { batch: { create: vi.fn(), update: vi.fn() }, $queryRaw: vi.fn().mockResolvedValue([{}]) };
   const prisma = {
     program: {
       findFirst: vi.fn().mockResolvedValue({ id: 'p1', name: 'JEE' }),

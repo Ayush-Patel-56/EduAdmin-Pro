@@ -30,6 +30,7 @@ function txWith(linked: object[], unlinked: object[]) {
     program: { delete: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn() },
     school: { update: vi.fn() },
     feeStructure: { count: vi.fn().mockResolvedValue(0) },
+    batch: { count: vi.fn().mockResolvedValue(0) },
     $queryRaw: vi.fn().mockResolvedValue([]),
   };
 }
