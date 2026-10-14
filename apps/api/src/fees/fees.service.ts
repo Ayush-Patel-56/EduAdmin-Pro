@@ -444,23 +444,26 @@ export class FeesService {
       });
       if (used) throw new ConflictException(`Receipt number ${p.receiptNumber} is already used`);
     }
-    const receiptNumber = p.receiptNumber ?? (await nextReceipt(tx, schoolId, p.paidOn.getUTCFullYear()));
-    const row = await tx.feePayment.create({
-      data: {
-        schoolId,
-        dueId,
-        receiptNumber,
-        amountPaise: p.amountPaise,
-        method: p.method,
-        transactionRef: p.transactionRef,
-        paidOn: p.paidOn,
-        source: p.source,
-        idempotencyKey: p.idempotencyKey,
-        notes: p.notes ?? null,
-        recordedById: userId,
-      },
-      select: { id: true },
-    });
+    const create = (receiptNumber: string) =>
+      tx.feePayment.create({
+        data: {
+          schoolId,
+          dueId,
+          receiptNumber,
+          amountPaise: p.amountPaise,
+          method: p.method,
+          transactionRef: p.transactionRef,
+          paidOn: p.paidOn,
+          source: p.source,
+          idempotencyKey: p.idempotencyKey,
+          notes: p.notes ?? null,
+          recordedById: userId,
+        },
+        select: { id: true },
+      });
+    const { row, receiptNumber } = p.receiptNumber
+      ? { row: await create(p.receiptNumber), receiptNumber: p.receiptNumber }
+      : await withAutoReceipt(tx, schoolId, p.paidOn.getUTCFullYear(), create);
     await tx.feeDue.update({ where: { id: dueId }, data: { paidPaise: { increment: p.amountPaise } } });
     return { paymentId: row.id, receiptNumber };
   }
@@ -615,6 +618,44 @@ export async function nextReceipt(tx: Db, schoolId: string, year: number) {
     });
     if (!taken) return receipt;
   }
+}
+
+/** How many automatic numbers to try when typed receipts keep taking the next one. */
+const AUTO_RECEIPT_TRIES = 5;
+
+/**
+ * Inserts a payment under the next automatic receipt number. Someone may type
+ * that exact number on another payment at the same moment (after `nextReceipt`
+ * saw it free): then the insert is undone to a savepoint and the next number is
+ * used, so the automatic payment doesn't fail with "already used".
+ */
+export async function withAutoReceipt<T>(tx: Db, schoolId: string, year: number, create: (receiptNumber: string) => Promise<T>) {
+  for (let attempt = 1; ; attempt++) {
+    const receiptNumber = await nextReceipt(tx, schoolId, year);
+    await tx.$executeRaw`SAVEPOINT auto_receipt`;
+    try {
+      const row = await create(receiptNumber);
+      await tx.$executeRaw`RELEASE SAVEPOINT auto_receipt`;
+      return { row, receiptNumber };
+    } catch (err) {
+      await tx.$executeRaw`ROLLBACK TO SAVEPOINT auto_receipt`;
+      const clash = uniqueViolation(err)?.some((n) => n.includes('receiptNumber'));
+      if (!clash || attempt >= AUTO_RECEIPT_TRIES) throw err;
+    }
+  }
+}
+
+/**
+ * Locks fee structures FOR UPDATE in id order, all in one statement. Two
+ * imports updating the same fees then queue instead of deadlocking (each used
+ * to lock them in its own file order).
+ */
+export async function lockStructures(tx: Db, schoolId: string, ids: string[]) {
+  const sorted = [...new Set(ids)].sort();
+  if (sorted.length === 0) return;
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "FeeStructure" WHERE "schoolId" = ${schoolId} AND "id" = ANY(${sorted}::text[]) ORDER BY "id" FOR UPDATE`;
+  if (rows.length !== sorted.length) throw new NotFoundException('Fee structure not found');
 }
 
 function figuresOf(dto: AdjustDueDto): Figures {

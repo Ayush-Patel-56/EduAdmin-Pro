@@ -7,7 +7,7 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { AdjustDueDto, type RecordPaymentDto } from './fees.dto.js';
 import { FeesImportService } from './fees-import.service.js';
-import { FeesService, nextReceipt } from './fees.service.js';
+import { FeesService, lockStructures, nextReceipt, withAutoReceipt } from './fees.service.js';
 
 const today = istToday();
 const todayIso = today.toISOString().slice(0, 10);
@@ -86,6 +86,7 @@ function build() {
       count: vi.fn().mockResolvedValue(0),
     },
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'x', last: 7 }]),
+    $executeRaw: vi.fn().mockResolvedValue(0),
     $transaction: vi.fn(),
   };
   prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => unknown) => run(prisma));
@@ -427,5 +428,108 @@ describe('FeesService: a lost race on a unique index is a 409, not a 500', () =>
       new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 't', meta: { target: ['FeePayment_schoolId_transactionRef_key'] } }),
     );
     await expect(service.record('school-1', 'u', record())).rejects.toEqual(new ConflictException('That transaction ID is already recorded'));
+  });
+});
+
+describe('follow-ups from #20 (#23)', () => {
+  const dup = (index: string) => new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 't', meta: { target: [index] } });
+  const fee = (id: string, name: string, dues = 0, frequency = 'MONTHLY') => ({ id, name, frequency, programId: null, batchId: null, _count: { dues } });
+  const row = (name: string, frequency = 'Monthly') => ({ name, category: 'Monthly Tuition', amount: '1000', frequency });
+
+  it('a structure import locks every fee it updates up front, in id order, in one statement, before changing any', async () => {
+    const { imports, prisma } = build();
+    prisma.feeStructure.findMany.mockResolvedValue([fee('fs-b', 'Bus'), fee('fs-a', 'Art')]);
+    prisma.feeStructure.findUniqueOrThrow.mockResolvedValue({ frequency: 'MONTHLY', programId: null, batchId: null, _count: { dues: 0 } });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'fs-a' }, { id: 'fs-b' }]);
+    (prisma.feeStructure as Record<string, unknown>).create = vi.fn();
+    await imports.structures('school-1', 'u', { dryRun: false, rows: [row('Bus'), row('Art'), row('New')] });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const [sql, ...values] = prisma.$queryRaw.mock.calls[0] as [string[], ...unknown[]];
+    expect(sql.join('?')).toMatch(/FROM "FeeStructure".*ANY\(.*ORDER BY "id" FOR UPDATE/s);
+    expect(values).toEqual(['school-1', ['fs-a', 'fs-b']]);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.feeStructure.update.mock.invocationCallOrder[0]);
+    expect(prisma.feeStructure.update.mock.calls.map((c) => c[0].where.id)).toEqual(['fs-b', 'fs-a']);
+  });
+
+  it('lockStructures: a fee missing (deleted meanwhile) is a 404; nothing to lock runs no query', async () => {
+    const { prisma } = build();
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'fs-a' }]);
+    await expect(lockStructures(prisma as never, 's', ['fs-b', 'fs-a', 'fs-b'])).rejects.toBeInstanceOf(NotFoundException);
+    expect((prisma.$queryRaw.mock.calls[0] as unknown[])[2]).toEqual(['fs-a', 'fs-b']);
+    prisma.$queryRaw.mockClear();
+    await lockStructures(prisma as never, 's', []);
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('the preview refuses changing the frequency or scope of a fee that has dues', async () => {
+    const { imports, prisma } = build();
+    prisma.feeStructure.findMany.mockResolvedValue([fee('fs-1', 'Tuition', 3)]);
+    const result = await imports.structures('school-1', 'u', { dryRun: true, rows: [row('Tuition', 'Yearly')] });
+    expect(result.rows[0].action).toBe('error');
+    expect(result.rows[0].errors.join(' ')).toMatch(/frequency/i);
+  });
+
+  it('applying checks again under the lock: dues assessed since the preview stop the change, and nothing is updated', async () => {
+    const { imports, prisma } = build();
+    prisma.feeStructure.findMany.mockResolvedValue([fee('fs-1', 'Tuition', 0)]); // the preview saw no dues
+    prisma.$queryRaw.mockResolvedValue([{ id: 'fs-1' }]);
+    prisma.feeStructure.findUniqueOrThrow.mockResolvedValue({ frequency: 'MONTHLY', programId: null, batchId: null, _count: { dues: 2 } });
+    await expect(imports.structures('school-1', 'u', { dryRun: false, rows: [row('Tuition', 'Yearly')] })).rejects.toThrow(/frequency/i);
+    expect(prisma.feeStructure.update).not.toHaveBeenCalled();
+  });
+
+  it('an idempotency key replayed with another amount, due or fee structure is a 409', async () => {
+    const { service, prisma } = build();
+    const key = '00000000-0000-4000-8000-000000000009';
+    const done = { id: 'p1', dueId: 'due-1', receiptNumber: 'R1', amountPaise: 10000, voidedAt: null, due: { studentId: 'st-1', structureId: 'fs-1' } };
+    const add = (dueId: string, amountPaid: number) => service.addPayment('school-1', 'u', dueId, { amountPaid, method: 'CASH', idempotencyKey: key });
+    prisma.feePayment.findUnique.mockResolvedValue(done);
+    await expect(add('due-1', 100)).resolves.toMatchObject({ paymentId: 'p1', replayed: true });
+    await expect(add('due-1', 200)).rejects.toThrow('already used for a different payment'); // amount
+    await expect(add('due-2', 100)).rejects.toThrow('already used for a different payment'); // due
+    await expect(service.record('school-1', 'u', record({ idempotencyKey: key, amountPaid: 100 }))).resolves.toMatchObject({ replayed: true });
+    await expect(service.record('school-1', 'u', record({ idempotencyKey: key, amountPaid: 100, structureId: 'fs-2' }))).rejects.toThrow('already used for a different payment'); // structure
+  });
+
+  it('an automatic receipt that someone typed meanwhile is retried with the next number, inside a savepoint', async () => {
+    const { prisma } = build();
+    prisma.$queryRaw.mockResolvedValueOnce([{ last: 5 }]).mockResolvedValueOnce([{ last: 6 }]);
+    const create = vi.fn().mockRejectedValueOnce(dup('FeePayment_schoolId_receiptNumber_key')).mockResolvedValueOnce({ id: 'pay-1' });
+    await expect(withAutoReceipt(prisma as never, 's', 2026, create)).resolves.toEqual({ row: { id: 'pay-1' }, receiptNumber: 'REC-2026-000006' });
+    expect(create.mock.calls.map((c) => c[0])).toEqual(['REC-2026-000005', 'REC-2026-000006']);
+    const sql = prisma.$executeRaw.mock.calls.map((c) => (c[0] as string[]).join(''));
+    expect(sql).toEqual(['SAVEPOINT auto_receipt', 'ROLLBACK TO SAVEPOINT auto_receipt', 'SAVEPOINT auto_receipt', 'RELEASE SAVEPOINT auto_receipt']);
+  });
+
+  it('other errors are not retried, and the retries are bounded', async () => {
+    const { prisma } = build();
+    prisma.$queryRaw.mockResolvedValue([{ last: 1 }]);
+    const other = dup('FeePayment_schoolId_transactionRef_key');
+    const once = vi.fn().mockRejectedValue(other);
+    await expect(withAutoReceipt(prisma as never, 's', 2026, once)).rejects.toBe(other);
+    expect(once).toHaveBeenCalledTimes(1);
+    const always = vi.fn().mockRejectedValue(dup('FeePayment_schoolId_receiptNumber_key'));
+    await expect(withAutoReceipt(prisma as never, 's', 2026, always)).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(always).toHaveBeenCalledTimes(5);
+  });
+
+  it('Add Payment uses it: a clash on the automatic number still records the payment', async () => {
+    const { service, prisma } = build();
+    prisma.feeDue.findUniqueOrThrow.mockResolvedValue({ netPaise: 100000, paidPaise: 0 });
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'due-1' }]).mockResolvedValueOnce([{ last: 5 }]).mockResolvedValueOnce([{ last: 6 }]);
+    prisma.feePayment.create.mockRejectedValueOnce(dup('FeePayment_schoolId_receiptNumber_key'));
+    await expect(service.addPayment('school-1', 'u', 'due-1', { amountPaid: 100, method: 'CASH' })).resolves.toMatchObject({ receiptNumber: 'REC-2026-000006'.replace('2026', String(today.getUTCFullYear())) });
+    expect(prisma.feeDue.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('a typed receipt that clashes is still a 409 (not renumbered)', async () => {
+    const { service, prisma } = build();
+    prisma.feeDue.findUniqueOrThrow.mockResolvedValue({ netPaise: 100000, paidPaise: 0 });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'due-1' }]);
+    prisma.feePayment.create.mockRejectedValue(dup('FeePayment_schoolId_receiptNumber_key'));
+    await expect(service.addPayment('school-1', 'u', 'due-1', { amountPaid: 100, method: 'CASH', receiptNumber: 'R-7' })).rejects.toEqual(new ConflictException('That receipt number is already used'));
+    expect(prisma.feePayment.create).toHaveBeenCalledTimes(1);
+    expect(prisma.feePayment.create.mock.calls[0][0].data.receiptNumber).toBe('R-7');
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 });
