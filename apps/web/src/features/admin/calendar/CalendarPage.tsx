@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Construction, Filter, GraduationCap, Loader2, Pencil, Plus, Repeat, Sparkles, Trash2, Users } from 'lucide-react'
+import { Filter, GraduationCap, Loader2, Pencil, Plus, Repeat, Sparkles, Trash2, Users } from 'lucide-react'
 import { api } from '@/lib/api'
 import { ConfirmDialog, ErrorBanner } from '@/components/ui/form'
 import { ALL } from '@/features/academic/filters'
@@ -17,14 +17,15 @@ import {
 } from '@/features/schedule/api'
 import { SlotDialog, SpecialClassDialog, type BatchOption } from '@/features/schedule/ScheduleDialogs'
 import { useAdminContext } from '../adminContext'
+import { AcademicCalendar } from './AcademicCalendar'
 
 type Tab = 'calendar' | 'schedules'
 
 /** Calendar (PRD 4.15): Academic Calendar and Class Schedules. */
 export function CalendarPage() {
   const [params, setParams] = useSearchParams()
-  const tab: Tab = params.get('tab') === 'calendar' ? 'calendar' : 'schedules'
-  const select = (next: Tab) => setParams(next === 'schedules' ? {} : { tab: next }, { replace: true })
+  const tab: Tab = params.get('tab') === 'schedules' ? 'schedules' : 'calendar'
+  const select = (next: Tab) => setParams(next === 'calendar' ? {} : { tab: next }, { replace: true })
   return (
     <>
       <div role="tablist" aria-label="Calendar" className="inline-flex rounded-xl border border-slate-200 bg-slate-100 p-1">
@@ -46,18 +47,8 @@ export function CalendarPage() {
           </button>
         ))}
       </div>
-      {tab === 'schedules' ? <ClassSchedules /> : <AcademicCalendarSoon />}
+      {tab === 'schedules' ? <ClassSchedules /> : <AcademicCalendar />}
     </>
-  )
-}
-
-function AcademicCalendarSoon() {
-  return (
-    <div className="mt-6 flex flex-col items-center rounded-2xl border border-dashed border-slate-300 bg-white py-16 text-center">
-      <Construction className="size-8 text-slate-400" />
-      <p className="mt-3 text-sm font-medium text-slate-700">The academic calendar (holidays, exams, events) is coming soon</p>
-      <p className="mt-1 text-xs text-slate-500">Class schedules are ready under Class Schedules.</p>
-    </div>
   )
 }
 

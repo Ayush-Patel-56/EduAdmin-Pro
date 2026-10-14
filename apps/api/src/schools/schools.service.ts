@@ -435,6 +435,7 @@ export class SchoolsService {
       await tx.feeStructure.deleteMany({ where: { schoolId } });
       await tx.feeReceiptCounter.deleteMany({ where: { schoolId } });
       await tx.meeting.deleteMany({ where: { schoolId } }); // with their agenda items
+      await tx.calendarEvent.deleteMany({ where: { schoolId } });
       // Attendance sheets (with their records) before the batches they point at.
       await tx.classOccurrence.deleteMany({ where: { schoolId } });
       await tx.specialClass.deleteMany({ where: { schoolId } });

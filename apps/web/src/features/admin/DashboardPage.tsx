@@ -246,7 +246,7 @@ function Schedule({ rows }: { rows: Dashboard['todaySchedule'] }) {
         <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
           <CalendarClock className="size-5 text-slate-700" /> Today's Class Schedule
         </h2>
-        <Link to="/management/calendar" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
+        <Link to="/management/calendar?tab=schedules" className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">
           Manage Schedule
         </Link>
       </div>

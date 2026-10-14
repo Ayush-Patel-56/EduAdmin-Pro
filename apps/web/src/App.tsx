@@ -66,7 +66,7 @@ const adminPages: Record<string, ReactNode> = {
   'fee-management': lazyPage(<FeesPage />),
   meetings: lazyPage(<MeetingsPage />),
   // The dashboard's "Manage Schedule" used to point here; class schedules live under Calendar.
-  schedule: <Navigate to="/management/calendar" replace />,
+  schedule: <Navigate to="/management/calendar?tab=schedules" replace />,
 }
 const teacherPages: Record<string, ReactNode> = {
   'academic-planning': lazyPage(<TeacherAcademicPlanningPage />),
