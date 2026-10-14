@@ -18,6 +18,7 @@ import { WorkspaceModule } from './workspace/workspace.module.js';
 import { ScheduleModule } from './schedule/schedule.module.js';
 import { AttendanceModule } from './attendance/attendance.module.js';
 import { FeesModule } from './fees/fees.module.js';
+import { MeetingsModule } from './meetings/meetings.module.js';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { FeesModule } from './fees/fees.module.js';
     ScheduleModule,
     AttendanceModule,
     FeesModule,
+    MeetingsModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

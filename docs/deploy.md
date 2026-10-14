@@ -158,6 +158,10 @@ New tables only (fee structures, student dues, payments, receipt counters), wrap
 
 Fee records are kept: a payment is voided (with who, when and why), never deleted; a due with payment history, a fee structure with dues, and a student with dues can't be deleted. A program or batch that a fee structure is scoped to can't be deleted until the fee is moved. Clear All Data removes all fee data with the rest of the academic data.
 
+## Meetings (`20261014180000_meetings`)
+
+New tables only (meetings and their agenda items), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep the meeting time valid and the next meeting date on or after the meeting. Deleting a meeting deletes its agenda items; Clear All Data removes meetings.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

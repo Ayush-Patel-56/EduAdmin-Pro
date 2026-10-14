@@ -50,6 +50,7 @@ const AttendanceOverviewPage = lazy(() =>
 const SchedulePage = lazy(() => import('@/features/teacher/SchedulePage').then((m) => ({ default: m.SchedulePage })))
 const TeacherAttendancePage = lazy(() => import('@/features/teacher/AttendancePage').then((m) => ({ default: m.AttendancePage })))
 const FeesPage = lazy(() => import('@/features/admin/fees/FeesPage').then((m) => ({ default: m.FeesPage })))
+const MeetingsPage = lazy(() => import('@/features/admin/meetings/MeetingsPage').then((m) => ({ default: m.MeetingsPage })))
 const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
@@ -63,6 +64,7 @@ const adminPages: Record<string, ReactNode> = {
   calendar: lazyPage(<CalendarPage />),
   attendance: lazyPage(<AttendanceOverviewPage />),
   'fee-management': lazyPage(<FeesPage />),
+  meetings: lazyPage(<MeetingsPage />),
   // The dashboard's "Manage Schedule" used to point here; class schedules live under Calendar.
   schedule: <Navigate to="/management/calendar" replace />,
 }
