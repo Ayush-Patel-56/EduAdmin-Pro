@@ -143,6 +143,17 @@ export class BatchesService {
             'Set an end date for the batch instead, or have its teachers delete those assignments first.',
         );
       }
+      // Work handed in but not graded yet is kept too: deleting the batch would
+      // silently drop it (and its file) with the assignment.
+      const waiting = await tx.assignmentSubmission.count({
+        where: { schoolId, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId } },
+      });
+      if (waiting > 0) {
+        throw new ConflictException(
+          `${waiting} submission${waiting === 1 ? ' is' : 's are'} waiting to be graded in this batch's assignments. ` +
+            'Set an end date for the batch instead, or have its teachers grade them or delete those assignments first.',
+        );
+      }
       // Fees scoped to the batch keep their dues and payments meaningful.
       const fees = await tx.feeStructure.count({ where: { schoolId, batchId } });
       if (fees > 0) {

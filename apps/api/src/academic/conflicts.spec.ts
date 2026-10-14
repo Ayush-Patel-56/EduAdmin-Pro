@@ -231,6 +231,18 @@ describe('BatchesService.remove: student history and grades', () => {
     expect(tx.batch.delete).not.toHaveBeenCalled();
   });
 
+  it('a batch with handed-in work not graded yet is not deleted either (#18)', async () => {
+    const { tx, batches } = build(0);
+    tx.assignmentSubmission.count.mockResolvedValueOnce(0).mockResolvedValueOnce(2);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('2 submissions are waiting to be graded');
+    expect(tx.assignmentSubmission.count.mock.calls[1][0].where).toEqual({ schoolId: 's1', status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: 'b1' } });
+    // Counted under the same locks as the grades.
+    expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[1]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+    tx.assignmentSubmission.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 submission is waiting to be graded');
+  });
+
   it('a batch that fee structures are scoped to is not deleted', async () => {
     const { tx, batches } = build(0, 0, 1);
     await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 fee structure is set up for this batch');
