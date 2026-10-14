@@ -143,11 +143,25 @@ export class FeesService {
     return { id: row.id };
   }
 
-  /** Changes apply to dues assessed from now on; existing dues keep their amounts. */
+  /**
+   * Amount, due day, name and description apply to dues assessed from now on
+   * (existing dues keep their amounts). Once students have dues, the
+   * frequency and who it applies to are fixed: billing periods come from the
+   * frequency, so changing it would bill the same student twice.
+   */
   async updateStructure(schoolId: string, id: string, dto: FeeStructureDto) {
-    await this.findStructure(schoolId, id);
     const data = await this.structureData(schoolId, dto);
-    await nameConflict(dto.name, () => this.prisma.feeStructure.update({ where: { id }, data }));
+    await nameConflict(dto.name, () =>
+      this.prisma.$transaction(async (tx) => {
+        await lock(tx, 'FeeStructure', schoolId, id, 'Fee structure not found');
+        const current = await tx.feeStructure.findUniqueOrThrow({
+          where: { id },
+          select: { frequency: true, programId: true, batchId: true, _count: { select: { dues: true } } },
+        });
+        if (current._count.dues > 0) checkFixedRules(current, data, current._count.dues);
+        await tx.feeStructure.update({ where: { id }, data });
+      }),
+    );
     return { id };
   }
 
@@ -171,38 +185,40 @@ export class FeesService {
    * period are left alone, so assessing twice is harmless.
    */
   async assess(schoolId: string, userId: string, id: string, dto: AssessDto) {
-    const [structure, school] = await Promise.all([
-      this.findStructure(schoolId, id),
-      this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { academicYearStartMonth: true } }),
-    ]);
-    if (!structure.mandatory) {
-      throw new BadRequestException('Only mandatory fees are assessed for every student. Record an optional fee per student.');
-    }
-    const dueDate = dueDateIn(dto.month, structure.dueDay);
-    const period = periodOf(structure.frequency, dueDate, school.academicYearStartMonth);
-    const students = await this.prisma.student.findMany({
-      where: {
-        schoolId,
-        status: 'ACTIVE',
-        ...(structure.batchId ? { batchId: structure.batchId } : structure.programId ? { programId: structure.programId } : {}),
-      },
-      select: { id: true },
-    });
-    const amount = structure.amountPaise;
-    const { count } = await this.prisma.feeDue.createMany({
-      data: students.map((s) => ({
-        schoolId,
-        studentId: s.id,
-        structureId: id,
-        period,
-        dueDate,
-        amountPaise: amount,
-        netPaise: amount,
-        createdById: userId,
-      })),
-      skipDuplicates: true,
-    });
-    return { period, dueDate: iso(dueDate), created: count, alreadyAssessed: students.length - count };
+    const school = await this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { academicYearStartMonth: true } });
+    return this.prisma.$transaction(async (tx) => {
+      // Read under a shared lock, so the frequency can't change while dues are made from it.
+      await lockShared(tx, schoolId, id);
+      const structure = await tx.feeStructure.findUniqueOrThrow({ where: { id } });
+      if (!structure.mandatory) {
+        throw new BadRequestException('Only mandatory fees are assessed for every student. Record an optional fee per student.');
+      }
+      const dueDate = dueDateIn(dto.month, structure.dueDay);
+      const period = periodOf(structure.frequency, dueDate, school.academicYearStartMonth);
+      const students = await tx.student.findMany({
+        where: {
+          schoolId,
+          status: 'ACTIVE',
+          ...(structure.batchId ? { batchId: structure.batchId } : structure.programId ? { programId: structure.programId } : {}),
+        },
+        select: { id: true },
+      });
+      const amount = structure.amountPaise;
+      const { count } = await tx.feeDue.createMany({
+        data: students.map((s) => ({
+          schoolId,
+          studentId: s.id,
+          structureId: id,
+          period,
+          dueDate,
+          amountPaise: amount,
+          netPaise: amount,
+          createdById: userId,
+        })),
+        skipDuplicates: true,
+      });
+      return { period, dueDate: iso(dueDate), created: count, alreadyAssessed: students.length - count };
+    }, TX);
   }
 
   // Dues and payments
@@ -250,7 +266,9 @@ export class FeesService {
    * the same idempotency key returns the first result.
    */
   async record(schoolId: string, userId: string, dto: RecordPaymentDto) {
-    const replay = await this.replay(schoolId, dto.idempotencyKey);
+    const payment = paymentOf(dto, 'MANUAL');
+    const expect = { studentId: dto.studentId, structureId: dto.structureId, amountPaise: payment?.amountPaise ?? null };
+    const replay = await this.replay(schoolId, dto.idempotencyKey, expect);
     if (replay) return replay;
     const [student, structure, school] = await Promise.all([
       this.prisma.student.findFirst({
@@ -272,11 +290,13 @@ export class FeesService {
       throw new BadRequestException(`${structure.name} is for the ${structure.program!.name} program; ${student.fullName} isn't in it`);
     }
     const figures = figuresOf(dto);
-    const period = periodOf(structure.frequency, figures.dueDate, school.academicYearStartMonth);
-    const payment = paymentOf(dto, 'MANUAL');
 
-    return this.withIdempotency(schoolId, dto.idempotencyKey, () =>
+    return this.withIdempotency(schoolId, dto.idempotencyKey, expect, () =>
       this.prisma.$transaction(async (tx) => {
+        // The frequency is read under a shared lock: it decides the period.
+        await lockShared(tx, schoolId, structure.id);
+        const { frequency } = await tx.feeStructure.findUniqueOrThrow({ where: { id: structure.id }, select: { frequency: true } });
+        const period = periodOf(frequency, figures.dueDate, school.academicYearStartMonth);
         const existing = await tx.feeDue.findUnique({
           where: { structureId_studentId_period: { structureId: structure.id, studentId: student.id, period } },
           select: { id: true },
@@ -284,6 +304,8 @@ export class FeesService {
         let dueId: string;
         if (existing) {
           dueId = existing.id;
+          // Locked before its figures are checked and changed, like every other write to a due.
+          await lock(tx, 'FeeDue', schoolId, dueId, 'Due not found');
           await this.adjustLocked(tx, schoolId, userId, dueId, figures);
         } else {
           checkOverride(figures);
@@ -319,11 +341,12 @@ export class FeesService {
   }
 
   async addPayment(schoolId: string, userId: string, dueId: string, dto: AddPaymentDto) {
-    const replay = await this.replay(schoolId, dto.idempotencyKey);
-    if (replay) return replay;
     const payment = paymentOf(dto, 'MANUAL');
     if (!payment) throw new BadRequestException('Enter the amount paid');
-    return this.withIdempotency(schoolId, dto.idempotencyKey, () =>
+    const expect = { dueId, amountPaise: payment.amountPaise };
+    const replay = await this.replay(schoolId, dto.idempotencyKey, expect);
+    if (replay) return replay;
+    return this.withIdempotency(schoolId, dto.idempotencyKey, expect, () =>
       this.prisma.$transaction(async (tx) => {
         await lock(tx, 'FeeDue', schoolId, dueId, 'Due not found');
         return { dueId, created: false, ...(await this.addPaymentLocked(tx, schoolId, userId, dueId, payment)) };
@@ -464,13 +487,26 @@ export class FeesService {
     }
   }
 
-  private async replay(schoolId: string, key: string | null | undefined) {
+  /**
+   * A retried submit (same idempotency key) gets the first payment back, but
+   * only if it is the same payment: a key reused for another student, fee,
+   * due or amount, or one whose payment was voided since, is a 409.
+   */
+  private async replay(schoolId: string, key: string | null | undefined, expect: ReplayExpect) {
     if (!key) return null;
     const done = await this.prisma.feePayment.findUnique({
       where: { schoolId_idempotencyKey: { schoolId, idempotencyKey: key } },
-      select: { id: true, dueId: true, receiptNumber: true },
+      select: { id: true, dueId: true, receiptNumber: true, amountPaise: true, voidedAt: true, due: { select: { studentId: true, structureId: true } } },
     });
-    return done ? { dueId: done.dueId, created: false, paymentId: done.id, receiptNumber: done.receiptNumber, replayed: true } : null;
+    if (!done) return null;
+    const same =
+      done.amountPaise === expect.amountPaise &&
+      (!expect.dueId || done.dueId === expect.dueId) &&
+      (!expect.studentId || done.due.studentId === expect.studentId) &&
+      (!expect.structureId || done.due.structureId === expect.structureId);
+    if (!same) throw new ConflictException('This form was already used for a different payment. Close it and record the payment again.');
+    if (done.voidedAt) throw new ConflictException(`Receipt ${done.receiptNumber} from this form was voided. Close it and record the payment again.`);
+    return { dueId: done.dueId, created: false, paymentId: done.id, receiptNumber: done.receiptNumber, replayed: true };
   }
 
   /**
@@ -478,7 +514,7 @@ export class FeesService {
    * same idempotency key returns the first payment, a receipt number or
    * transaction ID taken meanwhile is a 409.
    */
-  private async withIdempotency<T>(schoolId: string, key: string | null | undefined, write: () => Promise<T>) {
+  private async withIdempotency<T>(schoolId: string, key: string | null | undefined, expect: ReplayExpect, write: () => Promise<T>) {
     try {
       return await write();
     } catch (err) {
@@ -486,7 +522,7 @@ export class FeesService {
       if (!names) throw err;
       const hit = (part: string) => names.some((n) => n.includes(part));
       if (hit('idempotencyKey')) {
-        const replay = await this.replay(schoolId, key);
+        const replay = await this.replay(schoolId, key, expect);
         if (replay) return replay;
       }
       if (hit('receiptNumber')) throw new ConflictException('That receipt number is already used');
@@ -528,6 +564,32 @@ export class FeesService {
       batchId: dto.batchId ?? null,
       academicYear: dto.academicYear,
     };
+  }
+}
+
+type ReplayExpect = { amountPaise: number | null; dueId?: string; studentId?: string; structureId?: string };
+
+/** A shared lock on a fee structure: dues can be made from it, but it can't be edited meanwhile. */
+export async function lockShared(tx: Db, schoolId: string, id: string) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "FeeStructure" WHERE "id" = ${id} AND "schoolId" = ${schoolId} FOR SHARE`;
+  if (rows.length === 0) throw new NotFoundException('Fee structure not found');
+}
+
+/** Refuses changing what billing periods and dues are based on, once dues exist. */
+export function checkFixedRules(
+  current: { frequency: string; programId: string | null; batchId: string | null },
+  next: { frequency: string; programId: string | null; batchId: string | null },
+  dues: number,
+) {
+  const changed = [
+    current.frequency !== next.frequency && 'frequency',
+    (current.programId !== next.programId || current.batchId !== next.batchId) && 'program or batch',
+  ].filter(Boolean);
+  if (changed.length) {
+    throw new ConflictException(
+      `${dues} student due${dues === 1 ? ' is' : 's are'} already billed from this fee, so its ${changed.join(' and ')} can't change. Create a new fee structure for the new rule.`,
+    );
   }
 }
 

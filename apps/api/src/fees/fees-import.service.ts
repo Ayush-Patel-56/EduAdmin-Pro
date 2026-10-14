@@ -5,7 +5,7 @@ import { uniqueViolation } from '../common/unique-violation.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { academicYearOf, dueDateIn, net, periodOf, toPaise } from './fee-rules.js';
 import type { FeeCategory, FeeFrequency, PaymentImportDto, PaymentMethod, StructureImportDto } from './fees.dto.js';
-import { FeesService, lock } from './fees.service.js';
+import { checkFixedRules, FeesService, lock, lockShared } from './fees.service.js';
 
 const TX = { timeout: 60_000, maxWait: 10_000 };
 const key = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -60,9 +60,12 @@ export class FeesImportService {
       this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { academicYearStartMonth: true } }),
       this.prisma.program.findMany({ where: { schoolId }, select: { id: true, name: true } }),
       this.prisma.batch.findMany({ where: { schoolId }, select: { id: true, name: true, programId: true } }),
-      this.prisma.feeStructure.findMany({ where: { schoolId }, select: { id: true, name: true } }),
+      this.prisma.feeStructure.findMany({
+        where: { schoolId },
+        select: { id: true, name: true, frequency: true, programId: true, batchId: true, _count: { select: { dues: true } } },
+      }),
     ]);
-    const byName = new Map(existing.map((s) => [s.name.toLowerCase(), s.id]));
+    const byName = new Map(existing.map((s) => [s.name.toLowerCase(), s]));
     const defaultYear = academicYearOf(istToday(), school.academicYearStartMonth);
     const seen = new Map<string, number>();
 
@@ -108,7 +111,16 @@ export class FeesImportService {
       const first = seen.get(name.toLowerCase());
       if (name && first) errors.push(`Same fee name as row ${first}`);
       else if (name) seen.set(name.toLowerCase(), row);
-      const id = byName.get(name.toLowerCase());
+      const current = byName.get(name.toLowerCase());
+      const id = current?.id;
+      // An existing fee with dues keeps its frequency and scope (else students would be billed twice).
+      if (current && current._count.dues > 0 && frequency && errors.length === 0) {
+        try {
+          checkFixedRules(current, { frequency, programId, batchId }, current._count.dues);
+        } catch (err) {
+          errors.push((err as Error).message);
+        }
+      }
       return {
         row,
         label: name || `Row ${row}`,
@@ -124,7 +136,16 @@ export class FeesImportService {
         await this.prisma.$transaction(async (tx) => {
           for (const r of rows) {
             if (r.action === 'create') await tx.feeStructure.create({ data: { schoolId, createdById: userId, ...r.data } });
-            if (r.action === 'update') await tx.feeStructure.update({ where: { id: r.id }, data: r.data });
+            if (r.action === 'update') {
+              // Checked again under the lock: dues may have been assessed since the preview.
+              await lock(tx, 'FeeStructure', schoolId, r.id!, 'Fee structure not found');
+              const current = await tx.feeStructure.findUniqueOrThrow({
+                where: { id: r.id },
+                select: { frequency: true, programId: true, batchId: true, _count: { select: { dues: true } } },
+              });
+              if (current._count.dues > 0) checkFixedRules(current, r.data, current._count.dues);
+              await tx.feeStructure.update({ where: { id: r.id }, data: r.data });
+            }
           }
         }, TX);
       } catch (err) {
@@ -241,6 +262,16 @@ export class FeesImportService {
 
     if (!dto.dryRun) {
       await this.prisma.$transaction(async (tx) => {
+        // The periods were worked out from each fee's frequency: lock the fees
+        // and make sure none changed since the preview.
+        const used = [...new Set(rows.flatMap((r) => (r.apply ? [r.apply.structureId] : [])))];
+        for (const id of used) {
+          await lockShared(tx, schoolId, id);
+          const now = await tx.feeStructure.findUniqueOrThrow({ where: { id }, select: { frequency: true, name: true } });
+          if (now.frequency !== structures.find((s) => s.id === id)!.frequency) {
+            throw new BadRequestException(`${now.name} changed while the file was being checked. Nothing was imported; check the file again.`);
+          }
+        }
         for (const r of rows) {
           if (!r.apply) continue;
           const a = r.apply;
