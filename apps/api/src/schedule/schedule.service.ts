@@ -498,7 +498,11 @@ export async function lockSource(tx: Db, table: 'ScheduleSlot' | 'SpecialClass',
   }
 }
 
-/** Another active slot that same weekday, overlapping in time and period, with the same teacher, batch or room. */
+/**
+ * Another active slot that same weekday, overlapping in time and period, or a
+ * coming special class on that weekday within the period, with the same
+ * teacher, batch or room.
+ */
 async function slotClash(tx: Db, schoolId: string, input: SlotInput, exceptId: string | null) {
   const other = await tx.scheduleSlot.findFirst({
     where: {
@@ -516,7 +520,26 @@ async function slotClash(tx: Db, schoolId: string, input: SlotInput, exceptId: s
     },
     include: people,
   });
-  return other ? clashMessage(other, input, `${DAY_NAMES[other.dayOfWeek]} ${span(other.startMinute, other.endMinute)}`, other.subject) : null;
+  if (other) {
+    return clashMessage(other, input, `${DAY_NAMES[other.dayOfWeek]} ${span(other.startMinute, other.endMinute)}`, other.subject);
+  }
+  // A special class still to come on that weekday, within the slot's period.
+  const today = istToday();
+  const specials = await tx.specialClass.findMany({
+    where: {
+      schoolId,
+      date: { gte: input.effectiveFrom > today ? input.effectiveFrom : today, ...(input.effectiveTo && { lte: input.effectiveTo }) },
+      startMinute: { lt: input.endMinute },
+      endMinute: { gt: input.startMinute },
+      OR: sameResource(input.facultyId, input.batchId, input.room),
+    },
+    orderBy: { date: 'asc' },
+    include: people,
+  });
+  const special = specials.find((c) => c.date.getUTCDay() === input.dayOfWeek);
+  return special
+    ? clashMessage(special, input, `on ${toIsoDate(special.date)} ${span(special.startMinute, special.endMinute)}`, special.title)
+    : null;
 }
 
 /** On the special class's date: another special class, or a running weekly slot, overlapping with the same teacher, batch or room. */

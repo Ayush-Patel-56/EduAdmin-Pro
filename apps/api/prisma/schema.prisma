@@ -1088,7 +1088,9 @@ model AttendanceRecord {
 
   school     School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   occurrence ClassOccurrence @relation(fields: [occurrenceId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  student    Student         @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  // NoAction (checked at end of statement): deleting a school still cascades,
+  // but a student with attendance can't be deleted (the service says why).
+  student    Student         @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: NoAction)
 
   @@unique([occurrenceId, studentId])
   @@index([studentId])

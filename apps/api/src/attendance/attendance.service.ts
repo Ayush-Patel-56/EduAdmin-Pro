@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -8,7 +9,11 @@ import type { TeacherScope } from '../academic/access.service.js';
 import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { type DayClass, lockSource, ScheduleService } from '../schedule/schedule.service.js';
+import {
+  type DayClass,
+  lockSource,
+  ScheduleService,
+} from '../schedule/schedule.service.js';
 import { FilesService } from '../storage/files.service.js';
 import type {
   AttendanceStatus,
@@ -50,7 +55,15 @@ export class AttendanceService {
     const sheets = await this.occurrences(scope.schoolId, date, classes);
     return classes.map((c) => {
       const sheet = sheets.get(c.key);
-      return { ...c, attendance: sheet ? { submittedAt: sheet.submittedAt.toISOString(), counts: count(sheet.records) } : null };
+      return {
+        ...c,
+        attendance: sheet
+          ? {
+              submittedAt: sheet.submittedAt.toISOString(),
+              counts: count(sheet.records),
+            }
+          : null,
+      };
     });
   }
 
@@ -58,9 +71,18 @@ export class AttendanceService {
   async sheet(scope: TeacherScope, query: SheetQuery) {
     const date = parseDate(query.date, 'Date');
     const cls = await this.teacherClass(scope, date, query.class);
-    const occurrence = (await this.occurrences(scope.schoolId, date, [cls])).get(cls.key);
-    const students = await roster(this.prisma, scope.schoolId, occurrence?.batchId ?? cls.batch.id, occurrence?.id ?? null);
-    const marks = new Map(occurrence?.records.map((r) => [r.studentId, r]) ?? []);
+    const occurrence = (
+      await this.occurrences(scope.schoolId, date, [cls])
+    ).get(cls.key);
+    const students = await roster(
+      this.prisma,
+      scope.schoolId,
+      occurrence?.batchId ?? cls.batch.id,
+      occurrence?.id ?? null,
+    );
+    const marks = new Map(
+      occurrence?.records.map((r) => [r.studentId, r]) ?? [],
+    );
     return {
       date: query.date,
       class: cls,
@@ -81,73 +103,149 @@ export class AttendanceService {
   }
 
   /**
-   * Saves the whole sheet at once. The class row is locked first, so two
+   * Saves the whole sheet at once. The class row is locked, so two
    * submissions for the same class queue up instead of mixing their marks,
    * and the roster is re-read inside the lock: a sheet that no longer matches
    * it (a student added or moved meanwhile) is refused, not half-saved.
+   *
+   * Locks are taken in the order deleting a batch takes them (the batch,
+   * then its classes), so a submit racing a batch delete waits instead of
+   * deadlocking: the batch gets a shared lock before the class row.
    */
   async submit(scope: TeacherScope, userId: string, dto: SubmitAttendanceDto) {
-    if (!scope.active || !scope.facultyId) throw new ForbiddenException('Only active faculty can mark attendance');
+    if (!scope.active || !scope.facultyId)
+      throw new ForbiddenException('Only active faculty can mark attendance');
     const date = parseDate(dto.date, 'Date');
-    if (date > istToday()) throw new BadRequestException("Attendance can't be marked for a future date");
+    if (date > istToday())
+      throw new BadRequestException(
+        "Attendance can't be marked for a future date",
+      );
     const ids = dto.records.map((r) => r.studentId);
-    if (new Set(ids).size !== ids.length) throw new BadRequestException('Each student can be marked only once');
-    const [kind, sourceId] = dto.class.split(':') as ['slot' | 'special', string];
+    if (new Set(ids).size !== ids.length)
+      throw new BadRequestException('Each student can be marked only once');
+    const [kind, sourceId] = dto.class.split(':') as [
+      'slot' | 'special',
+      string,
+    ];
 
-    return this.prisma.$transaction(
-      async (tx) => {
-        await lockSource(tx, kind === 'slot' ? 'ScheduleSlot' : 'SpecialClass', scope.schoolId, sourceId);
-        const cls = await this.teacherClass(scope, date, dto.class, tx);
-        const existing = (await this.occurrences(scope.schoolId, date, [cls], tx)).get(cls.key);
-        const batchId = existing?.batchId ?? cls.batch.id;
-        const onRoster = new Set(
-          (await roster(tx, scope.schoolId, batchId, existing?.id ?? null)).map((s) => s.id),
-        );
-        if (ids.some((id) => !onRoster.has(id))) {
-          throw new BadRequestException('The student list has changed. Refresh and mark again.');
+    return this.prisma
+      .$transaction(
+        async (tx) => {
+          const source =
+            kind === 'slot'
+              ? await tx.scheduleSlot.findFirst({
+                  where: { id: sourceId, schoolId: scope.schoolId },
+                  select: { batchId: true },
+                })
+              : await tx.specialClass.findFirst({
+                  where: { id: sourceId, schoolId: scope.schoolId },
+                  select: { batchId: true },
+                });
+          if (!source)
+            throw new NotFoundException(
+              "That isn't one of your classes on this date",
+            );
+          const batch = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "Batch" WHERE "id" = ${source.batchId} AND "schoolId" = ${scope.schoolId} FOR SHARE`;
+          if (batch.length === 0)
+            throw new NotFoundException(
+              "That isn't one of your classes on this date",
+            );
+          await lockSource(
+            tx,
+            kind === 'slot' ? 'ScheduleSlot' : 'SpecialClass',
+            scope.schoolId,
+            sourceId,
+          );
+          const cls = await this.teacherClass(scope, date, dto.class, tx);
+          // Moved to another batch between the read and the lock.
+          if (cls.batch.id !== source.batchId) {
+            throw new ConflictException(
+              'This class changed batch. Refresh and mark again.',
+            );
+          }
+          const existing = (
+            await this.occurrences(scope.schoolId, date, [cls], tx)
+          ).get(cls.key);
+          const batchId = existing?.batchId ?? cls.batch.id;
+          const onRoster = new Set(
+            (
+              await roster(tx, scope.schoolId, batchId, existing?.id ?? null)
+            ).map((s) => s.id),
+          );
+          if (ids.some((id) => !onRoster.has(id))) {
+            throw new BadRequestException(
+              'The student list has changed. Refresh and mark again.',
+            );
+          }
+          const left = onRoster.size - ids.length;
+          if (left > 0)
+            throw new BadRequestException(
+              `Mark every student first (${left} left)`,
+            );
+
+          const details = {
+            title: cls.title,
+            subject: cls.subject,
+            type: cls.type,
+            startMinute: cls.startMinute,
+            endMinute: cls.endMinute,
+            room: cls.room,
+            facultyId: scope.facultyId,
+            markedById: userId,
+            submittedAt: new Date(),
+          };
+          const occurrenceId = existing
+            ? (
+                await tx.classOccurrence.update({
+                  where: { id: existing.id },
+                  data: details,
+                  select: { id: true },
+                })
+              ).id
+            : (
+                await tx.classOccurrence.create({
+                  data: {
+                    schoolId: scope.schoolId,
+                    date,
+                    batchId,
+                    ...(kind === 'slot'
+                      ? { slotId: sourceId }
+                      : { specialClassId: sourceId }),
+                    ...details,
+                  },
+                  select: { id: true },
+                })
+              ).id;
+          await tx.attendanceRecord.deleteMany({ where: { occurrenceId } });
+          await tx.attendanceRecord.createMany({
+            data: dto.records.map((r) => ({
+              schoolId: scope.schoolId,
+              occurrenceId,
+              studentId: r.studentId,
+              status: r.status,
+              note: r.note ?? null,
+            })),
+          });
+          return {
+            submittedAt: details.submittedAt.toISOString(),
+            counts: count(dto.records),
+          };
+        },
+        { timeout: 20_000, maxWait: 10_000 },
+      )
+      .catch((err: unknown) => {
+        // A student deleted while the sheet was being saved.
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2003'
+        ) {
+          throw new ConflictException(
+            'The student list has changed. Refresh and mark again.',
+          );
         }
-        const left = onRoster.size - ids.length;
-        if (left > 0) throw new BadRequestException(`Mark every student first (${left} left)`);
-
-        const details = {
-          title: cls.title,
-          subject: cls.subject,
-          type: cls.type,
-          startMinute: cls.startMinute,
-          endMinute: cls.endMinute,
-          room: cls.room,
-          facultyId: scope.facultyId,
-          markedById: userId,
-          submittedAt: new Date(),
-        };
-        const occurrenceId = existing
-          ? (await tx.classOccurrence.update({ where: { id: existing.id }, data: details, select: { id: true } })).id
-          : (
-              await tx.classOccurrence.create({
-                data: {
-                  schoolId: scope.schoolId,
-                  date,
-                  batchId,
-                  ...(kind === 'slot' ? { slotId: sourceId } : { specialClassId: sourceId }),
-                  ...details,
-                },
-                select: { id: true },
-              })
-            ).id;
-        await tx.attendanceRecord.deleteMany({ where: { occurrenceId } });
-        await tx.attendanceRecord.createMany({
-          data: dto.records.map((r) => ({
-            schoolId: scope.schoolId,
-            occurrenceId,
-            studentId: r.studentId,
-            status: r.status,
-            note: r.note ?? null,
-          })),
-        });
-        return { submittedAt: details.submittedAt.toISOString(), counts: count(dto.records) };
-      },
-      { timeout: 20_000, maxWait: 10_000 },
-    );
+        throw err;
+      });
   }
 
   // Admin: Attendance Overview
@@ -167,7 +265,9 @@ export class AttendanceService {
         ${query.batchId ? Prisma.sql`AND o."batchId" = ${query.batchId}` : Prisma.empty}`;
 
     // Student-days per batch and date, over this period and the one before (for the trend).
-    const batchDays = await this.prisma.$queryRaw<{ batchId: string; date: Date; present: number; absent: number }[]>`
+    const batchDays = await this.prisma.$queryRaw<
+      { batchId: string; date: Date; present: number; absent: number }[]
+    >`
       WITH sd AS (
         SELECT r."studentId", o."batchId", o."date",
                bool_or(r."status" IN ('PRESENT', 'LATE')) AS present,
@@ -181,7 +281,12 @@ export class AttendanceService {
       FROM sd GROUP BY 1, 2`;
     // Per student over this period (a day in two batches counts once).
     const studentDays = await this.prisma.$queryRaw<
-      { studentId: string; present: number; absent: number; lastAbsent: Date | null }[]
+      {
+        studentId: string;
+        present: number;
+        absent: number;
+        lastAbsent: Date | null;
+      }[]
     >`
       WITH sd AS (
         SELECT r."studentId", o."date",
@@ -206,11 +311,18 @@ export class AttendanceService {
       }),
       this.prisma.student.findMany({
         where: { schoolId, id: { in: studentDays.map((s) => s.studentId) } },
-        select: { id: true, fullName: true, rollNumber: true, batch: { select: { name: true } } },
+        select: {
+          id: true,
+          fullName: true,
+          rollNumber: true,
+          batch: { select: { name: true } },
+        },
       }),
     ]);
 
-    const dates = Array.from({ length: days }, (_, i) => iso(new Date(from.getTime() + i * DAY_MS)));
+    const dates = Array.from({ length: days }, (_, i) =>
+      iso(new Date(from.getTime() + i * DAY_MS)),
+    );
     const batchRows = batches
       .map((b) => {
         const mine = current.filter((d) => d.batchId === b.id);
@@ -223,14 +335,25 @@ export class AttendanceService {
           program: b.program.name,
           rate: rate(mine),
           // Lower by 5 points or more in the second half of the period.
-          declining: firstHalf !== null && secondHalf !== null && secondHalf <= firstHalf - 5,
+          declining:
+            firstHalf !== null &&
+            secondHalf !== null &&
+            secondHalf <= firstHalf - 5,
           cells: dates.map((date) => {
             const d = byDate.get(date);
-            return { date, present: d?.present ?? 0, absent: d?.absent ?? 0, rate: d ? rate([d]) : null };
+            return {
+              date,
+              present: d?.present ?? 0,
+              absent: d?.absent ?? 0,
+              rate: d ? rate([d]) : null,
+            };
           }),
         };
       })
-      .sort((a, b) => a.program.localeCompare(b.program) || a.name.localeCompare(b.name));
+      .sort(
+        (a, b) =>
+          a.program.localeCompare(b.program) || a.name.localeCompare(b.name),
+      );
 
     const studentById = new Map(students.map((s) => [s.id, s]));
     const studentRows = studentDays
@@ -244,7 +367,10 @@ export class AttendanceService {
           batch: student.batch?.name ?? null,
           presentDays: s.present,
           absentDays: s.absent,
-          rate: s.present + s.absent ? round((s.present / (s.present + s.absent)) * 100) : null,
+          rate:
+            s.present + s.absent
+              ? round((s.present / (s.present + s.absent)) * 100)
+              : null,
           lastAbsent: toIsoDate(s.lastAbsent),
         };
       })
@@ -257,9 +383,13 @@ export class AttendanceService {
       kpis: {
         rate: overall,
         // Change in percentage points against the period before (null without data then).
-        change: overall !== null && before !== null ? round(overall - before) : null,
-        batchesBelow75: batchRows.filter((b) => b.rate !== null && b.rate < 75).length,
-        perfectAttendance: studentRows.filter((s) => s.presentDays > 0 && s.absentDays === 0).length,
+        change:
+          overall !== null && before !== null ? round(overall - before) : null,
+        batchesBelow75: batchRows.filter((b) => b.rate !== null && b.rate < 75)
+          .length,
+        perfectAttendance: studentRows.filter(
+          (s) => s.presentDays > 0 && s.absentDays === 0,
+        ).length,
       },
       heatmap: { dates, batches: batchRows },
       attention: batchRows
@@ -273,36 +403,71 @@ export class AttendanceService {
   // Helpers
 
   /** One of the teacher's classes on the date, or a 404. */
-  private async teacherClass(scope: TeacherScope, date: Date, key: string, db?: Db) {
-    const cls = (await this.schedule.teacherClassesOn(scope, date, db)).find((c) => c.key === key);
-    if (!cls) throw new NotFoundException("That isn't one of your classes on this date");
+  private async teacherClass(
+    scope: TeacherScope,
+    date: Date,
+    key: string,
+    db?: Db,
+  ) {
+    const cls = (await this.schedule.teacherClassesOn(scope, date, db)).find(
+      (c) => c.key === key,
+    );
+    if (!cls)
+      throw new NotFoundException(
+        "That isn't one of your classes on this date",
+      );
     return cls;
   }
 
   /** The submitted sheets of these classes on the date, by class key. */
-  private async occurrences(schoolId: string, date: Date, classes: DayClass[], db: Db = this.prisma) {
+  private async occurrences(
+    schoolId: string,
+    date: Date,
+    classes: DayClass[],
+    db: Db = this.prisma,
+  ) {
     const slotIds = classes.filter((c) => c.kind === 'SLOT').map((c) => c.id);
-    const specialIds = classes.filter((c) => c.kind === 'SPECIAL').map((c) => c.id);
-    const rows = slotIds.length + specialIds.length === 0 ? [] : await db.classOccurrence.findMany({
-      where: {
-        schoolId,
-        OR: [{ slotId: { in: slotIds }, date }, { specialClassId: { in: specialIds } }],
-      },
-      select: {
-        id: true,
-        batchId: true,
-        slotId: true,
-        specialClassId: true,
-        submittedAt: true,
-        records: { select: { studentId: true, status: true, note: true } },
-      },
-    });
-    return new Map(rows.map((o) => [o.slotId ? `slot:${o.slotId}` : `special:${o.specialClassId}`, o]));
+    const specialIds = classes
+      .filter((c) => c.kind === 'SPECIAL')
+      .map((c) => c.id);
+    const rows =
+      slotIds.length + specialIds.length === 0
+        ? []
+        : await db.classOccurrence.findMany({
+            where: {
+              schoolId,
+              OR: [
+                { slotId: { in: slotIds }, date },
+                { specialClassId: { in: specialIds } },
+              ],
+            },
+            select: {
+              id: true,
+              batchId: true,
+              slotId: true,
+              specialClassId: true,
+              submittedAt: true,
+              records: {
+                select: { studentId: true, status: true, note: true },
+              },
+            },
+          });
+    return new Map(
+      rows.map((o) => [
+        o.slotId ? `slot:${o.slotId}` : `special:${o.specialClassId}`,
+        o,
+      ]),
+    );
   }
 }
 
 /** Who is on a class's sheet: the batch's active students, plus anyone already marked on it. */
-function roster(db: Db, schoolId: string, batchId: string, occurrenceId: string | null) {
+function roster(
+  db: Db,
+  schoolId: string,
+  batchId: string,
+  occurrenceId: string | null,
+) {
   return db.student.findMany({
     where: {
       schoolId,

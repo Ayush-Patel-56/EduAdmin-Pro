@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '../generated/prisma/client.js';
 import type { TeacherScope } from '../academic/access.service.js';
 import { istToday } from '../common/dates.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
@@ -44,17 +45,22 @@ function build() {
     attendanceRecord: { deleteMany: vi.fn(), createMany: vi.fn() },
     student: { findMany: vi.fn().mockResolvedValue([{ id: 'st-1' }, { id: 'st-2' }]) },
     batch: { findMany: vi.fn().mockResolvedValue([]) },
+    scheduleSlot: { findFirst: vi.fn().mockResolvedValue({ batchId: 'b1' }) },
+    specialClass: { findFirst: vi.fn().mockResolvedValue({ batchId: 'b1' }) },
     $queryRaw: vi.fn().mockResolvedValue([{ id: SLOT }]),
     $transaction: vi.fn(),
   };
-  prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => unknown) => run(prisma));
+  // The transaction client is its own object (sharing the model mocks), so a
+  // test can tell reads inside the transaction from reads outside it.
+  const tx = { ...prisma, inTransaction: true };
+  prisma.$transaction.mockImplementation((run: (t: typeof prisma) => unknown) => run(tx));
   const schedule = { teacherClassesOn: vi.fn().mockResolvedValue([cls]) };
   const service = new AttendanceService(
     prisma as unknown as PrismaService,
     schedule as unknown as ScheduleService,
     { url: vi.fn() } as unknown as FilesService,
   );
-  return { prisma, schedule, service };
+  return { prisma, schedule, service, tx };
 }
 
 describe('AttendanceService.submit', () => {
@@ -93,8 +99,8 @@ describe('AttendanceService.submit', () => {
       dto([{ studentId: 'st-1', status: 'PRESENT' }, { studentId: 'st-2', status: 'LATE', note: 'Bus' }]),
     );
     expect(result.counts).toEqual({ PRESENT: 1, ABSENT: 0, LATE: 1, EXCUSED: 0 });
-    expect(prisma.$queryRaw.mock.calls[0].slice(1)).toEqual([SLOT, 'school-1']);
-    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.student.findMany.mock.invocationCallOrder[0]);
+    expect(prisma.$queryRaw.mock.calls[1].slice(1)).toEqual([SLOT, 'school-1']);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(prisma.student.findMany.mock.invocationCallOrder[0]);
     expect(prisma.classOccurrence.create.mock.calls[0][0].data).toMatchObject({
       schoolId: 'school-1',
       batchId: 'b1',
@@ -110,6 +116,45 @@ describe('AttendanceService.submit', () => {
       { schoolId: 'school-1', occurrenceId: 'occ-new', studentId: 'st-1', status: 'PRESENT', note: null },
       { schoolId: 'school-1', occurrenceId: 'occ-new', studentId: 'st-2', status: 'LATE', note: 'Bus' },
     ]);
+  });
+
+  it("locks the class's batch (shared) before the class, the order a batch delete takes them", async () => {
+    const { service, prisma } = build();
+    await service.submit(scope(), 'u', dto([{ studentId: 'st-1', status: 'PRESENT' }, { studentId: 'st-2', status: 'PRESENT' }]));
+    const sql = (i: number) => (prisma.$queryRaw.mock.calls[i][0] as string[]).join('?');
+    expect(sql(0)).toMatch(/FROM "Batch" WHERE "id" = \? AND "schoolId" = \? FOR SHARE/);
+    expect(prisma.$queryRaw.mock.calls[0].slice(1)).toEqual(['b1', 'school-1']);
+    expect(sql(1)).toMatch(/FROM "ScheduleSlot" .* FOR UPDATE/);
+    expect(prisma.scheduleSlot.findFirst.mock.calls[0][0].where).toEqual({ id: SLOT, schoolId: 'school-1' });
+  });
+
+  it('reads the class inside the transaction, after the locks', async () => {
+    const { service, schedule, prisma, tx } = build();
+    await service.submit(scope(), 'u', dto([{ studentId: 'st-1', status: 'PRESENT' }, { studentId: 'st-2', status: 'PRESENT' }]));
+    expect(schedule.teacherClassesOn.mock.calls[0][2]).toBe(tx);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(schedule.teacherClassesOn.mock.invocationCallOrder[0]);
+  });
+
+  it('a class whose batch is gone, or that changed batch meanwhile, is not saved', async () => {
+    const { service, prisma } = build();
+    const all = dto([{ studentId: 'st-1', status: 'PRESENT' }, { studentId: 'st-2', status: 'PRESENT' }]);
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+    await expect(service.submit(scope(), 'u', all)).rejects.toBeInstanceOf(NotFoundException);
+    prisma.scheduleSlot.findFirst.mockResolvedValueOnce({ batchId: 'b-other' });
+    await expect(service.submit(scope(), 'u', all)).rejects.toThrow('changed batch');
+    prisma.scheduleSlot.findFirst.mockResolvedValueOnce(null);
+    await expect(service.submit(scope(), 'u', all)).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.attendanceRecord.createMany).not.toHaveBeenCalled();
+  });
+
+  it('a student deleted while the sheet is saved is a 409, not a 500', async () => {
+    const { service, prisma } = build();
+    prisma.attendanceRecord.createMany.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('fk', { code: 'P2003', clientVersion: 't' }),
+    );
+    await expect(
+      service.submit(scope(), 'u', dto([{ studentId: 'st-1', status: 'PRESENT' }, { studentId: 'st-2', status: 'PRESENT' }])),
+    ).rejects.toEqual(new ConflictException('The student list has changed. Refresh and mark again.'));
   });
 
   it('a resubmission updates the same occurrence and keeps its batch', async () => {

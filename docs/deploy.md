@@ -150,7 +150,7 @@ SELECT "fileId", count(*) FROM "AssignmentSubmission" WHERE "fileId" IS NOT NULL
 
 New tables only (weekly slots, special classes, class occurrences and attendance records), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep the weekday (0–6), times (minutes after midnight, end after start) and effective periods valid.
 
-Attendance is kept as a record: a slot or special class with attendance can't be deleted (end it or mark it inactive), and a batch with attendance can't be deleted (set its end date). Clear All Data removes schedules and attendance with the rest of the academic data.
+Attendance is kept as a record: a slot or special class with attendance can't be deleted (end it or mark it inactive), a batch with attendance can't be deleted (set its end date), and a student with attendance can't be deleted (set them Inactive or Transferred). `20261014120000_attendance_keeps_students` makes the student foreign key NO ACTION to back that up; nothing to check before deploying it. Clear All Data removes schedules and attendance with the rest of the academic data.
 
 ## File storage (Cloudflare R2)
 

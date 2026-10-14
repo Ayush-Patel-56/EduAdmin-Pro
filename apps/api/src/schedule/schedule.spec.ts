@@ -145,7 +145,54 @@ describe('ScheduleService: special classes', () => {
   });
 });
 
+describe('ScheduleService: weekly slots against special classes', () => {
+  it('a new slot clashes with a coming special class on that weekday within its period', async () => {
+    const { service, prisma } = build();
+    prisma.specialClass.findMany.mockResolvedValueOnce([
+      // A Tuesday and a Wednesday, both overlapping; only the Wednesday one matters for a Wednesday slot.
+      { ...row({ id: 'tue', room: 'Q' }), title: 'Tue doubts', date: new Date('2026-10-20T00:00:00Z') },
+      { ...row({ id: 'wed', room: 'Q' }), title: 'Wed extra', date: new Date('2026-10-21T00:00:00Z') },
+    ]);
+    await expect(service.createSlot('school-1', 'u', slot({ room: 'q', effectiveTo: '2026-12-31' }))).rejects.toEqual(
+      new ConflictException('Room Q is already booked then: Wed extra (Batch 2), on 2026-10-21 9:00 AM - 10:00 AM'),
+    );
+    const where = prisma.specialClass.findMany.mock.calls[0][0].where;
+    expect(where.date.lte).toEqual(new Date('2026-12-31T00:00:00Z'));
+    // Only classes still to come (or today).
+    expect(where.date.gte.getTime()).toBeGreaterThanOrEqual(new Date('2026-10-14T00:00:00Z').getTime());
+    expect(where.OR).toEqual([{ facultyId: 'fac-1' }, { batchId: 'b1' }, { room: { equals: 'q', mode: 'insensitive' } }]);
+  });
+
+  it("a special class only clashes with a slot that is still running that day (its Effective To counts)", async () => {
+    const { service, prisma } = build();
+    await service.createSpecialClass('school-1', 'u', special());
+    const where = prisma.scheduleSlot.findFirst.mock.calls[0][0].where;
+    expect(where.AND[0]).toEqual({ OR: [{ effectiveTo: null }, { effectiveTo: { gte: new Date('2026-10-14T00:00:00Z') } }] });
+    expect(where.effectiveFrom).toEqual({ lte: new Date('2026-10-14T00:00:00Z') });
+  });
+});
+
 describe('ScheduleService: teachers', () => {
+  it("only active faculty write to the schedule", async () => {
+    const { service, prisma } = build();
+    const inactive = scope({ active: false });
+    await expect(service.teacherCreateSlot(inactive, 'u', slot())).rejects.toThrow('Only active faculty');
+    await expect(service.teacherCreateSpecialClass(inactive, 'u', special())).rejects.toThrow('Only active faculty');
+    await expect(service.teacherCreateSlot(scope({ facultyId: null }), 'u', slot())).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.scheduleSlot.create).not.toHaveBeenCalled();
+    expect(prisma.specialClass.create).not.toHaveBeenCalled();
+  });
+
+  it("a teacher changes only the special classes they take", async () => {
+    const { service, prisma } = build();
+    prisma.specialClass.findFirst.mockResolvedValueOnce({ facultyId: 'fac-2', batchId: 'b1' });
+    await expect(service.teacherUpdateSpecialClass(scope(), 'c1', special())).rejects.toThrow('Only special classes you take');
+    prisma.specialClass.findFirst.mockResolvedValueOnce({ facultyId: null, batchId: 'b1' });
+    await expect(service.teacherDeleteSpecialClass(scope(), 'c1')).rejects.toThrow('Only special classes you take');
+    expect(prisma.specialClass.update).not.toHaveBeenCalled();
+    expect(prisma.specialClass.delete).not.toHaveBeenCalled();
+  });
+
   it("a teacher changes only their own slots, in their batches; an inactive teacher has no schedule", async () => {
     const { service, prisma } = build();
     prisma.scheduleSlot.findFirst.mockResolvedValueOnce({ facultyId: 'fac-2', batchId: 'b1', active: true });

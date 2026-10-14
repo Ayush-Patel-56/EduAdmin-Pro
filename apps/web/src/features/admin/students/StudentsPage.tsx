@@ -277,7 +277,7 @@ export function StudentsPage() {
       {deleting && (
         <ConfirmDialog
           title={`Remove ${deleting.fullName}?`}
-          message={<p>The student, their parents/guardians and batch history are deleted. This can’t be undone; to keep the record, set the status to Inactive, Transferred or Completed instead.</p>}
+          message={<p>The student, their parents/guardians and batch history are deleted. This can’t be undone; to keep the record, set the status to Inactive, Transferred or Completed instead. A student with recorded attendance can’t be deleted.</p>}
           confirmLabel="Remove Student"
           onConfirm={async () => {
             await api(`/schools/${schoolId}/students/${deleting.id}`, { method: 'DELETE' })
