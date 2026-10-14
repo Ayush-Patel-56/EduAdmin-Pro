@@ -163,11 +163,12 @@ export class DueFields extends PaymentFields {
   @IsIn(FEE_STATUSES, { message: 'Select a status' })
   statusOverride?: FeeStatus | null;
 
+  // The pipe reports the last-listed check first, so "not empty" goes last.
   @Transform(blankToNull)
   @ValidateIf((o: DueFields) => !!o.statusOverride)
+  @MaxLength(300, { message: 'Keep the reason under 300 characters' })
   @IsString({ message: 'Give a reason for overriding the status' })
   @IsNotEmpty({ message: 'Give a reason for overriding the status' })
-  @MaxLength(300)
   overrideReason?: string | null;
 
   @Transform(blankToNull)
@@ -207,9 +208,9 @@ export class AdjustDueDto {
 
   @Transform(blankToNull)
   @ValidateIf((o: AdjustDueDto) => !!o.statusOverride)
+  @MaxLength(300, { message: 'Keep the reason under 300 characters' })
   @IsString({ message: 'Give a reason for overriding the status' })
   @IsNotEmpty({ message: 'Give a reason for overriding the status' })
-  @MaxLength(300)
   overrideReason?: string | null;
 
   @Transform(blankToNull)
