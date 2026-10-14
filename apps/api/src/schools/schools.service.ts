@@ -429,6 +429,11 @@ export class SchoolsService {
       // cleared (and audited) or nothing is. Students (with guardians and
       // batch history) go before the batches and programs they point at.
       await tx.counselingSession.deleteMany({ where: { schoolId } });
+      // Fees: payments, then dues, then structures (each points at the one after).
+      await tx.feePayment.deleteMany({ where: { schoolId } });
+      await tx.feeDue.deleteMany({ where: { schoolId } });
+      await tx.feeStructure.deleteMany({ where: { schoolId } });
+      await tx.feeReceiptCounter.deleteMany({ where: { schoolId } });
       // Attendance sheets (with their records) before the batches they point at.
       await tx.classOccurrence.deleteMany({ where: { schoolId } });
       await tx.specialClass.deleteMany({ where: { schoolId } });

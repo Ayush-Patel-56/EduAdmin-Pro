@@ -141,6 +141,13 @@ export class BatchesService {
             'Set an end date for the batch instead, or have its teachers delete those assignments first.',
         );
       }
+      // Fees scoped to the batch keep their dues and payments meaningful.
+      const fees = await tx.feeStructure.count({ where: { schoolId, batchId } });
+      if (fees > 0) {
+        throw new ConflictException(
+          `${fees} fee structure${fees === 1 ? ' is' : 's are'} set up for this batch. Move ${fees === 1 ? 'it' : 'them'} to another batch or program in Fee Management first.`,
+        );
+      }
       // Attendance is a record too, and nobody can delete it.
       const classesMarked = await tx.classOccurrence.count({ where: { schoolId, batchId } });
       if (classesMarked > 0) {

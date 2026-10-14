@@ -89,6 +89,14 @@ export class ProgramsService {
     // Curriculum chapters may name a program optionally; they stay, unlinked
     // (or a 409 names the ones that would become duplicates).
     await this.prisma.$transaction(async (tx) => {
+      // Locked, so a fee structure can't be scoped to it meanwhile.
+      await tx.$queryRaw`SELECT 1 FROM "Program" WHERE "id" = ${programId} AND "schoolId" = ${schoolId} FOR UPDATE`;
+      const fees = await tx.feeStructure.count({ where: { schoolId, programId } });
+      if (fees > 0) {
+        throw new ConflictException(
+          `${fees} fee structure${fees === 1 ? ' is' : 's are'} set up for ${program.name}. Move ${fees === 1 ? 'it' : 'them'} to another program in Fee Management first.`,
+        );
+      }
       await unlinkProgramChapters(tx, schoolId, [programId]);
       // Students of the program (none can be in a batch: it has none) stay, without a program.
       await tx.student.updateMany({
