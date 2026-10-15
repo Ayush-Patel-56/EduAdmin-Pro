@@ -205,10 +205,11 @@ export class PromotionService {
             where: { id: { in: plan.leavingBatch }, schoolId },
             data: { batchId: null },
           });
-          await tx.studentEnrollment.updateMany({
-            where: { studentId: { in: plan.leavingBatch }, schoolId, endedOn: null },
-            data: { endedOn: boundaryDate },
-          });
+          // It ends on the boundary, or the day it started if that came later
+          // (put in the batch after the boundary): never before it began.
+          await tx.$executeRaw`
+            UPDATE "StudentEnrollment" SET "endedOn" = GREATEST("enrolledOn", ${boundaryDate}::date)
+            WHERE "studentId" = ANY(${plan.leavingBatch}::text[]) AND "schoolId" = ${schoolId} AND "endedOn" IS NULL`;
         }
       }, { timeout: 60_000, maxWait: 10_000 });
     } catch (err) {

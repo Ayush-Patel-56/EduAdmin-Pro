@@ -37,6 +37,7 @@ describe('PromotionService: confirm needs students', () => {
   const studentFindMany = vi.fn();
   const updateMany = vi.fn();
   const enrollmentUpdateMany = vi.fn();
+  const executeRaw = vi.fn();
   const school = {
     findUniqueOrThrow: vi
       .fn()
@@ -47,6 +48,7 @@ describe('PromotionService: confirm needs students', () => {
     promotionCycle: { create },
     student: { findMany: studentFindMany, updateMany },
     studentEnrollment: { updateMany: enrollmentUpdateMany },
+    $executeRaw: executeRaw,
   };
   const prisma = {
     school,
@@ -62,6 +64,7 @@ describe('PromotionService: confirm needs students', () => {
     create.mockReset();
     updateMany.mockReset();
     enrollmentUpdateMany.mockReset();
+    executeRaw.mockReset();
     studentFindMany.mockResolvedValue([]);
   });
 
@@ -120,10 +123,14 @@ describe('PromotionService: confirm needs students', () => {
       where: { id: { in: ['a'] }, schoolId: 'school-1' },
       data: { batchId: null },
     });
-    expect(enrollmentUpdateMany.mock.calls[0][0]).toEqual({
-      where: { studentId: { in: ['a'] }, schoolId: 'school-1', endedOn: null },
-      data: { endedOn: boundaryDate },
-    });
+    // #17: the open enrollment ends on the boundary, or on the day it began
+    // if the student joined the batch after the boundary, never before it.
+    const [sql, ...values] = executeRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    expect(sql.join('?').replace(/\s+/g, ' ').trim()).toBe(
+      'UPDATE "StudentEnrollment" SET "endedOn" = GREATEST("enrolledOn", ?::date) WHERE "studentId" = ANY(?::text[]) AND "schoolId" = ? AND "endedOn" IS NULL',
+    );
+    expect(values).toEqual([boundaryDate, ['a'], 'school-1']);
+    expect(enrollmentUpdateMany).not.toHaveBeenCalled();
   });
 
   it('rejects a year that is not the pending one', async () => {

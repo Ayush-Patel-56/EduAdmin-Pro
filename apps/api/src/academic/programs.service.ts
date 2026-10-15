@@ -79,19 +79,19 @@ export class ProgramsService {
   /** Batches depend on their program, so a program with batches can't be deleted. */
   async remove(schoolId: string, programId: string) {
     const program = await this.find(schoolId, programId);
-    const batches = await this.prisma.batch.count({
-      where: { schoolId, programId },
-    });
-    if (batches > 0) {
-      throw new ConflictException(
-        `${program.name} has ${batches} batch${batches === 1 ? '' : 'es'}. Delete or move them first.`,
-      );
-    }
     // Curriculum chapters may name a program optionally; they stay, unlinked
     // (or a 409 names the ones that would become duplicates).
     await this.prisma.$transaction(async (tx) => {
       // Locked, so a fee structure can't be scoped to it meanwhile.
+      // Locked first, so a batch or fee structure can't be added to it meanwhile:
+      // a batch being created waits (it locks the program too), then sees it gone.
       await tx.$queryRaw`SELECT 1 FROM "Program" WHERE "id" = ${programId} AND "schoolId" = ${schoolId} FOR UPDATE`;
+      const batches = await tx.batch.count({ where: { schoolId, programId } });
+      if (batches > 0) {
+        throw new ConflictException(
+          `${program.name} has ${batches} batch${batches === 1 ? '' : 'es'}. Delete or move them first.`,
+        );
+      }
       const fees = await tx.feeStructure.count({ where: { schoolId, programId } });
       if (fees > 0) {
         throw new ConflictException(
