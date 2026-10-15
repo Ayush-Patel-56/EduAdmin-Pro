@@ -235,12 +235,29 @@ describe('BatchesService.remove: student history and grades', () => {
     const { tx, batches } = build(0);
     tx.assignmentSubmission.count.mockResolvedValueOnce(0).mockResolvedValueOnce(2);
     await expect(batches.remove('s1', 'b1')).rejects.toThrow('2 submissions are waiting to be graded');
-    expect(tx.assignmentSubmission.count.mock.calls[1][0].where).toEqual({ schoolId: 's1', status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: 'b1' } });
+    expect(tx.assignmentSubmission.count.mock.calls[1][0].where).toEqual({
+      schoolId: 's1',
+      assignment: { batchId: 'b1' },
+      OR: [{ status: { in: ['SUBMITTED', 'LATE'] } }, { fileId: { not: null } }],
+    });
     // Counted under the same locks as the grades.
     expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[1]);
     expect(tx.batch.delete).not.toHaveBeenCalled();
     tx.assignmentSubmission.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
     await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 submission is waiting to be graded');
+  });
+
+  it('a pending submission that already has a file blocks the delete too, and the message does not suggest grading (#18 review)', async () => {
+    const { tx, batches } = build(0);
+    // Model the DB: one PENDING row with a file, no SUBMITTED/LATE rows.
+    const rows = [{ status: 'PENDING', fileId: 'f1' }, { status: 'PENDING', fileId: null }];
+    const match = (w: any) =>
+      rows.filter((r) => (w.status ? w.status.in.includes(r.status) : true) && (!w.OR || w.OR.some((o: any) => (o.status ? o.status.in.includes(r.status) : r.fileId !== null)))).length;
+    tx.assignmentSubmission.count.mockImplementation(async ({ where }: any) => (where.status?.equals === 'GRADED' || where.status === 'GRADED' ? 0 : match(where)));
+    const err = await batches.remove('s1', 'b1').catch((e) => e);
+    expect(err?.message).toContain('1 submission is waiting to be graded');
+    expect(err.message).not.toMatch(/grade them/);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
   });
 
   it('a batch that fee structures are scoped to is not deleted', async () => {

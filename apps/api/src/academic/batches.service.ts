@@ -144,14 +144,19 @@ export class BatchesService {
         );
       }
       // Work handed in but not graded yet is kept too: deleting the batch would
-      // silently drop it (and its file) with the assignment.
+      // silently drop it (and its file) with the assignment. "Handed in" is by
+      // what is there, not only by status: a PENDING row can still carry a file.
       const waiting = await tx.assignmentSubmission.count({
-        where: { schoolId, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId } },
+        where: {
+          schoolId,
+          assignment: { batchId },
+          OR: [{ status: { in: ['SUBMITTED', 'LATE'] } }, { fileId: { not: null } }],
+        },
       });
       if (waiting > 0) {
         throw new ConflictException(
           `${waiting} submission${waiting === 1 ? ' is' : 's are'} waiting to be graded in this batch's assignments. ` +
-            'Set an end date for the batch instead, or have its teachers grade them or delete those assignments first.',
+            'Set an end date for the batch instead, or have its teachers delete those assignments first.',
         );
       }
       // Fees scoped to the batch keep their dues and payments meaningful.
