@@ -150,6 +150,17 @@ describe('WorkspaceService: assignments and grading', () => {
     expect(prisma.$queryRaw.mock.calls[1][3]).toMatchObject({ strings: ['UPDATE'] });
   });
 
+  it('grading reads the assignment (and its total marks) inside the transaction, under the lock (#18)', async () => {
+    const { service, prisma } = build();
+    const txAssignment = vi.fn().mockResolvedValue(visible);
+    const tx = { ...prisma, assignment: { ...prisma.assignment, findFirst: txAssignment } };
+    prisma.$transaction.mockImplementation((run: (t: typeof tx) => unknown) => run(tx));
+    prisma.student.findFirst.mockResolvedValue({ id: 'st-1' });
+    await service.saveSubmission(scope(), 'u', 'a1', 'st-1', { status: 'SUBMITTED', score: 10 });
+    expect(txAssignment).toHaveBeenCalledTimes(1);
+    expect(prisma.assignment.findFirst).not.toHaveBeenCalled();
+  });
+
   it("only a student of the assignment's batch (or already graded on it) can be graded", async () => {
     const { service, prisma } = build();
     prisma.assignment.findFirst.mockResolvedValue(visible);

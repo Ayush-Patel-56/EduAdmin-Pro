@@ -9,6 +9,7 @@ import { useAcademicOptions, useInvalidateAcademic, type Batch, type Faculty } f
 import { ALL } from '@/features/academic/filters'
 import { formatDate } from '@/features/portal/format'
 import { useAdminContext } from '../adminContext'
+import { deleteBlockers } from './batchDelete'
 import { THEME_STYLES } from './theme'
 
 type Modal = { kind: 'form'; batch?: Batch } | { kind: 'delete'; batch: Batch } | null
@@ -136,7 +137,7 @@ export function BatchesTab() {
               {deletedWith(modal.batch)}, and its teachers unassigned.
               {modal.batch.studentCount > 0 &&
                 ` Its ${plural(modal.batch.studentCount, 'student')} stay in the program, unassigned, and keep this batch in their history.`}{' '}
-              {modal.batch.assignmentCount > 0 && 'If its assignments have recorded grades it can’t be deleted; set an end date instead. '}
+              {deleteBlockers(modal.batch)}
               This can’t be undone.
             </>
           }

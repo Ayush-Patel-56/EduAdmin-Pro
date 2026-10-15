@@ -7,7 +7,7 @@ import type {
   ProgramDto,
   SyllabusImportDto,
 } from './academic.dto.js';
-import { BatchesService } from './batches.service.js';
+import { BatchesService, HANDED_IN_UNGRADED } from './batches.service.js';
 import { ProgramsService } from './programs.service.js';
 import { SyllabusService } from './syllabus.service.js';
 import type { AccessService } from './access.service.js';
@@ -202,6 +202,28 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
   });
 });
 
+describe('BatchesService.list: handed-in work for the delete confirmation (#18 review)', () => {
+  it('counts ungraded handed-in submissions per batch, the same way the delete guard does', async () => {
+    const assignmentFindMany = vi.fn().mockResolvedValue([
+      { batchId: 'b1', _count: { submissions: 2 } },
+      { batchId: 'b1', _count: { submissions: 1 } },
+      { batchId: 'b2', _count: { submissions: 0 } },
+    ]);
+    const batch = (id: string) => ({ id, name: id, program: null, classLevel: 11, capacity: 30, startDate: new Date('2026-04-01T00:00:00Z'), endDate: null, coordinator: null, _count: { facultyBatches: 0, syllabusItems: 0, students: 0, materials: 0, assignments: 1, calendarEvents: 0 } });
+    const prisma = {
+      batch: { findMany: vi.fn().mockResolvedValue([batch('b1'), batch('b2'), batch('b3')]) },
+      assignment: { findMany: assignmentFindMany },
+    } as unknown as PrismaService;
+    const rows = await new BatchesService(prisma).list('s1');
+    expect(rows.map((r) => [r.id, r.handedInCount])).toEqual([['b1', 3], ['b2', 0], ['b3', 0]]);
+    expect(assignmentFindMany.mock.calls[0][0]).toEqual({
+      where: { schoolId: 's1', batchId: { in: ['b1', 'b2', 'b3'] } },
+      select: { batchId: true, _count: { select: { submissions: { where: HANDED_IN_UNGRADED } } } },
+    });
+    expect(HANDED_IN_UNGRADED).toEqual({ status: { not: 'GRADED' }, OR: [{ status: { in: ['SUBMITTED', 'LATE'] } }, { fileId: { not: null } }] });
+  });
+});
+
 describe('BatchesService.remove: student history and grades', () => {
   const build = (graded: number, classesMarked = 0, fees = 0) => {
     const tx = {
@@ -228,6 +250,37 @@ describe('BatchesService.remove: student history and grades', () => {
     // Counted after locking the batch and its assignments, so no grade slips in.
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('a batch with handed-in work not graded yet is not deleted either (#18)', async () => {
+    const { tx, batches } = build(0);
+    tx.assignmentSubmission.count.mockResolvedValueOnce(0).mockResolvedValueOnce(2);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('2 submissions are waiting to be graded');
+    expect(tx.assignmentSubmission.count.mock.calls[1][0].where).toEqual({
+      schoolId: 's1',
+      assignment: { batchId: 'b1' },
+      status: { not: 'GRADED' },
+      OR: [{ status: { in: ['SUBMITTED', 'LATE'] } }, { fileId: { not: null } }],
+    });
+    // Counted under the same locks as the grades.
+    expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[1]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+    tx.assignmentSubmission.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 submission is waiting to be graded');
+  });
+
+  it('a pending submission that already has a file blocks the delete too, and the message does not suggest grading (#18 review)', async () => {
+    const { tx, batches } = build(0);
+    // Model the DB: one PENDING row with a file, no SUBMITTED/LATE rows.
+    const rows = [{ status: 'PENDING', fileId: 'f1' }, { status: 'PENDING', fileId: null }];
+    const statusOk = (f: any, s: string) => (f === undefined ? true : typeof f === 'string' ? f === s : f.in ? f.in.includes(s) : f.not !== s);
+    const match = (w: any) =>
+      rows.filter((r) => statusOk(w.status, r.status) && (!w.OR || w.OR.some((o: any) => (o.status ? statusOk(o.status, r.status) : r.fileId !== null)))).length;
+    tx.assignmentSubmission.count.mockImplementation(async ({ where }: any) => match(where));
+    const err = await batches.remove('s1', 'b1').catch((e) => e);
+    expect(err?.message).toContain('1 submission is waiting to be graded');
+    expect(err.message).not.toMatch(/grade them/);
     expect(tx.batch.delete).not.toHaveBeenCalled();
   });
 

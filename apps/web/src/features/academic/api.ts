@@ -62,6 +62,8 @@ export type Batch = {
   assignmentCount: number
   /** Calendar events for this batch (deleted with it). */
   eventCount: number
+  /** Submissions handed in (or with a file) but not graded yet: they block deleting the batch. */
+  handedInCount: number
 }
 
 export type Faculty = {

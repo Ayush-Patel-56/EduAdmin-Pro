@@ -12,6 +12,15 @@ import { duplicateAsConflict } from '../common/unique-violation.js';
 
 type Tx = Prisma.TransactionClient;
 
+/**
+ * Work handed in but not graded yet, judged by what is there and not only by
+ * status: a PENDING row can still carry the student's file.
+ */
+export const HANDED_IN_UNGRADED = {
+  status: { not: 'GRADED' },
+  OR: [{ status: { in: ['SUBMITTED', 'LATE'] } }, { fileId: { not: null } }],
+} satisfies Prisma.AssignmentSubmissionWhereInput;
+
 @Injectable()
 export class BatchesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -35,6 +44,16 @@ export class BatchesService {
         },
       },
     });
+    // Handed-in work not graded yet blocks the delete (see remove): the delete
+    // confirmation says so up front.
+    const handedIn = new Map<string, number>();
+    if (batches.length > 0) {
+      const assignments = await this.prisma.assignment.findMany({
+        where: { schoolId, batchId: { in: batches.map((b) => b.id) } },
+        select: { batchId: true, _count: { select: { submissions: { where: HANDED_IN_UNGRADED } } } },
+      });
+      for (const a of assignments) handedIn.set(a.batchId, (handedIn.get(a.batchId) ?? 0) + a._count.submissions);
+    }
     return batches.map((b) => ({
       id: b.id,
       name: b.name,
@@ -50,6 +69,7 @@ export class BatchesService {
       materialCount: b._count.materials,
       assignmentCount: b._count.assignments,
       eventCount: b._count.calendarEvents,
+      handedInCount: handedIn.get(b.id) ?? 0,
     }));
   }
 
@@ -142,6 +162,18 @@ export class BatchesService {
       if (graded > 0) {
         throw new ConflictException(
           `${graded} grade${graded === 1 ? ' is' : 's are'} recorded in this batch's assignments. ` +
+            'Set an end date for the batch instead, or have its teachers delete those assignments first.',
+        );
+      }
+      // Work handed in but not graded yet is kept too: deleting the batch would
+      // silently drop it (and its file) with the assignment. "Handed in" is by
+      // what is there, not only by status: a PENDING row can still carry a file.
+      const waiting = await tx.assignmentSubmission.count({
+        where: { schoolId, assignment: { batchId }, ...HANDED_IN_UNGRADED },
+      });
+      if (waiting > 0) {
+        throw new ConflictException(
+          `${waiting} submission${waiting === 1 ? ' is' : 's are'} waiting to be graded in this batch's assignments. ` +
             'Set an end date for the batch instead, or have its teachers delete those assignments first.',
         );
       }

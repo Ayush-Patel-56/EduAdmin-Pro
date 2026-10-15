@@ -191,6 +191,24 @@ describe('FilesService', () => {
   });
 });
 
+describe('FilesService.discardQuietly (#18)', () => {
+  it('a failing cleanup after the record is gone is logged, not thrown', async () => {
+    const files = new FilesService({} as PrismaService, config({ NODE_ENV: 'development' }));
+    vi.spyOn(files, 'discard').mockRejectedValue(new Error('bucket down'));
+    const warn = vi.spyOn((files as unknown as { logger: { warn: (m: string) => void } }).logger, 'warn').mockImplementation(() => undefined);
+    await expect(files.discardQuietly([{ id: 'f1', key: 'k1' }, { id: 'f2', key: 'k2' }])).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('Could not remove files f1, f2: bucket down');
+  });
+
+  it('a cleanup that works logs nothing', async () => {
+    const files = new FilesService({} as PrismaService, config({ NODE_ENV: 'development' }));
+    vi.spyOn(files, 'discard').mockResolvedValue(undefined);
+    const warn = vi.spyOn((files as unknown as { logger: { warn: (m: string) => void } }).logger, 'warn');
+    await files.discardQuietly([{ id: 'f1', key: 'k1' }]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
 describe('FilesService.claim', () => {
   it("a file is attached only if it's this user's READY upload for that purpose and nothing uses it yet", async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
