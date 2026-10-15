@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
-import { istToday } from '../common/dates.js';
+import { istToday, parseDate } from '../common/dates.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { dueDateIn, outstanding, periodOf, rupees, statusOf, toPaise } from './fee-rules.js';
 import { plainToInstance } from 'class-transformer';
@@ -449,6 +449,47 @@ describe('follow-ups from #20 (#23)', () => {
     expect(values).toEqual(['school-1', ['fs-a', 'fs-b']]);
     expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.feeStructure.update.mock.invocationCallOrder[0]);
     expect(prisma.feeStructure.update.mock.calls.map((c) => c[0].where.id)).toEqual(['fs-b', 'fs-a']);
+  });
+
+  it('a payment import share-locks all its fees once, in id order, before reading any of them (#27 review)', async () => {
+    const { imports, prisma } = build();
+    prisma.student.findMany.mockResolvedValue([{ id: 'st-1', fullName: 'A', rollNumber: '1', admissionNumber: null, batchId: null, programId: null }]);
+    prisma.feeStructure.findMany.mockResolvedValue([
+      { id: 'fs-b', name: 'Bus', frequency: 'ONE_TIME', dueDay: 5, amountPaise: 1000, batchId: null, programId: null },
+      { id: 'fs-a', name: 'Art', frequency: 'ONE_TIME', dueDay: 5, amountPaise: 1000, batchId: null, programId: null },
+    ]);
+    prisma.feeStructure.findUniqueOrThrow.mockImplementation(async ({ where }: { where: { id: string } }) => ({ frequency: 'ONE_TIME', name: where.id }));
+    prisma.feeDue.findUniqueOrThrow.mockResolvedValue({ amountPaise: 1000, discountPaise: 0, lateFeePaise: 0, netPaise: 1000, paidPaise: 0, statusOverride: null, overrideReason: null });
+    prisma.feeDue.findUnique.mockResolvedValue({ id: 'due-1', statusOverride: null, overrideReason: null, notes: null });
+    prisma.$queryRaw.mockImplementation(async (sql: string[], ...values: unknown[]) =>
+      sql.join('?').includes('ANY(') ? (values[1] as string[]).map((id) => ({ id })) : [{ id: 'x', last: 7 }],
+    );
+    const pay = (structureName: string) => ({ rollNumber: '1', structureName, amountPaid: '0', method: 'Cash' });
+    await imports.payments('school-1', 'u', { dryRun: false, rows: [pay('Bus'), pay('Art')] });
+    const feeLocks = prisma.$queryRaw.mock.calls.filter((c) => (c[0] as string[]).join('?').includes('"FeeStructure"'));
+    expect(feeLocks).toHaveLength(1);
+    const [sql, ...values] = feeLocks[0] as [string[], ...unknown[]];
+    expect(sql.join('?')).toMatch(/ANY\(.*ORDER BY "id" FOR SHARE/s);
+    expect(values).toEqual(['school-1', ['fs-a', 'fs-b']]);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.feeStructure.findUniqueOrThrow.mock.invocationCallOrder[0]);
+  });
+
+  it('the automatic receipt year is the paid-on calendar date, whatever the server time zone (getUTCFullYear, not getFullYear)', async () => {
+    // paidOn is a @db.Date: UTC midnight of the date the school picked. In a
+    // zone west of UTC that instant is still the previous day locally.
+    const tz = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      const { service, prisma } = build();
+      prisma.feeDue.findUniqueOrThrow.mockResolvedValue({ netPaise: 100000, paidPaise: 0 });
+      const pay = { amountPaise: 1000, method: 'UPI' as const, receiptNumber: null, transactionRef: null, paidOn: parseDate('2026-01-01', 'Paid on'), idempotencyKey: null, source: 'MANUAL' as const };
+      expect(pay.paidOn.getFullYear()).toBe(2025); // what the bot's suggestion would use
+      const result = await service.addPaymentLocked(prisma as never, 's', 'u', 'due-1', pay);
+      expect(result.receiptNumber).toBe('REC-2026-000007');
+    } finally {
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
+    }
   });
 
   it('lockStructures: a fee missing (deleted meanwhile) is a 404; nothing to lock runs no query', async () => {

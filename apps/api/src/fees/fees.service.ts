@@ -646,14 +646,19 @@ export async function withAutoReceipt<T>(tx: Db, schoolId: string, year: number,
 }
 
 /**
- * Locks fee structures FOR UPDATE in id order, all in one statement. Two
- * imports updating the same fees then queue instead of deadlocking (each used
- * to lock them in its own file order).
+ * Locks fee structures in id order, all in one statement: FOR UPDATE for the
+ * structure import, FOR SHARE for the payment import. Both imports then take
+ * their locks in the same order and queue instead of deadlocking (each used to
+ * lock them in its own file order).
  */
-export async function lockStructures(tx: Db, schoolId: string, ids: string[]) {
+export async function lockStructures(tx: Db, schoolId: string, ids: string[], mode: 'UPDATE' | 'SHARE' = 'UPDATE') {
   const sorted = [...new Set(ids)].sort();
   if (sorted.length === 0) return;
-  const rows = await tx.$queryRaw<{ id: string }[]>`
+  const rows =
+    mode === 'SHARE'
+      ? await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "FeeStructure" WHERE "schoolId" = ${schoolId} AND "id" = ANY(${sorted}::text[]) ORDER BY "id" FOR SHARE`
+      : await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "FeeStructure" WHERE "schoolId" = ${schoolId} AND "id" = ANY(${sorted}::text[]) ORDER BY "id" FOR UPDATE`;
   if (rows.length !== sorted.length) throw new NotFoundException('Fee structure not found');
 }

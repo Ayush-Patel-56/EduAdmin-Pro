@@ -5,7 +5,7 @@ import { uniqueViolation } from '../common/unique-violation.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { academicYearOf, dueDateIn, net, periodOf, toPaise } from './fee-rules.js';
 import type { FeeCategory, FeeFrequency, PaymentImportDto, PaymentMethod, StructureImportDto } from './fees.dto.js';
-import { checkFixedRules, FeesService, lock, lockShared, lockStructures } from './fees.service.js';
+import { checkFixedRules, FeesService, lock, lockStructures } from './fees.service.js';
 
 const TX = { timeout: 60_000, maxWait: 10_000 };
 const key = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -264,10 +264,11 @@ export class FeesImportService {
     if (!dto.dryRun) {
       await this.prisma.$transaction(async (tx) => {
         // The periods were worked out from each fee's frequency: lock the fees
-        // and make sure none changed since the preview.
+        // and make sure none changed since the preview. All of them at once, in
+        // id order, like the structure import, so the two can't deadlock.
         const used = [...new Set(rows.flatMap((r) => (r.apply ? [r.apply.structureId] : [])))];
+        await lockStructures(tx, schoolId, used, 'SHARE');
         for (const id of used) {
-          await lockShared(tx, schoolId, id);
           const now = await tx.feeStructure.findUniqueOrThrow({ where: { id }, select: { frequency: true, name: true } });
           if (now.frequency !== structures.find((s) => s.id === id)!.frequency) {
             throw new BadRequestException(`${now.name} changed while the file was being checked. Nothing was imported; check the file again.`);
