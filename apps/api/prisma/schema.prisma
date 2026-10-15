@@ -221,8 +221,8 @@ model User {
   emailNotifications Boolean      @default(true) // report digest emails
   syllabusUpdates    Boolean      @default(true) // syllabus coverage alerts
   accentTheme        AccentTheme?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  createdAt          DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime     @updatedAt @db.Timestamptz(3)
 
   adminInviteCode    AdminInviteCode?         @relation(fields: [adminInviteCodeId], references: [id], onDelete: SetNull)
   memberships        SchoolMembership[]
@@ -242,8 +242,8 @@ model Session {
   userId         String
   tokenHash      String   @unique
   activeSchoolId String? // school the user is currently working in
-  expiresAt      DateTime
-  createdAt      DateTime @default(now())
+  expiresAt      DateTime @db.Timestamptz(3)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
   userAgent      String?
   ip             String?
 
@@ -259,8 +259,8 @@ model EmailVerificationToken {
   userId    String
   codeHash  String
   attempts  Int      @default(0)
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -275,9 +275,9 @@ model AdminInviteCode {
   note      String?
   maxUses   Int? // null = unlimited
   uses      Int       @default(0)
-  expiresAt DateTime?
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  expiresAt DateTime? @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
 
   users User[]
 }
@@ -301,8 +301,8 @@ model School {
   address                String?
   gstNumber              String?
   createdById            String?
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
+  createdAt              DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime  @updatedAt @db.Timestamptz(3)
 
   createdBy       User?               @relation("SchoolCreator", fields: [createdById], references: [id], onDelete: SetNull)
   memberships     SchoolMembership[]
@@ -344,7 +344,7 @@ model SchoolMembership {
   schoolId  String
   role      Role
   status    MembershipStatus @default(PENDING)
-  createdAt DateTime         @default(now())
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
@@ -366,8 +366,8 @@ model Program {
   isActive      Boolean     @default(true)
   isStandard    Boolean // one of the platform's standard programs vs. added by the school
   sortOrder     Int
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @default(now()) @updatedAt
+  createdAt     DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime    @default(now()) @updatedAt @db.Timestamptz(3)
 
   school          School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   batches         Batch[]
@@ -396,8 +396,8 @@ model Batch {
   startDate     DateTime  @db.Date
   endDate       DateTime? @db.Date
   coordinatorId String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
 
   school         School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   // NoAction (checked at end of statement) so deleting a school can cascade
@@ -451,8 +451,8 @@ model Faculty {
   designation     FacultyDesignation @default(TEACHER)
   primarySubject  String? // one of `subjects`, starred on the profile
   primaryStream   String? // e.g. Science, Commerce
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  createdAt       DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @db.Timestamptz(3)
 
   school             School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   user               User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -482,7 +482,7 @@ model FacultyBatch {
   batchId   String
   schoolId  String
   role      BatchRole @default(PRIMARY)
-  createdAt DateTime  @default(now())
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
 
   faculty Faculty @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: Cascade)
   batch   Batch   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
@@ -496,7 +496,7 @@ model FacultyProgram {
   facultyId String
   programId String
   schoolId  String
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   faculty Faculty @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: Cascade)
   program Program @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: Cascade)
@@ -519,8 +519,8 @@ model SyllabusItem {
   remarks        String?
   createdById    String?
   updatedById    String?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
 
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   batch  Batch  @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
@@ -538,7 +538,7 @@ model PromotionCycle {
   status       PromotionStatus
   studentCount Int             @default(0)
   decidedById  String?
-  decidedAt    DateTime        @default(now())
+  decidedAt    DateTime        @default(now()) @db.Timestamptz(3)
 
   school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
@@ -552,7 +552,7 @@ model Announcement {
   title       String
   body        String?
   createdById String?
-  createdAt   DateTime             @default(now())
+  createdAt   DateTime             @default(now()) @db.Timestamptz(3)
 
   school    School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   createdBy User?  @relation(fields: [createdById], references: [id], onDelete: SetNull)
@@ -575,8 +575,8 @@ model CurriculumChapter {
   board         String? // CBSE / ICSE / ISC / State Board
   classLevel    String? // one of the school's classes, e.g. "11th"
   expectedHours Int?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
 
   school   School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   // NoAction (checked at end of statement) lets a school delete cascade; the
@@ -597,8 +597,8 @@ model CurriculumConcept {
   name      String
   code      String? // e.g. "PHY-11-CH03-CP02", unique per school; stored upper-cased
   sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   school  School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   chapter CurriculumChapter @relation(fields: [chapterId, schoolId], references: [id, schoolId], onDelete: Cascade)
