@@ -128,6 +128,74 @@ enum AuditAction {
   DELETE
 }
 
+enum StudentStatus {
+  ACTIVE
+  INACTIVE
+  TRANSFERRED
+  COMPLETED
+}
+
+// What an uploaded file is for; decides who may upload and read it, and which
+// types and sizes are accepted.
+enum FilePurpose {
+  STUDENT_PHOTO
+  FACULTY_PHOTO
+  STUDY_MATERIAL
+  ASSIGNMENT_SHEET // the question paper of an assignment
+  SUBMISSION // a student's work, uploaded by their teacher
+}
+
+// The role switch on a faculty profile (PRD 4.7). A label only: it grants no extra access.
+enum FacultyDesignation {
+  TEACHER
+  COORDINATOR
+}
+
+enum MaterialType {
+  NOTES
+  PDF
+  VIDEO
+  PRACTICE_SHEET
+  DPP
+  REFERENCE
+  ANSWER_KEY
+}
+
+enum AssignmentType {
+  HOMEWORK
+  DPP
+  WORKSHEET
+  PROJECT
+  REVISION
+}
+
+enum SubmissionStatus {
+  PENDING
+  SUBMITTED
+  LATE
+  GRADED
+}
+
+enum CounselingType {
+  ACADEMIC
+  CAREER
+  PERSONAL
+  DISCIPLINARY
+  PARENT_MEETING
+}
+
+enum CounselingStatus {
+  SCHEDULED
+  COMPLETED
+  NO_SHOW
+  CANCELLED
+}
+
+enum FileStatus {
+  PENDING // upload URL issued, bytes not confirmed yet
+  READY // size and file signature checked
+}
+
 enum AnnouncementCategory {
   GENERAL
   ACADEMIC
@@ -163,6 +231,8 @@ model User {
   schoolsCreated     School[]                 @relation("SchoolCreator")
   announcements      Announcement[]
   facultyProfiles    Faculty[]
+  counselingSessions CounselingSession[]
+  markedOccurrences  ClassOccurrence[]
 }
 
 // Opaque login sessions. Only a SHA-256 hash of the cookie token is stored,
@@ -248,6 +318,22 @@ model School {
   interviews      Interview[]
   appraisals      TeacherAppraisal[]
   announcements   Announcement[]
+  students        Student[]
+  files           FileObject[]
+  materials       StudyMaterial[]
+  assignments     Assignment[]
+  counseling      CounselingSession[]
+  scheduleSlots   ScheduleSlot[]
+  specialClasses  SpecialClass[]
+  occurrences     ClassOccurrence[]
+  attendance      AttendanceRecord[]
+  feeStructures   FeeStructure[]
+  feeDues         FeeDue[]
+  feePayments     FeePayment[]
+  receiptCounters FeeReceiptCounter[]
+  meetings        Meeting[]
+  agendaItems     MeetingAgendaItem[]
+  calendarEvents  CalendarEvent[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -287,6 +373,9 @@ model Program {
   batches         Batch[]
   facultyPrograms FacultyProgram[]
   chapters        CurriculumChapter[]
+  students        Student[]
+  feeStructures   FeeStructure[]
+  calendarEvents  CalendarEvent[]
 
   @@unique([schoolId, name])
   @@unique([schoolId, code])
@@ -310,14 +399,23 @@ model Batch {
   createdAt     DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
 
-  school         School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school         School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   // NoAction (checked at end of statement) so deleting a school can cascade
   // through programs and batches together; the service blocks deleting a
   // program that still has batches.
-  program        Program        @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
-  coordinator    Faculty?       @relation("BatchCoordinator", fields: [coordinatorId], references: [id], onDelete: SetNull)
+  program        Program             @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  coordinator    Faculty?            @relation("BatchCoordinator", fields: [coordinatorId], references: [id], onDelete: SetNull)
   facultyBatches FacultyBatch[]
   syllabusItems  SyllabusItem[]
+  students       Student[]
+  enrollments    StudentEnrollment[]
+  materials      StudyMaterial[]
+  assignments    Assignment[]
+  scheduleSlots  ScheduleSlot[]
+  specialClasses SpecialClass[]
+  occurrences    ClassOccurrence[]
+  feeStructures  FeeStructure[]
+  calendarEvents CalendarEvent[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -327,7 +425,7 @@ model Batch {
 // A teacher's profile in one school. Imported faculty exist before they have a
 // login; `userId` links the record once that teacher joins the school.
 model Faculty {
-  id              String        @id @default(uuid())
+  id              String             @id @default(uuid())
   schoolId        String
   userId          String?
   name            String
@@ -335,30 +433,41 @@ model Faculty {
   phone           String?
   altPhone        String?
   employeeId      String?
-  dateOfBirth     DateTime?     @db.Date
+  dateOfBirth     DateTime?          @db.Date
   gender          String?
   address         String?
   city            String?
   state           String?
   pincode         String?
-  subjects        String[]      @default([])
+  subjects        String[]           @default([])
   specialization  String?
   qualification   String?
   experienceYears Int?
-  joiningDate     DateTime?     @db.Date
-  status          FacultyStatus @default(ACTIVE)
+  joiningDate     DateTime?          @db.Date
+  status          FacultyStatus      @default(ACTIVE)
   bio             String?
   profileImageUrl String?
-  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime      @updatedAt @db.Timestamptz(3)
+  photoFileId     String?            @unique // an uploaded photo (takes precedence over the link)
+  designation     FacultyDesignation @default(TEACHER)
+  primarySubject  String? // one of `subjects`, starred on the profile
+  primaryStream   String? // e.g. Science, Commerce
+  createdAt       DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @db.Timestamptz(3)
 
-  school             School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  user               User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  school             School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  user               User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
   batchAssignments   FacultyBatch[]
   programAssignments FacultyProgram[]
-  coordinatedBatches Batch[]            @relation("BatchCoordinator")
+  coordinatedBatches Batch[]             @relation("BatchCoordinator")
   appraisals         TeacherAppraisal[]
   candidate          Candidate?
+  photo              FileObject?         @relation("FacultyPhoto", fields: [photoFileId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  materials          StudyMaterial[]
+  assignments        Assignment[]
+  counselingSessions CounselingSession[]
+  scheduleSlots      ScheduleSlot[]
+  specialClasses     SpecialClass[]
+  occurrences        ClassOccurrence[]
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -619,4 +728,647 @@ model RecruitmentAuditLog {
   createdAt DateTime    @default(now()) @db.Timestamptz(3)
 
   @@index([schoolId, createdAt])
+}
+
+// A student of one school (PRD 4.6). `batchId` is the current batch (its
+// program is `programId`); StudentEnrollment keeps the batch history.
+// Admission number and Aadhaar are unique within a school, roll number within
+// a batch. Faculty read a limited view; only admins create or edit.
+model Student {
+  id                 String        @id @default(uuid())
+  schoolId           String
+  fullName           String
+  admissionNumber    String? // stored upper-cased
+  aadharNumber       String? // 12 digits, stored without spaces or dashes
+  rollNumber         String? // stored upper-cased (unique per batch)
+  email              String? // lower-cased
+  phone              String? // 10-digit mobile
+  parentContact      String? // 10-digit mobile
+  address            String?
+  city               String?
+  state              String?
+  pincode            String?
+  dateOfBirth        DateTime?     @db.Date
+  gender             String? // Male / Female / Other
+  bloodGroup         String?
+  profileImageUrl    String? // an external https image
+  photoFileId        String?       @unique // or an uploaded photo (takes precedence)
+  previousSchool     String?
+  previousPercentage Decimal?      @db.Decimal(5, 2)
+  classLevel         String? // one of the school's classes, e.g. "9th"
+  programId          String?
+  batchId            String?
+  admissionDate      DateTime?     @db.Date
+  status             StudentStatus @default(ACTIVE)
+  notes              String?
+  createdById        String?
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
+
+  school      School                 @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // NoAction (checked at end of statement) so a school delete cascades; the
+  // batch and program services unassign students before deleting either.
+  program     Program?               @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  batch       Batch?                 @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  photo       FileObject?            @relation(fields: [photoFileId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  guardians   StudentGuardian[]
+  enrollments StudentEnrollment[]
+  submissions AssignmentSubmission[]
+  counseling  CounselingSession[]
+  attendance  AttendanceRecord[]
+  feeDues     FeeDue[]
+
+  @@unique([schoolId, admissionNumber])
+  @@unique([schoolId, aadharNumber])
+  @@unique([batchId, rollNumber])
+  @@unique([id, schoolId])
+  @@index([schoolId, classLevel])
+  @@index([programId])
+}
+
+// Parents and guardians. At most one primary contact per student (partial
+// unique index "StudentGuardian_primary_key" in the migration).
+model StudentGuardian {
+  id           String   @id @default(uuid())
+  schoolId     String
+  studentId    String
+  name         String
+  relationship String?
+  phone        String?
+  altPhone     String?
+  email        String?
+  occupation   String?
+  annualIncome Int? // rupees per year
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([studentId])
+}
+
+// Batch history: one open row (endedOn null) for the current batch, closed
+// when the student moves or is unassigned. The batch and program names are
+// kept, so the history still reads right after a batch is deleted (batchId
+// is then cleared). A plain FK (not composite) so the delete can clear it;
+// rows are only ever written for a batch of the student's own school.
+model StudentEnrollment {
+  id          String    @id @default(uuid())
+  schoolId    String
+  studentId   String
+  batchId     String?
+  batchName   String
+  programName String
+  rollNumber  String?
+  enrolledOn  DateTime  @db.Date
+  endedOn     DateTime? @db.Date
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch   Batch?  @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([studentId])
+  @@index([batchId])
+}
+
+// Metadata of a file whose bytes live in private object storage (Cloudflare
+// R2, or a local folder in development). Bytes are written straight to
+// storage with a short-lived signed URL, then checked (size, file signature)
+// before the file is READY; downloads also use short-lived signed URLs.
+model FileObject {
+  id           String      @id @default(uuid())
+  schoolId     String
+  purpose      FilePurpose
+  status       FileStatus  @default(PENDING)
+  key          String      @unique // opaque storage key
+  originalName String
+  contentType  String
+  size         Int // bytes
+  uploadedById String?
+  createdAt    DateTime    @default(now()) @db.Timestamptz(3)
+
+  school      School                 @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  students    Student[]
+  faculty     Faculty[]              @relation("FacultyPhoto")
+  materials   StudyMaterial[]
+  assignments Assignment[]
+  submissions AssignmentSubmission[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, status, createdAt])
+}
+
+// Study material uploaded by a teacher for one of their batches (PRD 5.9).
+// Public material is visible to every teacher of the batch; private only to
+// its uploader. Admins see all of it.
+model StudyMaterial {
+  id          String       @id @default(uuid())
+  schoolId    String
+  batchId     String
+  subject     String
+  title       String
+  description String?
+  provider    String // who made it, e.g. "Faculty Study Team"
+  chapter     String? // chapter / topic
+  type        MaterialType
+  isPublic    Boolean      @default(true)
+  fileId      String       @unique // one record per uploaded file
+  facultyId   String? // the uploading teacher; null once their profile is deleted
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
+
+  school  School     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch   Batch      @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  file    FileObject @relation(fields: [fileId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  faculty Faculty?   @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, createdAt])
+  @@index([batchId])
+}
+
+// An assignment or DPP for one batch. Students have no portal, so their
+// submissions are recorded (and graded) by staff (HLD 9.9).
+model Assignment {
+  id             String         @id @default(uuid())
+  schoolId       String
+  batchId        String
+  subject        String
+  title          String
+  description    String?
+  chapter        String // chapter / topic
+  type           AssignmentType
+  dueAt          DateTime       @db.Timestamptz(3) // due date + time, entered in IST
+  totalMarks     Int
+  questionFileId String?        @unique
+  facultyId      String? // the teacher who set it
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+
+  school       School                 @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch        Batch                  @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  questionFile FileObject?            @relation(fields: [questionFileId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  faculty      Faculty?               @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  submissions  AssignmentSubmission[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, dueAt])
+  @@index([batchId])
+}
+
+// One student's work on one assignment, entered by a teacher.
+model AssignmentSubmission {
+  id           String           @id @default(uuid())
+  schoolId     String
+  assignmentId String
+  studentId    String
+  status       SubmissionStatus @default(PENDING)
+  score        Decimal?         @db.Decimal(6, 2)
+  feedback     String?
+  fileId       String?          @unique
+  submittedOn  DateTime?        @db.Date
+  gradedAt     DateTime?        @db.Timestamptz(3)
+  gradedById   String? // user id
+  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime         @updatedAt @db.Timestamptz(3)
+
+  assignment Assignment  @relation(fields: [assignmentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  student    Student     @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  file       FileObject? @relation(fields: [fileId, schoolId], references: [id, schoolId], onDelete: NoAction)
+
+  @@unique([assignmentId, studentId])
+  @@index([studentId])
+}
+
+// A counseling session (PRD 4.13 / 5.14). The counselor is an admin (a user)
+// or a faculty member; their name is kept so the record still reads right
+// after they leave.
+model CounselingSession {
+  id                 String           @id @default(uuid())
+  schoolId           String
+  studentId          String
+  counselorUserId    String?
+  counselorFacultyId String?
+  counselorName      String
+  type               CounselingType
+  status             CounselingStatus @default(SCHEDULED)
+  scheduledAt        DateTime         @db.Timestamptz(3)
+  durationMinutes    Int              @default(30)
+  nextSessionDate    DateTime?        @db.Date
+  notes              String?
+  actionItems        String?
+  flagged            Boolean          @default(false)
+  createdById        String?
+  createdAt          DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @db.Timestamptz(3)
+
+  school           School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student          Student  @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  counselorUser    User?    @relation(fields: [counselorUserId], references: [id], onDelete: SetNull)
+  counselorFaculty Faculty? @relation(fields: [counselorFacultyId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, scheduledAt])
+  @@index([studentId])
+  @@index([counselorFacultyId])
+}
+
+enum SpecialClassType {
+  EXTRA
+  DOUBT
+  REVISION
+  MAKEUP
+  ORIENTATION
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+// A weekly recurring class (PRD 4.1 / 5.2). Times are minutes after midnight,
+// Indian time; the day is 0 (Sunday) to 6. Checks in the migration keep the
+// day, the times (end after start) and the effective period valid.
+model ScheduleSlot {
+  id            String    @id @default(uuid())
+  schoolId      String
+  facultyId     String
+  batchId       String
+  subject       String
+  dayOfWeek     Int
+  startMinute   Int
+  endMinute     Int
+  room          String?
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  active        Boolean   @default(true)
+  createdById   String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+
+  school      School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  faculty     Faculty           @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch       Batch             @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  occurrences ClassOccurrence[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, dayOfWeek])
+  @@index([facultyId])
+  @@index([batchId])
+}
+
+// A one-off class (Extra, Doubt, Revision, Makeup, Orientation) on one date.
+model SpecialClass {
+  id          String           @id @default(uuid())
+  schoolId    String
+  title       String
+  type        SpecialClassType @default(EXTRA)
+  subject     String?
+  batchId     String
+  // Optional: an admin may schedule it before a teacher is chosen. Then any
+  // teacher of the batch can take its attendance.
+  facultyId   String?
+  date        DateTime         @db.Date
+  startMinute Int
+  endMinute   Int
+  room        String?
+  notes       String?
+  createdById String?
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
+
+  school      School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch       Batch             @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  faculty     Faculty?          @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  occurrences ClassOccurrence[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, date])
+  @@index([batchId])
+  @@index([facultyId])
+}
+
+// One class on one date: the attendance sheet. It keeps what the class was
+// (title, times, room, batch), so attendance history reads the same after the
+// slot or special class is edited or deleted. A batch with occurrences can't
+// be deleted (NoAction; the batch service explains why).
+model ClassOccurrence {
+  id             String            @id @default(uuid())
+  schoolId       String
+  date           DateTime          @db.Date
+  batchId        String
+  slotId         String?
+  specialClassId String?
+  facultyId      String?
+  title          String
+  subject        String?
+  type           SpecialClassType? // null for a weekly slot
+  startMinute    Int
+  endMinute      Int
+  room           String?
+  markedById     String?
+  submittedAt    DateTime          @db.Timestamptz(3)
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @db.Timestamptz(3)
+
+  school       School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch        Batch              @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  slot         ScheduleSlot?      @relation(fields: [slotId], references: [id], onDelete: SetNull)
+  specialClass SpecialClass?      @relation(fields: [specialClassId], references: [id], onDelete: SetNull)
+  faculty      Faculty?           @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  markedBy     User?              @relation(fields: [markedById], references: [id], onDelete: SetNull)
+  records      AttendanceRecord[]
+
+  @@unique([slotId, date])
+  @@unique([specialClassId])
+  @@unique([id, schoolId])
+  @@index([schoolId, date])
+  @@index([batchId, date])
+}
+
+// One student's status in one class occurrence.
+model AttendanceRecord {
+  id           String           @id @default(uuid())
+  schoolId     String
+  occurrenceId String
+  studentId    String
+  status       AttendanceStatus
+  note         String?
+  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime         @updatedAt @db.Timestamptz(3)
+
+  school     School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  occurrence ClassOccurrence @relation(fields: [occurrenceId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  // NoAction (checked at end of statement): deleting a school still cascades,
+  // but a student with attendance can't be deleted (the service says why).
+  student    Student         @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: NoAction)
+
+  @@unique([occurrenceId, studentId])
+  @@index([studentId])
+  @@index([schoolId])
+}
+
+enum FeeCategory {
+  REGISTRATION
+  MONTHLY_TUITION
+  EXAM
+  MATERIAL
+  OTHER
+}
+
+enum FeeFrequency {
+  ONE_TIME
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+/// Paid / Pending / Partial / Overdue come from the amounts and due date; an
+/// admin can override (with a reason) and Waived exists only as an override.
+enum FeeStatus {
+  PAID
+  PENDING
+  PARTIAL
+  OVERDUE
+  WAIVED
+}
+
+enum PaymentMethod {
+  UPI
+  CASH
+  CARD
+  NET_BANKING
+  CHEQUE
+  DD
+}
+
+enum PaymentSource {
+  MANUAL
+  IMPORT
+}
+
+// A fee the school charges (PRD 4.9). Amounts are whole paise, never floats.
+// Program/batch narrow who it applies to (null = every program / batch).
+// One name per school in any letter case (index FeeStructure_schoolId_lower_name_key).
+model FeeStructure {
+  id           String       @id @default(uuid())
+  schoolId     String
+  name         String
+  category     FeeCategory
+  description  String?
+  amountPaise  Int
+  frequency    FeeFrequency
+  dueDay       Int          @default(5) // 1-31; a short month uses its last day
+  mandatory    Boolean      @default(true)
+  programId    String?
+  batchId      String?
+  academicYear String // e.g. "2026-27"
+  createdById  String?
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(3)
+
+  school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // NoAction: a school delete still cascades; deleting a program or batch
+  // that a fee is scoped to is refused by those services.
+  program Program? @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  batch   Batch?   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  dues    FeeDue[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId])
+}
+
+// What one student owes for one fee and one period ("2026-10", "2026-Q4",
+// "2026-27" or "ONCE"). netPaise = amount - discount + late fee, and paidPaise
+// is the sum of its payments that aren't voided; both are kept in step by the
+// API inside the same transaction, and CHECK constraints guard them.
+model FeeDue {
+  id             String     @id @default(uuid())
+  schoolId       String
+  studentId      String
+  structureId    String
+  period         String
+  dueDate        DateTime   @db.Date
+  amountPaise    Int
+  discountPaise  Int        @default(0)
+  lateFeePaise   Int        @default(0)
+  netPaise       Int
+  paidPaise      Int        @default(0)
+  statusOverride FeeStatus?
+  overrideReason String?
+  overrideById   String?
+  overrideAt     DateTime?  @db.Timestamptz(3)
+  notes          String?
+  createdById    String?
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime   @updatedAt @db.Timestamptz(3)
+
+  school    School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // NoAction: dues are financial records; a student or fee with dues can't be
+  // deleted (the services say why), but a school delete still cascades.
+  student   Student      @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  structure FeeStructure @relation(fields: [structureId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  payments  FeePayment[]
+
+  @@unique([structureId, studentId, period])
+  @@unique([id, schoolId])
+  @@index([schoolId, dueDate])
+  @@index([studentId])
+}
+
+// A payment the school received (recorded, never collected online). Payments
+// are never edited or deleted: a mistake is voided, with who, when and why.
+// Receipt numbers are unique per school; a transaction reference can't be
+// reused by another live payment (partial index in the migration); a retried
+// request with the same idempotency key returns the first payment.
+model FeePayment {
+  id             String        @id @default(uuid())
+  schoolId       String
+  dueId          String
+  receiptNumber  String
+  amountPaise    Int
+  method         PaymentMethod
+  transactionRef String?
+  paidOn         DateTime      @db.Date
+  source         PaymentSource @default(MANUAL)
+  idempotencyKey String?
+  notes          String?
+  recordedById   String?
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+  voidedAt       DateTime?     @db.Timestamptz(3)
+  voidedById     String?
+  voidReason     String?
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  due    FeeDue @relation(fields: [dueId, schoolId], references: [id, schoolId], onDelete: NoAction)
+
+  @@unique([schoolId, receiptNumber])
+  @@unique([schoolId, idempotencyKey])
+  @@index([dueId])
+  @@index([schoolId, paidOn])
+}
+
+// The last automatic receipt number per school and year (REC-2026-000001).
+model FeeReceiptCounter {
+  schoolId String
+  year     Int
+  last     Int    @default(0)
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@id([schoolId, year])
+}
+
+enum MeetingType {
+  GENERAL
+  MANAGEMENT
+  PARENT_TEACHER
+  STAFF
+  DISCIPLINARY
+}
+
+enum AgendaPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AgendaStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+// A school meeting (PRD 4.14): the Meetings Log entry, with its agenda items
+// as the minutes. The time is minutes after midnight, Indian time (optional).
+model Meeting {
+  id                String      @id @default(uuid())
+  schoolId          String
+  title             String
+  type              MeetingType @default(GENERAL)
+  date              DateTime    @db.Date
+  startMinute       Int?
+  venue             String?
+  attendees         String[]    @default([])
+  minutesPreparedBy String?
+  nextMeetingDate   DateTime?   @db.Date
+  createdById       String?
+  createdAt         DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(3)
+
+  school      School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  agendaItems MeetingAgendaItem[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, date])
+}
+
+// One agenda / discussion item of a meeting, with what was decided and who
+// follows it up.
+model MeetingAgendaItem {
+  id             String         @id @default(uuid())
+  schoolId       String
+  meetingId      String
+  title          String
+  discussion     String?
+  action         String?
+  responsible    String?
+  targetDate     DateTime?      @db.Date
+  communicatedTo String?
+  communicatedBy String?
+  priority       AgendaPriority @default(MEDIUM)
+  status         AgendaStatus   @default(NOT_STARTED)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  meeting Meeting @relation(fields: [meetingId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@index([schoolId])
+}
+
+enum CalendarEventType {
+  HOLIDAY
+  EXAM
+  EVENT
+  PARENT_MEETING
+}
+
+enum EventRepeat {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// The Academic Calendar (PRD 4.15): holidays, exams, events and parent
+// meetings. Dates are school-local calendar dates. A repeating event recurs
+// from its start (until repeatUntil, or indefinitely); the API expands it
+// into the dates being viewed. Scope: the whole school, one program or one
+// batch (a scoped event goes when its program or batch is deleted).
+model CalendarEvent {
+  id          String            @id @default(uuid())
+  schoolId    String
+  title       String
+  type        CalendarEventType
+  programId   String?
+  batchId     String?
+  startDate   DateTime          @db.Date
+  endDate     DateTime          @db.Date
+  description String?
+  repeat      EventRepeat       @default(NONE)
+  repeatUntil DateTime?         @db.Date
+  createdById String?
+  createdAt   DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime          @updatedAt @db.Timestamptz(3)
+
+  school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  program Program? @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch   Batch?   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([schoolId, startDate])
+  @@index([programId])
+  @@index([batchId])
 }

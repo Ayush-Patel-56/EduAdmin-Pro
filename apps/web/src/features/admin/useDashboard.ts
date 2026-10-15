@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import type { SpecialClassType } from '@/features/schedule/api'
 
 export type MouStatus = 'NOT_SET' | 'UPCOMING' | 'ACTIVE' | 'EXPIRED'
 
@@ -12,6 +13,8 @@ export type Dashboard = {
     board: string
     classes: string[]
     classesLabel: string
+    /** 1-12: the month the academic year starts (April by default). */
+    academicYearStartMonth: number
     mouStartDate: string | null
     mouEndDate: string | null
     mouStatus: MouStatus
@@ -22,6 +25,8 @@ export type Dashboard = {
     id: string
     time: string
     className: string
+    /** Set for a special class (Extra, Doubt, …); null for a weekly slot. */
+    type: SpecialClassType | null
     batch: string
     teacher: string
     room: string
@@ -30,9 +35,11 @@ export type Dashboard = {
 
 export const dashboardQueryKey = (schoolId: string) => ['dashboard', schoolId] as const
 
-export function useDashboard(schoolId: string) {
+/** `fresh`: fetch again whenever the caller mounts (the dashboard page, so today's classes are current). */
+export function useDashboard(schoolId: string, fresh = false) {
   return useQuery({
     queryKey: dashboardQueryKey(schoolId),
     queryFn: () => api<Dashboard>(`/schools/${schoolId}/dashboard`),
+    ...(fresh && { refetchOnMount: 'always' as const }),
   })
 }

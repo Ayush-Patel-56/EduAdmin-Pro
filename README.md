@@ -9,7 +9,7 @@ School management platform with separate Admin and Teacher dashboards — class 
 | `apps/web` | React 19 + Vite + TypeScript + Tailwind CSS 4 + React Router |
 | `apps/api` | NestJS + Prisma 7 |
 | Database | PostgreSQL on Neon |
-| Files | Cloudflare R2 (planned) |
+| Files | Cloudflare R2 (private bucket, signed URLs); a local folder in development |
 
 ## Getting started
 

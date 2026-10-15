@@ -29,9 +29,28 @@ const CurriculumPage = lazy(() =>
 const RecruitmentPage = lazy(() =>
   import('@/features/admin/recruitment/RecruitmentPage').then((m) => ({ default: m.RecruitmentPage })),
 )
+const StudentsPage = lazy(() => import('@/features/admin/students/StudentsPage').then((m) => ({ default: m.StudentsPage })))
+const TeacherStudentsPage = lazy(() =>
+  import('@/features/teacher/TeacherStudentsPage').then((m) => ({ default: m.TeacherStudentsPage })),
+)
+const TeacherPortalPage = lazy(() =>
+  import('@/features/admin/teacher-portal/TeacherPortalPage').then((m) => ({ default: m.TeacherPortalPage })),
+)
+const CounselingPage = lazy(() => import('@/features/admin/counseling/CounselingPage').then((m) => ({ default: m.CounselingPage })))
+const WorkspacePage = lazy(() => import('@/features/teacher/workspace/WorkspacePage').then((m) => ({ default: m.WorkspacePage })))
+const CounselingLogPage = lazy(() => import('@/features/teacher/CounselingLogPage').then((m) => ({ default: m.CounselingLogPage })))
+const MyProfilePage = lazy(() => import('@/features/teacher/MyProfilePage').then((m) => ({ default: m.MyProfilePage })))
 const TeacherAcademicPlanningPage = lazy(() =>
   import('@/features/teacher/TeacherAcademicPlanningPage').then((m) => ({ default: m.TeacherAcademicPlanningPage })),
 )
+const CalendarPage = lazy(() => import('@/features/admin/calendar/CalendarPage').then((m) => ({ default: m.CalendarPage })))
+const AttendanceOverviewPage = lazy(() =>
+  import('@/features/admin/attendance/AttendanceOverviewPage').then((m) => ({ default: m.AttendanceOverviewPage })),
+)
+const SchedulePage = lazy(() => import('@/features/teacher/SchedulePage').then((m) => ({ default: m.SchedulePage })))
+const TeacherAttendancePage = lazy(() => import('@/features/teacher/AttendancePage').then((m) => ({ default: m.AttendancePage })))
+const FeesPage = lazy(() => import('@/features/admin/fees/FeesPage').then((m) => ({ default: m.FeesPage })))
+const MeetingsPage = lazy(() => import('@/features/admin/meetings/MeetingsPage').then((m) => ({ default: m.MeetingsPage })))
 const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
@@ -39,8 +58,26 @@ const adminPages: Record<string, ReactNode> = {
   'academic-planning': lazyPage(<AcademicPlanningPage />),
   curriculum: lazyPage(<CurriculumPage />),
   recruitment: lazyPage(<RecruitmentPage />),
+  students: lazyPage(<StudentsPage />),
+  'teacher-portal': lazyPage(<TeacherPortalPage />),
+  counseling: lazyPage(<CounselingPage />),
+  calendar: lazyPage(<CalendarPage />),
+  attendance: lazyPage(<AttendanceOverviewPage />),
+  'fee-management': lazyPage(<FeesPage />),
+  meetings: lazyPage(<MeetingsPage />),
+  // The dashboard's "Manage Schedule" used to point here; class schedules live under Calendar.
+  schedule: <Navigate to="/management/calendar?tab=schedules" replace />,
 }
-const teacherPages: Record<string, ReactNode> = { 'academic-planning': lazyPage(<TeacherAcademicPlanningPage />) }
+const teacherPages: Record<string, ReactNode> = {
+  'academic-planning': lazyPage(<TeacherAcademicPlanningPage />),
+  students: lazyPage(<TeacherStudentsPage />),
+  courses: lazyPage(<WorkspacePage />),
+  assignments: lazyPage(<WorkspacePage />),
+  'counseling-log': lazyPage(<CounselingLogPage />),
+  schedule: lazyPage(<SchedulePage />),
+  attendance: lazyPage(<TeacherAttendancePage />),
+  profile: lazyPage(<MyProfilePage />),
+}
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
 
 /** Sends /dashboard/fees → /management/fee-management and the like. */

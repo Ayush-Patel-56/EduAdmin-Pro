@@ -29,6 +29,9 @@ function txWith(linked: object[], unlinked: object[]) {
     },
     program: { delete: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn() },
     school: { update: vi.fn() },
+    feeStructure: { count: vi.fn().mockResolvedValue(0) },
+    batch: { count: vi.fn().mockResolvedValue(0) },
+    $queryRaw: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -96,6 +99,19 @@ describe('both ways of removing a program use it', () => {
     expect(tx.program.delete).not.toHaveBeenCalled();
   });
 
+  it('DELETE programs/:id: a program that fees are scoped to is kept (checked under a lock)', async () => {
+    const tx = txWith([], []);
+    tx.feeStructure.count.mockResolvedValue(2);
+    const prisma = {
+      program: { findFirst: vi.fn().mockResolvedValue({ id: 'p1', name: 'JEE' }) },
+      batch: { count: vi.fn().mockResolvedValue(0) },
+      $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+    } as unknown as PrismaService;
+    await expect(new ProgramsService(prisma).remove('s1', 'p1')).rejects.toThrow('2 fee structures are set up for JEE');
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.feeStructure.count.mock.invocationCallOrder[0]);
+    expect(tx.program.delete).not.toHaveBeenCalled();
+  });
+
   it('Edit School leaving a program out: 409 and nothing is deleted', async () => {
     const tx = txWith([fluids()], [fluids()]);
     tx.program.findMany.mockResolvedValue([
@@ -106,7 +122,7 @@ describe('both ways of removing a program use it', () => {
     } as unknown as PrismaService;
     const access = { assertOwner: vi.fn() } as unknown as AccessService;
     await expect(
-      new SchoolsService(prisma, access).updateSchool(
+      new SchoolsService(prisma, access, {} as never, {} as never).updateSchool(
         { userId: 'u1' } as AuthContext,
         's1',
         {

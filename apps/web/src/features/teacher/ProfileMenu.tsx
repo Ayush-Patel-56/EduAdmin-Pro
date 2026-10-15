@@ -1,4 +1,3 @@
-import { Link } from 'react-router-dom'
 import { Building2, LogIn, Settings, User } from 'lucide-react'
 import type { Me } from '@/features/auth/types'
 
@@ -7,11 +6,12 @@ type ProfileMenuProps = {
   schoolName: string | null
   onSwitchSchool: () => void
   onPreferences: () => void
+  onMyProfile: () => void
   onClose: () => void
 }
 
 /** Dropdown under the teacher's avatar: who they are, their school, and switching it. */
-export function ProfileMenu({ me, schoolName, onSwitchSchool, onPreferences, onClose }: ProfileMenuProps) {
+export function ProfileMenu({ me, schoolName, onSwitchSchool, onPreferences, onMyProfile, onClose }: ProfileMenuProps) {
   const initial = me.fullName.trim().charAt(0).toUpperCase()
   return (
     <div
@@ -48,14 +48,17 @@ export function ProfileMenu({ me, schoolName, onSwitchSchool, onPreferences, onC
         >
           <LogIn className="size-3.5" /> {schoolName ? 'Switch School' : 'Join School'}
         </button>
-        <Link
-          to="/teacher/profile"
+        <button
+          type="button"
           role="menuitem"
-          onClick={onClose}
+          onClick={() => {
+            onClose()
+            onMyProfile()
+          }}
           className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 transition hover:bg-slate-100"
         >
           <User className="size-3.5" /> My Profile
-        </Link>
+        </button>
         <button
           type="button"
           role="menuitem"

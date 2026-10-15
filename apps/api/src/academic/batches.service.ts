@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { parseDate, toIsoDate } from '../common/dates.js';
+import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import type { BatchDto } from './academic.dto.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
 
@@ -23,7 +23,16 @@ export class BatchesService {
       include: {
         program: { select: { id: true, name: true, themeColor: true } },
         coordinator: { select: { id: true, name: true } },
-        _count: { select: { facultyBatches: true, syllabusItems: true } },
+        _count: {
+          select: {
+            facultyBatches: true,
+            syllabusItems: true,
+            students: true,
+            materials: true,
+            assignments: true,
+            calendarEvents: true,
+          },
+        },
       },
     });
     return batches.map((b) => ({
@@ -37,6 +46,10 @@ export class BatchesService {
       coordinator: b.coordinator,
       facultyCount: b._count.facultyBatches,
       chapterCount: b._count.syllabusItems,
+      studentCount: b._count.students,
+      materialCount: b._count.materials,
+      assignmentCount: b._count.assignments,
+      eventCount: b._count.calendarEvents,
     }));
   }
 
@@ -45,6 +58,7 @@ export class BatchesService {
     return duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
+          await lockProgram(tx, schoolId, data.programId);
           const batch = await tx.batch.create({ data: { schoolId, ...data } });
           if (data.coordinatorId)
             await assignFaculty(
@@ -66,6 +80,7 @@ export class BatchesService {
     return duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
+          if (data.programId !== current.programId) await lockProgram(tx, schoolId, data.programId);
           await tx.batch.update({ where: { id: batchId }, data });
           if (
             data.coordinatorId &&
@@ -107,13 +122,55 @@ export class BatchesService {
     );
   }
 
-  /** Deleting a batch also removes its syllabus chapters and teacher assignments. */
+  /**
+   * Deleting a batch also removes its syllabus chapters, teacher assignments,
+   * study material and assignments; its students stay in the program,
+   * unassigned, and keep their batch history. A batch whose assignments have
+   * recorded grades can't be deleted (they are records; end the batch instead).
+   * The removed material's files are left to the abandoned-file cleanup.
+   */
   async remove(schoolId: string, batchId: string) {
     const batch = await this.find(schoolId, batchId);
     await this.prisma.$transaction(async (tx) => {
+      // The batch row first (new material or assignments for it wait), then its
+      // assignments (a grade being saved finishes first), so the count is final.
+      await tx.$queryRaw`SELECT 1 FROM "Batch" WHERE "id" = ${batchId} AND "schoolId" = ${schoolId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT 1 FROM "Assignment" WHERE "batchId" = ${batchId} AND "schoolId" = ${schoolId} FOR UPDATE`;
+      const graded = await tx.assignmentSubmission.count({
+        where: { schoolId, status: 'GRADED', assignment: { batchId } },
+      });
+      if (graded > 0) {
+        throw new ConflictException(
+          `${graded} grade${graded === 1 ? ' is' : 's are'} recorded in this batch's assignments. ` +
+            'Set an end date for the batch instead, or have its teachers delete those assignments first.',
+        );
+      }
+      // Fees scoped to the batch keep their dues and payments meaningful.
+      const fees = await tx.feeStructure.count({ where: { schoolId, batchId } });
+      if (fees > 0) {
+        throw new ConflictException(
+          `${fees} fee structure${fees === 1 ? ' is' : 's are'} set up for this batch. Move ${fees === 1 ? 'it' : 'them'} to another batch or program in Fee Management first.`,
+        );
+      }
+      // Attendance is a record too, and nobody can delete it.
+      const classesMarked = await tx.classOccurrence.count({ where: { schoolId, batchId } });
+      if (classesMarked > 0) {
+        throw new ConflictException(
+          `Attendance is recorded for ${classesMarked} class${classesMarked === 1 ? '' : 'es'} of this batch. Set an end date for the batch instead.`,
+        );
+      }
       const teachers = await tx.facultyBatch.findMany({
         where: { batchId },
         select: { facultyId: true },
+      });
+      await tx.student.updateMany({
+        where: { schoolId, batchId },
+        data: { batchId: null },
+      });
+      // Their time in the batch ends today; the history keeps its name.
+      await tx.studentEnrollment.updateMany({
+        where: { schoolId, batchId, endedOn: null },
+        data: { endedOn: istToday() },
       });
       await tx.batch.delete({ where: { id: batchId } });
       await pruneFacultyPrograms(
@@ -238,4 +295,14 @@ export function batchClash(dto: { name: string }) {
     names.some((n) => n === 'name' || n.startsWith('Batch_'))
       ? `This program already has a batch named ${dto.name}`
       : 'Someone else changed this batch at the same time. Refresh and try again.';
+}
+
+/**
+ * Locks the program a batch is joining (shared, so batches can still be added
+ * side by side) and checks it still exists: a program being deleted holds it
+ * FOR UPDATE, so this waits and then gets a clear 400 instead of a foreign-key 500.
+ */
+async function lockProgram(tx: Tx, schoolId: string, programId: string) {
+  const rows = await tx.$queryRaw<unknown[]>`SELECT 1 FROM "Program" WHERE "id" = ${programId} AND "schoolId" = ${schoolId} FOR SHARE`;
+  if (!rows.length) throw new BadRequestException('Select a program from this school');
 }

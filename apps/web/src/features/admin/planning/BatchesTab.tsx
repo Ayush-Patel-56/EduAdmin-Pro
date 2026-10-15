@@ -132,8 +132,12 @@ export function BatchesTab() {
           title="Delete batch?"
           message={
             <>
-              <strong className="text-slate-900">{modal.batch.name}</strong> and its {modal.batch.chapterCount} syllabus
-              chapter{modal.batch.chapterCount === 1 ? '' : 's'} will be deleted, and its teachers unassigned. This can’t be undone.
+              <strong className="text-slate-900">{modal.batch.name}</strong> will be deleted with its{' '}
+              {deletedWith(modal.batch)}, and its teachers unassigned.
+              {modal.batch.studentCount > 0 &&
+                ` Its ${plural(modal.batch.studentCount, 'student')} stay in the program, unassigned, and keep this batch in their history.`}{' '}
+              {modal.batch.assignmentCount > 0 && 'If its assignments have recorded grades it can’t be deleted; set an end date instead. '}
+              This can’t be undone.
             </>
           }
           confirmLabel="Delete Batch"
@@ -260,4 +264,17 @@ function BatchDialog({ schoolId, batch, programs, defaultProgramId, onSaved, onC
       </form>
     </Dialog>
   )
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/** What goes with a deleted batch, e.g. "3 syllabus chapters, 2 study materials and 1 assignment". */
+function deletedWith(b: Batch) {
+  const parts = [
+    plural(b.chapterCount, 'syllabus chapter'),
+    ...(b.materialCount > 0 ? [plural(b.materialCount, 'study material')] : []),
+    ...(b.assignmentCount > 0 ? [plural(b.assignmentCount, 'assignment')] : []),
+    ...(b.eventCount > 0 ? [plural(b.eventCount, 'calendar event')] : []),
+  ]
+  return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
 }

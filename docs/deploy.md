@@ -113,13 +113,78 @@ Migration folders must sort in the order they were created: use timestamps later
 
 - The audit table's trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` from the application, which protects against bugs. It is not protection against the database owner, who can disable a trigger; use a separate, limited database role for the API if you need that. Audit rows keep names, phone numbers and salaries for as long as the table exists: plan for that when handling data-erasure requests.
 
-## Timestamps become `timestamptz` (`20261012070000_timestamptz`)
+## Students (`20261013090000_students`)
 
-Converts the remaining 28 `timestamp without time zone` columns (users, sessions, schools, programs, batches, faculty, syllabus, curriculum, ...) to `timestamptz(3)`. Calendar dates (`@db.Date`: MOU dates, joining date, batch start/end, ...) are untouched. Existing values are read as UTC explicitly (`USING ... AT TIME ZONE 'UTC'`), so nothing shifts whatever the session time zone of the migration.
+New tables only (students, guardians, batch history, uploaded-file metadata), wrapped in a transaction, so there is nothing to check before deploying.
 
-- **What it changes, and the trade-off.** Prisma's pg adapter sends `DateTime` values as UTC wall-clock text without an offset and reads `timestamptz` values back assuming they are UTC.
-  - With plain `timestamp` columns (today) Prisma reads and writes correctly whatever the session time zone, but SQL, BI tools and exports see values with no zone attached. Server-side `now()` / `CURRENT_TIMESTAMP` in a non-UTC session also stores local wall-clock time.
-  - With `timestamptz` columns every instant is unambiguous for SQL, BI and exports, **but only if the session time zone is UTC**. In an Asia/Kolkata session Prisma would store `10:00Z` as `04:30Z`. The app wouldn't notice, because it reads its own values back the same way, but every other reader would. The recruitment tables (converted by `20261012050000`) already behave this way today.
+## Students hardening (`20261013100000_students_hardening`)
+
+One transaction: a unique index on `Student.photoFileId` (a photo belongs to one student), batch history that keeps the batch and program names and survives deleting the batch (`StudentEnrollment.batchId` becomes nullable, `ON DELETE SET NULL`), and roll numbers stored upper-cased. The unique indexes fail if duplicates already exist, so check first and expect no rows:
+
+```sql
+SELECT "photoFileId", count(*) FROM "Student" WHERE "photoFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "batchId", upper("rollNumber"), count(*) FROM "Student"
+WHERE "batchId" IS NOT NULL AND "rollNumber" IS NOT NULL GROUP BY 1, 2 HAVING count(*) > 1;
+```
+
+If either returns rows, fix those students (another photo, another roll number) and run the check again. A failed run rolls back completely, so after fixing the data, `prisma migrate resolve --rolled-back 20261013100000_students_hardening` and `migrate deploy` again.
+
+## Teacher portal (`20261013150000_teacher_portal`)
+
+New tables (study material, assignments with staff-recorded submissions, counseling sessions), new nullable or defaulted faculty columns (designation, primary subject and stream, uploaded photo) and four new upload kinds. Wrapped in a transaction; nothing to check before deploying. Adding enum values inside a transaction needs PostgreSQL 12 or later (Neon runs 16+).
+
+Study material accepts PDF, DOCX, ZIP and MP4 up to 50 MB; question sheets and submitted work accept PDF, DOCX and images up to 10 MB. With R2, the bucket's CORS rule below covers these uploads too.
+
+## Teacher portal hardening (`20261013160000_teacher_portal_hardening`)
+
+One transaction: unique indexes so an uploaded file belongs to one record (`Faculty.photoFileId`, `StudyMaterial.fileId`, `Assignment.questionFileId`, `AssignmentSubmission.fileId`). The API already checks this before attaching a file; the indexes decide when two requests race past that check (the loser gets a 409). They fail if duplicates exist, so check first and expect no rows:
+
+```sql
+SELECT "photoFileId", count(*) FROM "Faculty" WHERE "photoFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "fileId", count(*) FROM "StudyMaterial" GROUP BY 1 HAVING count(*) > 1;
+SELECT "questionFileId", count(*) FROM "Assignment" WHERE "questionFileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT "fileId", count(*) FROM "AssignmentSubmission" WHERE "fileId" IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+```
+
+## Schedule and attendance (`20261014090000_schedule_attendance`)
+
+New tables only (weekly slots, special classes, class occurrences and attendance records), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep the weekday (0–6), times (minutes after midnight, end after start) and effective periods valid.
+
+Attendance is kept as a record: a slot or special class with attendance can't be deleted (end it or mark it inactive), a batch with attendance can't be deleted (set its end date), and a student with attendance can't be deleted (set them Inactive or Transferred). `20261014120000_attendance_keeps_students` makes the student foreign key NO ACTION to back that up; nothing to check before deploying it. Clear All Data removes schedules and attendance with the rest of the academic data.
+
+## Fee Management (`20261014150000_fees`)
+
+New tables only (fee structures, student dues, payments, receipt counters), wrapped in a transaction, so there is nothing to check before deploying. Money is stored as whole paise (integers). CHECK constraints keep amounts non-negative, keep each due's net payable equal to amount − discount + late fee, and require a reason for a status override and for a voided payment. Unique indexes keep fee names (any letter case) and receipt numbers unique per school, and a live transaction reference can't be recorded twice.
+
+Fee records are kept: a payment is voided (with who, when and why), never deleted; a due with payment history, a fee structure with dues, and a student with dues can't be deleted. A program or batch that a fee structure is scoped to can't be deleted until the fee is moved. Clear All Data removes all fee data with the rest of the academic data.
+
+`20261014160000_fees_paid_check` adds a CHECK that a due's paid total never exceeds its net payable (the API already refuses it under a lock). Before deploying, expect no rows from `SELECT "id" FROM "FeeDue" WHERE "paidPaise" > "netPaise";`.
+
+## Meetings (`20261014180000_meetings`)
+
+New tables only (meetings and their agenda items), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep the meeting time valid and the next meeting date on or after the meeting. Deleting a meeting deletes its agenda items; Clear All Data removes meetings.
+
+## Academic Calendar (`20261014200000_calendar_events`)
+
+A new table only (calendar events), wrapped in a transaction, so there is nothing to check before deploying. CHECK constraints keep each event's end on or after its start, allow Repeat Until only for repeating events, and stop a repeating event from overlapping its own next repeat (daily: one day; weekly: under 7 days; monthly: under 28 days). Repeats are expanded when read, so nothing is generated ahead of time. An event scoped to a program or batch is deleted with it (the delete confirmations say how many); Clear All Data removes events.
+
+`20261014210000_calendar_batch_scope` makes a batch event store only its batch: its program is read through the batch, so moving a batch to another program takes its events along, and deleting the old program can't delete them. It clears `programId` on existing batch events and adds a CHECK that an event has a program or a batch, not both. Nothing to check before deploying.
+
+## Enrollment end dates (`20261014220000_enrollment_end_check`)
+
+Promotion used to end the open enrollment of a student leaving a class batch on the year boundary, even when they had joined the batch after it, so the history read e.g. "2026-10-13 → 2026-04-01". Promotion now ends it on `GREATEST(enrolledOn, boundary)`. This migration repairs existing rows the same way (their end becomes their start date) and adds a CHECK that an enrollment never ends before it begins. It runs in one transaction.
+
+Before deploying, see which rows it will repair (it's fine if there are some; nothing else is changed):
+
+```sql
+SELECT "id", "studentId", "batchName", "enrolledOn", "endedOn" FROM "StudentEnrollment" WHERE "endedOn" < "enrolledOn";
+```
+
+## Timestamps become `timestamptz` (`20261014230000_timestamptz`)
+
+This finishes the conversion to `timestamptz` and adds the UTC session guard. Every module added since recruitment (students and files, the teacher portal, schedule and attendance, fees, meetings, calendar) already declares its instants as `timestamptz(3)`: 51 columns, which already rely on a UTC session. This migration converts the remaining 28 `timestamp without time zone` columns (users, sessions, schools, programs, batches, faculty, syllabus, curriculum, ...) to `timestamptz(3)`. Calendar dates (`@db.Date`: MOU dates, joining date, batch start/end, ...) are untouched. Existing values are read as UTC explicitly (`USING ... AT TIME ZONE 'UTC'`), so nothing shifts whatever the session time zone of the migration.
+
+- **Why a UTC session matters.** Prisma's pg adapter sends `DateTime` values as UTC wall-clock text without an offset and reads `timestamptz` values back assuming they are UTC. In an Asia/Kolkata session it would store `10:00Z` as `04:30Z`: the app wouldn't notice, because it reads its own values back the same way, but SQL, BI tools and exports would. That is already true today for the 51 `timestamptz` columns on `main`; after this migration it holds for all of them, and the startup guard below makes a wrong setting fail loudly instead of shifting data quietly.
 - **Before deploying, check the time zone on dev and prod, over both the pooled (`DATABASE_URL`) and direct (`DIRECT_URL`) connections:**
 
   ```sql
@@ -137,7 +202,7 @@ Converts the remaining 28 `timestamp without time zone` columns (users, sessions
 - **If it fails** (e.g. lock timeout), it is wrapped in `BEGIN; ... COMMIT;`, so nothing was converted. Mark it rolled back and deploy again:
 
   ```bash
-  pnpm --filter api exec prisma migrate resolve --rolled-back 20261012070000_timestamptz
+  pnpm --filter api exec prisma migrate resolve --rolled-back 20261014230000_timestamptz
   pnpm --filter api exec prisma migrate deploy
   ```
 
@@ -148,6 +213,22 @@ Converts the remaining 28 `timestamp without time zone` columns (users, sessions
   SELECT count(*) FROM information_schema.columns
   WHERE table_schema = 'public' AND data_type = 'timestamp without time zone' AND table_name <> '_prisma_migrations';
   ```
+
+## File storage (Cloudflare R2)
+
+Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.
+
+1. Create an R2 bucket (keep public access off) and an API token with Object Read & Write on it.
+2. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` on the API (all four, or none).
+3. Add a CORS rule to the bucket so the web app can upload and show files:
+
+   ```json
+   [{ "AllowedOrigins": ["https://<your web origin>"], "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["Content-Type"], "MaxAgeSeconds": 3600 }]
+   ```
+
+4. Add a lifecycle rule that deletes objects under the `uploads/` prefix after 1 day. The browser uploads to `uploads/<school>/<file>`; completing the upload checks the bytes and moves them to the key they are served from. The signed upload URL stays valid for its few minutes even after that, so a second PUT with it could leave bytes behind under `uploads/`. They are never served, and this rule removes them.
+
+Without these settings, production refuses uploads with a clear message (everything else works). For development without R2, set `FILE_STORAGE=local` (the API refuses to start with it in production): files then go to `apps/api/.storage` (git-ignored, served through the API with signed links that stop working when the API restarts), and an upload link stops working once its file is completed. Uploads that are never completed, and photos never attached to a student, are removed after a day; deleting a student, Clear All Data and deleting a school remove their files too.
 
 ## After deploying the invite-code change: review existing admins
 

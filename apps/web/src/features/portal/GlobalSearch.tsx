@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import { useDismiss } from '@/components/ui/useDismiss'
@@ -7,11 +7,15 @@ export type SearchItem = { label: string; to: string; group: string }
 
 const MAX_RESULTS = 8
 
+/** Looks records up on the server (e.g. students) for a query. */
+export type RemoteSearch = (query: string) => Promise<SearchItem[]>
+
 /**
- * Header typeahead. Results are grouped by type; today that's the portal's
- * pages, and students, classes and reports join as those modules ship.
+ * Header typeahead. Results are grouped by type: the portal's pages, plus
+ * records found by `remote` (students today; classes and reports as those
+ * modules ship).
  */
-export function GlobalSearch({ items }: { items: SearchItem[] }) {
+export function GlobalSearch({ items, remote }: { items: SearchItem[]; remote?: RemoteSearch }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -21,11 +25,30 @@ export function GlobalSearch({ items }: { items: SearchItem[] }) {
   const close = useCallback(() => setOpen(false), [])
   useDismiss(ref, open, close)
 
+  const [found, setFound] = useState<{ query: string; items: SearchItem[] }>({ query: '', items: [] })
+  // Server lookups wait for a pause in typing, and a late answer for an old query is ignored.
+  useEffect(() => {
+    const q = query.trim()
+    if (!remote || q.length < 2) return
+    let current = true
+    const timer = setTimeout(() => {
+      remote(q)
+        .then((items) => current && setFound({ query: q, items }))
+        .catch(() => current && setFound({ query: q, items: [] }))
+    }, 250)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [query, remote])
+
   const results = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return []
-    return items.filter((i) => i.label.toLowerCase().includes(q)).slice(0, MAX_RESULTS)
-  }, [items, query])
+    const pages = items.filter((i) => i.label.toLowerCase().includes(q)).slice(0, MAX_RESULTS)
+    const records = found.query.toLowerCase() === q ? found.items : []
+    return [...pages, ...records].slice(0, MAX_RESULTS + 5)
+  }, [items, query, found])
 
   function go(item: SearchItem) {
     navigate(item.to)

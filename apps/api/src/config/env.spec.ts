@@ -51,4 +51,27 @@ describe('validateEnv', () => {
       }),
     ).toBeTruthy();
   });
+
+  it('takes R2 settings all together or not at all', () => {
+    expect(() => validateEnv({ ...base, R2_BUCKET: 'files' })).toThrow(
+      /R2 storage needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY/,
+    );
+    expect(
+      validateEnv({
+        ...base,
+        R2_ACCOUNT_ID: 'acc',
+        R2_ACCESS_KEY_ID: 'key',
+        R2_SECRET_ACCESS_KEY: 'secret',
+        R2_BUCKET: 'files',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('local file storage is opt-in and never allowed in production', () => {
+    expect(validateEnv({ ...base, FILE_STORAGE: 'local' })).toBeTruthy();
+    expect(() => validateEnv({ ...base, FILE_STORAGE: 'disk' })).toThrow('FILE_STORAGE must be');
+    expect(() =>
+      validateEnv({ ...base, NODE_ENV: 'production', WEB_ORIGIN: 'https://a.b', SMTP_HOST: 'h', SMTP_USER: 'u', SMTP_PASS: 'p', FILE_STORAGE: 'local' }),
+    ).toThrow('FILE_STORAGE=local is for development only');
+  });
 });

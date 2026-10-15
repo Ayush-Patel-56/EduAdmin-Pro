@@ -14,10 +14,12 @@ import { deactivateFacultyProfiles, linkFacultyProfile } from '../academic/facul
 import { actorFromUser, writeAudit } from '../recruitment/audit.js';
 import type { AuthContext } from '../auth/session.guard.js';
 import { generateJoinCode } from '../auth/tokens.js';
-import { parseDate, toIsoDate } from '../common/dates.js';
+import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import { normalizeIndianMobile } from '../common/validators.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
 import { unlinkProgramChapters } from '../curriculum/unlink-program-chapters.js';
+import { FilesService } from '../storage/files.service.js';
+import { ScheduleService } from '../schedule/schedule.service.js';
 import type { CreateSchoolDto } from './schools.dto.js';
 import {
   CLASS_OPTIONS,
@@ -39,6 +41,8 @@ export class SchoolsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: AccessService,
+    private readonly files: FilesService,
+    private readonly schedule: ScheduleService,
   ) {}
 
   options() {
@@ -177,6 +181,25 @@ export class SchoolsService {
       },
     });
     const school = membership?.school;
+    // Work handed in (or late) but not graded yet, in the teacher's batches.
+    const faculty = school
+      ? await this.prisma.faculty.findUnique({
+          where: { schoolId_userId: { schoolId: school.id, userId: auth.userId } },
+          select: { id: true, status: true, batchAssignments: { select: { batchId: true } } },
+        })
+      : null;
+    const batchIds = faculty && faculty.status !== 'INACTIVE' ? faculty.batchAssignments.map((b) => b.batchId) : [];
+    const [assignmentsToGrade, today] = await Promise.all([
+      batchIds.length
+        ? this.prisma.assignmentSubmission.count({
+            where: { schoolId: school!.id, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: { in: batchIds } } },
+          })
+        : 0,
+      // Today's classes: the teacher's slots and special classes in their batches.
+      school && faculty && batchIds.length
+        ? this.schedule.classesOn(school.id, istToday(), { facultyId: faculty.id, batchIds })
+        : [],
+    ]);
     return {
       school: school
         ? {
@@ -191,10 +214,18 @@ export class SchoolsService {
         : null,
       programs: school?.programs ?? [],
       announcements: school?.announcements ?? [],
-      // The counts, schedule and feedback below are filled in as timetables,
-      // daily reports, assignments, tests and admin feedback are built.
-      stats: { todayClasses: 0, pendingDailyReports: 0, assignmentsToGrade: 0, upcomingTests: 0 },
-      todaySchedule: [],
+      // The other counts and feedback are filled in as daily reports, tests
+      // and admin feedback are built.
+      stats: { todayClasses: today.length, pendingDailyReports: 0, assignmentsToGrade, upcomingTests: 0 },
+      todaySchedule: today.map((c) => ({
+        id: c.key,
+        time: c.time,
+        className: c.title,
+        type: c.type,
+        subject: c.subject,
+        batch: c.batch.name,
+        room: c.room,
+      })),
       adminFeedback: [],
     };
   }
@@ -228,8 +259,7 @@ export class SchoolsService {
       },
       programs: school.programs,
       announcements: school.announcements,
-      // Populated once timetables exist; kept in the response shape so the UI is final.
-      todaySchedule: [],
+      todaySchedule: await this.schedule.adminToday(schoolId),
     };
   }
 
@@ -290,6 +320,7 @@ export class SchoolsService {
         const ids = removed.map((p) => p.id);
         // Curriculum chapters keep existing without a program (409 if that would duplicate one).
         await unlinkProgramChapters(tx, schoolId, ids);
+        await tx.student.updateMany({ where: { schoolId, programId: { in: ids } }, data: { programId: null } });
         await tx.program.deleteMany({ where: { schoolId, id: { in: ids } } });
       }
       const existingKeys = new Set(existing.map((p) => p.name.toLowerCase()));
@@ -325,7 +356,7 @@ export class SchoolsService {
   /** What Clear All Data would remove, shown before the owner confirms. */
   async clearPreview(auth: AuthContext, schoolId: string) {
     await this.access.assertOwner(auth.userId, schoolId);
-    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts, recruitment] = await Promise.all([
+    const [programs, batches, syllabusItems, importedFaculty, announcements, promotionCycles, chapters, concepts, students, teaching, recruitment] = await Promise.all([
       this.prisma.program.count({ where: { schoolId } }),
       this.prisma.batch.count({ where: { schoolId } }),
       this.prisma.syllabusItem.count({ where: { schoolId } }),
@@ -334,6 +365,12 @@ export class SchoolsService {
       this.prisma.promotionCycle.count({ where: { schoolId } }),
       this.prisma.curriculumChapter.count({ where: { schoolId } }),
       this.prisma.curriculumConcept.count({ where: { schoolId } }),
+      this.prisma.student.count({ where: { schoolId } }),
+      Promise.all([
+        this.prisma.studyMaterial.count({ where: { schoolId } }),
+        this.prisma.assignment.count({ where: { schoolId } }),
+        this.prisma.counselingSession.count({ where: { schoolId } }),
+      ]),
       Promise.all([
         this.prisma.jobRequirement.count({ where: { schoolId } }),
         this.prisma.candidate.count({ where: { schoolId } }),
@@ -342,6 +379,7 @@ export class SchoolsService {
       ]),
     ]);
     const [requirements, candidates, interviews, appraisals] = recruitment;
+    const [materials, assignments, counselingSessions] = teaching;
     return {
       programs,
       batches,
@@ -351,6 +389,10 @@ export class SchoolsService {
       promotionCycles,
       chapters,
       concepts,
+      students,
+      materials,
+      assignments,
+      counselingSessions,
       requirements,
       candidates,
       interviews,
@@ -365,7 +407,7 @@ export class SchoolsService {
   async clearAllData(auth: AuthContext, schoolId: string, confirmName: string) {
     await this.access.assertOwner(auth.userId, schoolId);
     await this.assertConfirmName(schoolId, confirmName);
-    await this.prisma.$transaction(async (tx) => {
+    const fileKeys = await this.prisma.$transaction(async (tx) => {
       const removed = await Promise.all([
         tx.jobRequirement.count({ where: { schoolId } }),
         tx.candidate.count({ where: { schoolId } }),
@@ -384,7 +426,23 @@ export class SchoolsService {
         summary: `Clear All Data: removed ${removed[0]} requirements, ${removed[1]} candidates (with interviews), ${removed[2]} appraisals`,
       });
       // Same transaction as the recruitment wipe above: either everything is
-      // cleared (and audited) or nothing is.
+      // cleared (and audited) or nothing is. Students (with guardians and
+      // batch history) go before the batches and programs they point at.
+      await tx.counselingSession.deleteMany({ where: { schoolId } });
+      // Fees: payments, then dues, then structures (each points at the one after).
+      await tx.feePayment.deleteMany({ where: { schoolId } });
+      await tx.feeDue.deleteMany({ where: { schoolId } });
+      await tx.feeStructure.deleteMany({ where: { schoolId } });
+      await tx.feeReceiptCounter.deleteMany({ where: { schoolId } });
+      await tx.meeting.deleteMany({ where: { schoolId } }); // with their agenda items
+      await tx.calendarEvent.deleteMany({ where: { schoolId } });
+      // Attendance sheets (with their records) before the batches they point at.
+      await tx.classOccurrence.deleteMany({ where: { schoolId } });
+      await tx.specialClass.deleteMany({ where: { schoolId } });
+      await tx.scheduleSlot.deleteMany({ where: { schoolId } });
+      await tx.assignment.deleteMany({ where: { schoolId } }); // with their submissions
+      await tx.studyMaterial.deleteMany({ where: { schoolId } });
+      await tx.student.deleteMany({ where: { schoolId } });
       await tx.syllabusItem.deleteMany({ where: { schoolId } });
       await tx.curriculumConcept.deleteMany({ where: { schoolId } });
       await tx.curriculumChapter.deleteMany({ where: { schoolId } });
@@ -395,7 +453,14 @@ export class SchoolsService {
       await tx.promotionCycle.deleteMany({ where: { schoolId } });
       await tx.announcement.deleteMany({ where: { schoolId } });
       await tx.faculty.deleteMany({ where: { schoolId, userId: null } });
+      // Every uploaded file goes, except the photos of the faculty who stay.
+      const unused = { schoolId, faculty: { none: {} } };
+      const files = await tx.fileObject.findMany({ where: unused, select: { key: true } });
+      await tx.fileObject.deleteMany({ where: unused });
+      return files.map((f) => f.key);
     }, { timeout: 60_000, maxWait: 10_000 });
+    // Stored bytes go once the rows are gone (best effort; nothing points at them any more).
+    await this.files.removeObjects(fileKeys);
     return { ok: true };
   }
 
@@ -403,7 +468,8 @@ export class SchoolsService {
   async deleteSchool(auth: AuthContext, schoolId: string, confirmName: string) {
     await this.access.assertOwner(auth.userId, schoolId);
     await this.assertConfirmName(schoolId, confirmName);
-    await this.prisma.$transaction(async (tx) => {
+    const fileKeys = await this.prisma.$transaction(async (tx) => {
+      const files = await tx.fileObject.findMany({ where: { schoolId }, select: { key: true } });
       // Sessions only hold the id as a preference; drop it so nobody is left
       // pointing at a deleted school.
       await tx.session.updateMany({ where: { activeSchoolId: schoolId }, data: { activeSchoolId: null } });
@@ -415,7 +481,9 @@ export class SchoolsService {
         summary: `Deleted school "${confirmName.trim()}" with all its recruitment and appraisal records`,
       });
       await tx.school.delete({ where: { id: schoolId } });
+      return files.map((f) => f.key);
     }, { timeout: 30_000 });
+    await this.files.removeObjects(fileKeys);
     return { ok: true };
   }
 
@@ -501,7 +569,8 @@ function mouRange(dto: { mouStartDate?: string; mouEndDate?: string }) {
 
 export function mouStatus(start: Date | null, end: Date | null, now = new Date()): MouStatus {
   if (!start && !end) return 'NOT_SET';
-  const today = now.toISOString().slice(0, 10);
+  // Schools run on Indian time: an MOU ending today is still active until midnight IST.
+  const today = toIsoDate(istToday(now))!;
   if (start && today < toIsoDate(start)!) return 'UPCOMING';
   if (end && today > toIsoDate(end)!) return 'EXPIRED';
   return 'ACTIVE';

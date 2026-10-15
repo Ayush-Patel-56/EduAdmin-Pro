@@ -411,6 +411,10 @@ type ClearPreview = {
   promotionCycles: number
   chapters: number
   concepts: number
+  students: number
+  materials: number
+  assignments: number
+  counselingSessions: number
   requirements: number
   candidates: number
   interviews: number
@@ -425,6 +429,10 @@ function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () =
     staleTime: 0,
   })
   const lines = preview && [
+    [preview.students, 'students (with their guardians and batch history)'],
+    [preview.materials, 'study materials'],
+    [preview.assignments, 'assignments (with grades)'],
+    [preview.counselingSessions, 'counseling sessions'],
     [preview.programs, 'programs'],
     [preview.batches, 'batches'],
     [preview.syllabusItems, 'syllabus chapters'],

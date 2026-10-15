@@ -72,7 +72,7 @@ describe('ProgramsService: racing creates/updates are 409s', () => {
 });
 
 describe('BatchesService: racing creates/updates are 409s', () => {
-  const tx = { batch: { create: vi.fn(), update: vi.fn() } };
+  const tx = { batch: { create: vi.fn(), update: vi.fn() }, $queryRaw: vi.fn().mockResolvedValue([{}]) };
   const prisma = {
     program: {
       findFirst: vi.fn().mockResolvedValue({ id: 'p1', name: 'JEE' }),
@@ -189,7 +189,7 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
       $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     } as unknown as PrismaService;
     const access = { assertOwner: vi.fn() } as unknown as AccessService;
-    const schools = new SchoolsService(prisma, access);
+    const schools = new SchoolsService(prisma, access, {} as never, {} as never);
     await expect(
       schools.updateSchool({ userId: 'u1' } as AuthContext, 's1', {
         name: 'S',
@@ -199,5 +199,57 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
       } as CreateSchoolDto),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(tx.school.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('BatchesService.remove: student history and grades', () => {
+  const build = (graded: number, classesMarked = 0, fees = 0) => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      assignmentSubmission: { count: vi.fn().mockResolvedValue(graded) },
+      classOccurrence: { count: vi.fn().mockResolvedValue(classesMarked) },
+      feeStructure: { count: vi.fn().mockResolvedValue(fees) },
+      facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
+      student: { updateMany: vi.fn() },
+      studentEnrollment: { updateMany: vi.fn() },
+      batch: { delete: vi.fn() },
+    };
+    const prisma = {
+      batch: { findFirst: vi.fn().mockResolvedValue({ id: 'b1', programId: 'p1' }) },
+      $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+    } as unknown as PrismaService;
+    return { tx, batches: new BatchesService(prisma) };
+  };
+
+  it('a batch with recorded grades is not deleted (they are records)', async () => {
+    const { tx, batches } = build(3);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('3 grades are recorded');
+    expect(tx.assignmentSubmission.count.mock.calls[0][0].where).toEqual({ schoolId: 's1', status: 'GRADED', assignment: { batchId: 'b1' } });
+    // Counted after locking the batch and its assignments, so no grade slips in.
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('a batch that fee structures are scoped to is not deleted', async () => {
+    const { tx, batches } = build(0, 0, 1);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 fee structure is set up for this batch');
+    expect(tx.feeStructure.count.mock.calls[0][0].where).toEqual({ schoolId: 's1', batchId: 'b1' });
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('a batch with recorded attendance is not deleted either', async () => {
+    const { tx, batches } = build(0, 2);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('Attendance is recorded for 2 classes');
+    expect(tx.classOccurrence.count.mock.calls[0][0].where).toEqual({ schoolId: 's1', batchId: 'b1' });
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('unassigns the students and ends their open enrollments, so history shows when they left', async () => {
+    const { tx, batches } = build(0);
+    await batches.remove('s1', 'b1');
+    expect(tx.student.updateMany.mock.calls[0][0]).toEqual({ where: { schoolId: 's1', batchId: 'b1' }, data: { batchId: null } });
+    expect(tx.studentEnrollment.updateMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', batchId: 'b1', endedOn: null });
+    expect(tx.studentEnrollment.updateMany.mock.invocationCallOrder[0]).toBeLessThan(tx.batch.delete.mock.invocationCallOrder[0]);
   });
 });

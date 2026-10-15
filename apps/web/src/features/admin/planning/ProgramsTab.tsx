@@ -127,7 +127,10 @@ export function ProgramsTab() {
               </>
             ) : (
               <>
-                <strong className="text-slate-900">{modal.program.name}</strong> will be removed from this school.
+                <strong className="text-slate-900">{modal.program.name}</strong> will be removed from this school
+                {modal.program.eventCount > 0 &&
+                  `, with its ${modal.program.eventCount} calendar event${modal.program.eventCount === 1 ? '' : 's'}`}
+                .
               </>
             )
           }

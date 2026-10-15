@@ -3,7 +3,12 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { FacultyService } from './faculty.service.js';
 import { pruneFacultyPrograms } from './batches.service.js';
-import { PromotionService, currentAcademicYear } from './promotion.service.js';
+import {
+  PromotionService,
+  currentAcademicYear,
+  nextClass,
+  planPromotion,
+} from './promotion.service.js';
 
 describe('academic year boundary uses Indian time', () => {
   it('the new year starts at midnight IST, not 05:30 IST', () => {
@@ -29,19 +34,38 @@ describe('academic year boundary uses Indian time', () => {
 
 describe('PromotionService: confirm needs students', () => {
   const create = vi.fn();
+  const studentFindMany = vi.fn();
+  const updateMany = vi.fn();
+  const enrollmentUpdateMany = vi.fn();
+  const executeRaw = vi.fn();
+  const school = {
+    findUniqueOrThrow: vi
+      .fn()
+      .mockResolvedValue({ academicYearStartMonth: 4, classes: ['9th', '10th', '11th', '12th'] }),
+  };
+  const tx = {
+    school,
+    promotionCycle: { create },
+    student: { findMany: studentFindMany, updateMany },
+    studentEnrollment: { updateMany: enrollmentUpdateMany },
+    $executeRaw: executeRaw,
+  };
   const prisma = {
-    school: {
-      findUniqueOrThrow: vi
-        .fn()
-        .mockResolvedValue({ academicYearStartMonth: 4 }),
-    },
+    school,
     promotionCycle: { findMany: vi.fn().mockResolvedValue([]), create },
+    student: { findMany: studentFindMany, updateMany },
+    $transaction: vi.fn((run: (t: typeof tx) => unknown) => run(tx)),
   } as unknown as PrismaService;
   const promotion = new PromotionService(prisma);
-  const { academicYear } = currentAcademicYear(4);
+  const { academicYear, boundaryDate } = currentAcademicYear(4);
+  const before = new Date(boundaryDate.getTime() - 86_400_000);
 
   beforeEach(() => {
     create.mockReset();
+    updateMany.mockReset();
+    enrollmentUpdateMany.mockReset();
+    executeRaw.mockReset();
+    studentFindMany.mockResolvedValue([]);
   });
 
   it('refuses to confirm while no student records exist, and does not use the year up', async () => {
@@ -51,14 +75,62 @@ describe('PromotionService: confirm needs students', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it('still lets an admin dismiss the cycle', async () => {
+  it('still lets an admin dismiss the cycle, moving nobody', async () => {
+    studentFindMany.mockResolvedValue([
+      { id: 's1', classLevel: '9th', admissionDate: before },
+    ]);
     await expect(
       promotion.decide('school-1', 'user-1', academicYear, 'DISMISSED'),
     ).resolves.toEqual({ ok: true });
     expect(create.mock.calls[0][0].data).toMatchObject({
       status: 'DISMISSED',
       academicYear,
+      studentCount: 0,
     });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('confirming moves each class up once (9th to 10th and 10th to 11th, nobody twice)', async () => {
+    studentFindMany.mockResolvedValue([
+      { id: 'a', classLevel: '9th', admissionDate: before },
+      { id: 'b', classLevel: '10th', admissionDate: null },
+      { id: 'c', classLevel: '12th', admissionDate: before },
+      { id: 'd', classLevel: '9th', admissionDate: boundaryDate },
+    ]);
+    await promotion.decide('school-1', 'user-1', academicYear, 'CONFIRMED');
+    expect(create.mock.calls[0][0].data).toMatchObject({
+      status: 'CONFIRMED',
+      studentCount: 2,
+    });
+    expect(updateMany.mock.calls.map((c) => c[0])).toEqual([
+      { where: { id: { in: ['a'] }, schoolId: 'school-1' }, data: { classLevel: '10th' } },
+      { where: { id: { in: ['b'] }, schoolId: 'school-1' }, data: { classLevel: '11th' } },
+    ]);
+    // The cycle row is written before any student moves.
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(
+      updateMany.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('students in a batch for one class leave it when they move up; open batches keep them', async () => {
+    studentFindMany.mockResolvedValue([
+      { id: 'a', classLevel: '9th', admissionDate: before, batch: { classLevel: 9 } },
+      { id: 'b', classLevel: '9th', admissionDate: before, batch: { classLevel: null } },
+      { id: 'c', classLevel: '9th', admissionDate: before, batch: null },
+    ]);
+    await promotion.decide('school-1', 'user-1', academicYear, 'CONFIRMED');
+    expect(updateMany.mock.calls.map((c) => c[0])).toContainEqual({
+      where: { id: { in: ['a'] }, schoolId: 'school-1' },
+      data: { batchId: null },
+    });
+    // #17: the open enrollment ends on the boundary, or on the day it began
+    // if the student joined the batch after the boundary, never before it.
+    const [sql, ...values] = executeRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    expect(sql.join('?').replace(/\s+/g, ' ').trim()).toBe(
+      'UPDATE "StudentEnrollment" SET "endedOn" = GREATEST("enrolledOn", ?::date) WHERE "studentId" = ANY(?::text[]) AND "schoolId" = ? AND "endedOn" IS NULL',
+    );
+    expect(values).toEqual([boundaryDate, ['a'], 'school-1']);
+    expect(enrollmentUpdateMany).not.toHaveBeenCalled();
   });
 
   it('rejects a year that is not the pending one', async () => {
@@ -77,6 +149,46 @@ describe('PromotionService: confirm needs students', () => {
     await expect(
       promotion.decide('school-1', 'user-1', academicYear, 'DISMISSED'),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('planPromotion', () => {
+  const boundary = new Date('2026-04-01T00:00:00Z');
+  const plan = (students: { classLevel: string | null; admissionDate?: Date | null }[], offered = ['6th', '7th', '8th', '9th', '10th', '11th', '12th']) =>
+    planPromotion(
+      {
+        student: {
+          findMany: vi.fn().mockResolvedValue(
+            students.map((s, i) => ({ id: `s${i}`, admissionDate: null, ...s })),
+          ),
+        },
+      } as never,
+      'school-1',
+      offered,
+      boundary,
+    );
+
+  it('holds new admissions, leaves Class 12, and skips students with no next class', async () => {
+    const result = await plan([
+      { classLevel: '11th' },
+      { classLevel: '11th', admissionDate: new Date('2026-04-02T00:00:00Z') },
+      { classLevel: '12th' },
+      { classLevel: null },
+      { classLevel: 'Repeater' },
+      { classLevel: '8th' },
+    ], ['8th', '11th', '12th']);
+    expect(result.groups).toEqual([{ fromClass: '11th', toClass: '12th', ids: ['s0'] }]);
+    expect(result.heldNewAdmissions).toBe(1);
+    expect(result.class12Excluded).toBe(1);
+    // no class, Repeater, and 8th (the school doesn't offer 9th)
+    expect(result.notPromoted).toBe(3);
+  });
+
+  it('nextClass follows the school-form order', () => {
+    expect(nextClass('6th', ['7th'])).toBe('7th');
+    expect(nextClass('11th', ['12th'])).toBe('12th');
+    expect(nextClass('12th', ['12th Pass'])).toBeNull();
+    expect(nextClass('10th', ['12th'])).toBeNull();
   });
 });
 
