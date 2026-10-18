@@ -53,6 +53,7 @@ function build() {
       create: vi.fn().mockResolvedValue({ id: 'r1', late: false }),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      count: vi.fn().mockResolvedValue(0),
     },
     faculty: {
       findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }),
@@ -229,7 +230,7 @@ describe('DailyReportsService: faculty', () => {
     await expect(service.update(scope(), 'r1', dto())).rejects.toThrow('Report not found');
     prisma.dailyReport.deleteMany.mockResolvedValueOnce({ count: 0 });
     await expect(service.remove(scope(), 'r1')).rejects.toThrow('Report not found');
-    expect(prisma.dailyReport.deleteMany.mock.calls[0][0].where).toEqual({ id: 'r1', schoolId: 'school-1', facultyId: 'fac-1' });
+    expect(prisma.dailyReport.deleteMany.mock.calls[0][0].where).toEqual({ id: 'r1', schoolId: 'school-1', facultyId: 'fac-1', flaggedAt: null });
     await expect(service.remove(scope(), 'r1')).resolves.toEqual({ ok: true });
   });
 
@@ -264,11 +265,59 @@ describe('DailyReportsService: faculty', () => {
       late: false,
       submittedAt: '2026-10-18T04:45:00.000Z',
       edited: false,
+      flag: null,
     });
     const args = prisma.dailyReport.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ schoolId: 'school-1', facultyId: 'fac-1' });
     expect(args.orderBy).toEqual([{ reportDate: 'desc' }, { submittedAt: 'desc' }]);
     await expect(service.teacherList(scope({ facultyId: null }))).resolves.toEqual([]);
+  });
+});
+
+describe('DailyReportsService: flagged reports (#43)', () => {
+  const flagged = { flaggedAt: new Date('2026-10-18T10:00:00Z'), flaggedBy: 'Principal Mehta', flagReason: 'Topics too brief' };
+
+  it('the teacher sees the flag (who, when, why) on their own reports', async () => {
+    const { service, prisma } = build();
+    prisma.dailyReport.findMany.mockResolvedValue([row(flagged), row({ id: 'r2' })]);
+    const [a, b] = await service.teacherList(scope());
+    expect(a.flag).toEqual({ at: '2026-10-18T10:00:00.000Z', by: 'Principal Mehta', reason: 'Topics too brief' });
+    expect(b.flag).toBeNull();
+  });
+
+  it("the teacher can't delete a flagged report (409, checked in the write); an unflagged one still deletes", async () => {
+    const { service, prisma } = build();
+    prisma.dailyReport.deleteMany.mockResolvedValueOnce({ count: 0 });
+    prisma.dailyReport.count.mockResolvedValueOnce(1);
+    await expect(service.remove(scope(), 'r1')).rejects.toEqual(new ConflictException('An admin flagged this report; ask them to clear the flag before deleting it'));
+    expect(prisma.dailyReport.deleteMany.mock.calls[0][0].where).toEqual({ id: 'r1', schoolId: 'school-1', facultyId: 'fac-1', flaggedAt: null });
+    expect(prisma.dailyReport.count.mock.calls[0][0].where).toEqual({ id: 'r1', schoolId: 'school-1', facultyId: 'fac-1', flaggedAt: { not: null } });
+    // Gone meanwhile (not flagged, not there): 404.
+    prisma.dailyReport.deleteMany.mockResolvedValueOnce({ count: 0 });
+    await expect(service.remove(scope(), 'r1')).rejects.toEqual(new NotFoundException('Report not found'));
+    await expect(service.remove(scope(), 'r1')).resolves.toEqual({ ok: true });
+  });
+
+  it('the teacher can still correct a flagged report: the flag stays, and the admin sees it changed after flagging', async () => {
+    const { service, prisma } = build();
+    await service.update(scope(), 'r1', dto());
+    const data = prisma.dailyReport.updateMany.mock.calls[0][0].data;
+    for (const key of ['flaggedAt', 'flaggedBy', 'flaggedById', 'flagReason']) expect(data).not.toHaveProperty(key);
+    prisma.dailyReport.findMany.mockResolvedValue([
+      // Edited after the flag.
+      row({ ...flagged, editedAt: new Date('2026-10-18T11:00:00Z') }),
+      // Edited before it.
+      row({ ...flagged, id: 'r2', editedAt: new Date('2026-10-18T09:00:00Z') }),
+      // Moved to this day after the flag (a move resubmits it; editedAt is cleared).
+      row({ ...flagged, id: 'r3', submittedAt: new Date('2026-10-18T10:30:00Z') }),
+      // Not changed since.
+      row({ ...flagged, id: 'r4' }),
+      row({ id: 'r5', editedAt: new Date('2026-10-18T11:00:00Z') }),
+      // Edited at the same instant it was flagged: not after.
+      row({ ...flagged, id: 'r6', editedAt: flagged.flaggedAt }),
+    ]);
+    const { items } = await service.adminList('school-1', { date: '2026-10-18' });
+    expect(items.map((i) => i.flag?.changedAfter ?? null)).toEqual([true, false, true, false, null, false]);
   });
 });
 

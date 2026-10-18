@@ -21,14 +21,18 @@ export type DailyReport = {
   edited: boolean
 }
 
-/** An admin's flag on a report, for follow-up (admins only). */
+/** An admin's flag on a report, for follow-up. The teacher sees it on their own reports. */
 export type ReportFlag = { at: string; by: string; reason: string | null }
+
+/** One of the teacher's own reports (Your Recent Submissions), with any admin flag. */
+export type MyReport = DailyReport & { flag: ReportFlag | null }
 
 export type AdminDay = {
   date: string
   /** Classes: each batch's subjects reported for the day. */
   kpis: { submitted: number; late: number; teachers: number; classes: number; flagged: number }
-  items: (DailyReport & { flag: ReportFlag | null })[]
+  /** `changedAfter`: the teacher edited (or moved) the report after it was flagged. */
+  items: (DailyReport & { flag: (ReportFlag & { changedAfter: boolean }) | null })[]
 }
 
 export type ReportOptions = {
@@ -75,7 +79,7 @@ export function useReportOptions() {
 }
 
 export function useMyReports() {
-  return useQuery({ queryKey: ['teacher-daily-reports', 'mine'], queryFn: () => api<DailyReport[]>(TEACHER_PATH) })
+  return useQuery({ queryKey: ['teacher-daily-reports', 'mine'], queryFn: () => api<MyReport[]>(TEACHER_PATH) })
 }
 
 export function useInvalidateMyReports() {

@@ -200,6 +200,7 @@ function ReportRow({ schoolId, school, report: r, open, onToggle }: { schoolId: 
                 <Flag className="size-3" /> Flagged
               </span>
             )}
+            {r.flag?.changedAfter && <span className="text-[10px] font-semibold text-rose-600">Changed after flagging</span>}
           </span>
           <span className="mt-0.5 block truncate text-xs text-slate-500">{classLine(r)}</span>
         </span>
@@ -264,7 +265,7 @@ function ReportRow({ schoolId, school, report: r, open, onToggle }: { schoolId: 
   )
 }
 
-/** Flag a report for follow-up, with an optional reason (only admins see flags). */
+/** Flag a report for follow-up, with an optional reason (the teacher sees the flag and reason). */
 function FlagDialog({ schoolId, report: r, onDone, onClose }: { schoolId: string; report: AdminReport; onDone: () => Promise<unknown>; onClose: () => void }) {
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -286,7 +287,7 @@ function FlagDialog({ schoolId, report: r, onDone, onClose }: { schoolId: string
       <div className="space-y-3 px-6 py-5">
         <label htmlFor="flag-reason" className="block text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Reason (optional)</label>
         <textarea id="flag-reason" rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Topics too brief; discuss with the teacher" className={textareaClass()} />
-        <p className="text-[11px] text-slate-400">Flags are for follow-up and show only to admins.</p>
+        <p className="text-[11px] text-slate-400">The teacher sees the flag and reason on their report. They can still correct it, but can't delete it until the flag is cleared.</p>
         <ErrorBanner message={error} />
       </div>
       <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-4">
