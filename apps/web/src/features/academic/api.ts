@@ -101,7 +101,8 @@ export type ImportPreview = {
   created: number
   updated: number
   skipped: number
-  rows: { row: number; label: string; action: 'create' | 'update' | 'error'; errors: string[] }[]
+  /** `key`: returned by importers that take a file in chunks, sent back with the next chunk. */
+  rows: { row: number; label: string; action: 'create' | 'update' | 'error'; errors: string[]; key?: string }[]
 }
 
 export const STATUS_LABELS: Record<SyllabusStatus, string> = {

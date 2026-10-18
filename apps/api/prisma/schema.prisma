@@ -1415,7 +1415,8 @@ model DailyReport {
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 
   school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  faculty Faculty? @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  // Tied to the report's school; deleting the profile nulls only facultyId (ON DELETE SET NULL ("facultyId")).
+  faculty Faculty? @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
   batch   Batch    @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
 
   @@index([schoolId, reportDate])
@@ -1479,8 +1480,9 @@ model Feedback {
   updatedAt         DateTime          @updatedAt @db.Timestamptz(3)
 
   school        School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  senderFaculty Faculty? @relation("FeedbackSender", fields: [senderFacultyId], references: [id], onDelete: SetNull)
-  targetFaculty Faculty? @relation("FeedbackTarget", fields: [targetFacultyId], references: [id], onDelete: SetNull)
+  // Tied to the entry's school; deleting the profile nulls only that link (ON DELETE SET NULL (column) in the migration).
+  senderFaculty Faculty? @relation("FeedbackSender", fields: [senderFacultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
+  targetFaculty Faculty? @relation("FeedbackTarget", fields: [targetFacultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
 
   @@index([schoolId, createdAt])
   @@index([schoolId, status])
