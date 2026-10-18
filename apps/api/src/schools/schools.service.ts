@@ -191,7 +191,7 @@ export class SchoolsService {
         })
       : null;
     const batchIds = faculty && faculty.status !== 'INACTIVE' ? faculty.batchAssignments.map((b) => b.batchId) : [];
-    const [assignmentsToGrade, today, reportedToday, adminFeedback] = await Promise.all([
+    const [assignmentsToGrade, today, reportedToday, adminFeedback, upcomingTests] = await Promise.all([
       batchIds.length
         ? this.prisma.assignmentSubmission.count({
             where: { schoolId: school!.id, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: { in: batchIds } } },
@@ -217,6 +217,12 @@ export class SchoolsService {
             select: { id: true, content: true, createdAt: true },
           })
         : [],
+      // Tests of their batches starting in the next 7 days.
+      school && batchIds.length
+        ? this.prisma.test.count({
+            where: { schoolId: school.id, batchId: { in: batchIds }, status: 'SCHEDULED', startsAt: { gte: new Date(), lt: new Date(Date.now() + 7 * 86_400_000) } },
+          })
+        : 0,
     ]);
     return {
       school: school
@@ -232,12 +238,11 @@ export class SchoolsService {
         : null,
       programs: school?.programs ?? [],
       announcements: school?.announcements ?? [],
-      // Upcoming tests are filled in when that module is built.
       stats: {
         todayClasses: today.length,
         pendingDailyReports: pendingReports(today, reportedToday),
         assignmentsToGrade,
-        upcomingTests: 0,
+        upcomingTests,
       },
       todaySchedule: today.map((c) => ({
         id: c.key,
@@ -460,6 +465,9 @@ export class SchoolsService {
       await tx.calendarEvent.deleteMany({ where: { schoolId } });
       await tx.dailyReport.deleteMany({ where: { schoolId } }); // before the batches and faculty they name
       await tx.feedback.deleteMany({ where: { schoolId } }); // before the faculty profiles it names
+      await tx.testResult.deleteMany({ where: { schoolId } }); // with their answers; before the students
+      await tx.test.deleteMany({ where: { schoolId } }); // with their papers; before the batches
+      await tx.question.deleteMany({ where: { schoolId } }); // before the chapters and faculty they name
       // Attendance sheets (with their records) before the batches they point at.
       await tx.classOccurrence.deleteMany({ where: { schoolId } });
       await tx.specialClass.deleteMany({ where: { schoolId } });

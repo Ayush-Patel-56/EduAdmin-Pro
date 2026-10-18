@@ -15,6 +15,7 @@ import {
 import { FeesController } from '../fees/fees.controller.js';
 import { MeetingsController } from '../meetings/meetings.controller.js';
 import { CalendarController } from '../calendar/calendar.controller.js';
+import { AdminAssessmentsController, TeacherAssessmentsController } from '../assessments/assessments.controller.js';
 import { AdminDailyReportsController, TeacherDailyReportsController } from '../daily-reports/daily-reports.controller.js';
 import { AdminFeedbackController, TeacherFeedbackController } from '../feedback/feedback.controller.js';
 import {
@@ -64,6 +65,8 @@ describe.each([
   ['MeetingsController', (a: AccessService) => new MeetingsController(a, untouched() as never), 9],
   // The academic calendar is admin only.
   ['CalendarController', (a: AccessService) => new CalendarController(a, untouched() as never), 5],
+  // Tests & Question Bank: every admin route, including the overview and results.
+  ['AdminAssessmentsController', (a: AccessService) => new AdminAssessmentsController(a, untouched() as never, untouched() as never), 18],
   // Admins read daily reports; only teachers write them.
   ['AdminDailyReportsController', (a: AccessService) => new AdminDailyReportsController(a, untouched() as never), 1],
   // Feedback Management: reads, sending, imports and the review workflow are all admin only.
@@ -95,6 +98,7 @@ describe.each([
   ['TeacherProfileController', (a: AccessService) => new TeacherProfileController(a, untouched() as never)],
   ['TeacherScheduleController', (a: AccessService) => new TeacherScheduleController(a, untouched() as never)],
   ['TeacherAttendanceController', (a: AccessService) => new TeacherAttendanceController(a, untouched() as never)],
+  ['TeacherAssessmentsController', (a: AccessService) => new TeacherAssessmentsController(a, untouched() as never, untouched() as never)],
   ['TeacherDailyReportsController', (a: AccessService) => new TeacherDailyReportsController(a, untouched() as never)],
   ['TeacherFeedbackController', (a: AccessService) => new TeacherFeedbackController(a, untouched() as never)],
 ])('%s: faculty routes', (_name, build) => {

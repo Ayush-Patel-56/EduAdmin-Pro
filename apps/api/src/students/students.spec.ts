@@ -174,6 +174,7 @@ describe('StudentsService: records stay inside the school', () => {
     student: { findUniqueOrThrow: vi.fn(), update: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'new' }), delete: vi.fn() },
     attendanceRecord: { count: vi.fn().mockResolvedValue(0) },
     feeDue: { count: vi.fn().mockResolvedValue(0) },
+    testResult: { count: vi.fn().mockResolvedValue(0) },
     studentGuardian: { count: vi.fn().mockResolvedValue(0), updateMany: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'g1' }), findFirst: vi.fn(), update: vi.fn() },
     studentEnrollment: { updateMany: vi.fn(), create: vi.fn() },
   };
@@ -249,6 +250,15 @@ describe('StudentsService: records stay inside the school', () => {
     tx.student.findUniqueOrThrow.mockResolvedValue({ photo: { id: 'f1', key: 'k' } });
     discard.mockRejectedValue(new Error('still referenced'));
     await expect(service.remove('school-1', 'st-1')).resolves.toEqual({ ok: true });
+  });
+
+  it('a student with test results is not deleted (the student reports read them)', async () => {
+    runTx();
+    tx.$queryRaw.mockResolvedValue([{ id: 'st-1' }]);
+    tx.testResult.count.mockResolvedValueOnce(3);
+    await expect(service.remove('school-1', 'st-1')).rejects.toThrow("This student has 3 test results on record, so they can't be deleted.");
+    expect(tx.testResult.count.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', studentId: 'st-1' });
+    expect(tx.student.delete).not.toHaveBeenCalled();
   });
 
   it('a student with fee dues is not deleted (financial records stay)', async () => {

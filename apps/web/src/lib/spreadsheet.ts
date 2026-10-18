@@ -40,7 +40,8 @@ export function parseCsv(text: string): string[][] {
 
 /**
  * Builds CSV text. Cells that a spreadsheet would treat as a formula
- * (=, +, -, @) are prefixed with ' so an export can't run code when opened.
+ * (=, +, -, @) are prefixed with ' so an export can't run code when opened;
+ * numbers are written as they are.
  */
 export function toCsv(rows: (string | number | null | undefined)[][]): string {
   return rows
@@ -48,7 +49,8 @@ export function toCsv(rows: (string | number | null | undefined)[][]): string {
       r
         .map((cell) => {
           let text = cell === null || cell === undefined ? '' : String(cell)
-          if (/^[=+\-@]/.test(text)) text = `'${text}`
+          // A number (a negative score) is data, not a formula.
+          if (typeof cell !== 'number' && /^[=+\-@]/.test(text)) text = `'${text}`
           return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
         })
         .join(','),

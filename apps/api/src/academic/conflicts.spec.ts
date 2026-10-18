@@ -225,12 +225,13 @@ describe('BatchesService.list: handed-in work for the delete confirmation (#18 r
 });
 
 describe('BatchesService.remove: student history and grades', () => {
-  const build = (graded: number, classesMarked = 0, fees = 0, reports = 0) => {
+  const build = (graded: number, classesMarked = 0, fees = 0, reports = 0, results = 0) => {
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([]),
       assignmentSubmission: { count: vi.fn().mockResolvedValue(graded) },
       classOccurrence: { count: vi.fn().mockResolvedValue(classesMarked) },
       dailyReport: { count: vi.fn().mockResolvedValue(reports) },
+      testResult: { count: vi.fn().mockResolvedValue(results) },
       feeStructure: { count: vi.fn().mockResolvedValue(fees) },
       facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
       student: { updateMany: vi.fn() },
@@ -243,6 +244,15 @@ describe('BatchesService.remove: student history and grades', () => {
     } as unknown as PrismaService;
     return { tx, batches: new BatchesService(prisma) };
   };
+
+  it('a batch with test results is not deleted; one with only scheduled tests takes them along', async () => {
+    const { tx, batches } = build(0, 0, 0, 0, 4);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('4 test results are recorded for this batch. Set an end date for the batch instead.');
+    expect(tx.testResult.count.mock.calls[0][0]).toEqual({ where: { schoolId: 's1', test: { batchId: 'b1' } } });
+    // Counted after locking the batch (saving results share-locks it, so none slip in).
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.testResult.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
 
   it('a batch with recorded grades is not deleted (they are records)', async () => {
     const { tx, batches } = build(3);

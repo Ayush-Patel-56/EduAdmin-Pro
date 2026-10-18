@@ -55,6 +55,9 @@ const FeedbackPage = lazy(() => import('@/features/admin/feedback/FeedbackPage')
 const TeacherFeedbackPage = lazy(() => import('@/features/teacher/FeedbackPage').then((m) => ({ default: m.TeacherFeedbackPage })))
 const FeesPage = lazy(() => import('@/features/admin/fees/FeesPage').then((m) => ({ default: m.FeesPage })))
 const MeetingsPage = lazy(() => import('@/features/admin/meetings/MeetingsPage').then((m) => ({ default: m.MeetingsPage })))
+const TestsBankPage = lazy(() => import('@/features/admin/tests/TestsBankPage').then((m) => ({ default: m.TestsBankPage })))
+const TeacherTestsPage = lazy(() => import('@/features/teacher/TestsPage').then((m) => ({ default: m.TestsPage })))
+const AcademicRecordsPage = lazy(() => import('@/features/teacher/AcademicRecordsPage').then((m) => ({ default: m.AcademicRecordsPage })))
 const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
@@ -71,6 +74,7 @@ const adminPages: Record<string, ReactNode> = {
   meetings: lazyPage(<MeetingsPage />),
   'daily-reports': lazyPage(<DailyReportsPage />),
   feedback: lazyPage(<FeedbackPage />),
+  'tests-bank': lazyPage(<TestsBankPage />),
   // The dashboard's "Manage Schedule" used to point here; class schedules live under Calendar.
   schedule: <Navigate to="/management/calendar?tab=schedules" replace />,
 }
@@ -84,6 +88,8 @@ const teacherPages: Record<string, ReactNode> = {
   attendance: lazyPage(<TeacherAttendancePage />),
   'daily-report': lazyPage(<DailyReportPage />),
   feedback: lazyPage(<TeacherFeedbackPage />),
+  tests: lazyPage(<TeacherTestsPage />),
+  'academic-records': lazyPage(<AcademicRecordsPage />),
   profile: lazyPage(<MyProfilePage />),
 }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>
