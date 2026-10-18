@@ -10,6 +10,8 @@ export type ImportPreview = {
     label: string;
     action: 'create' | 'update' | 'error';
     errors: string[];
+    /** A question bank upload: the four options as read from the file, for the preview. */
+    options?: string[];
   }[];
 };
 

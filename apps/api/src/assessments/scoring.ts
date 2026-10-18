@@ -87,14 +87,16 @@ export const percentOf = (marks: number, total: number) => round2((marks / total
  * scorer is at 100 and equal marks share a percentile.
  */
 export function rankAndPercentile(results: { studentId: string; present: boolean; marks: number | null }[]) {
-  const present = results.filter((r) => r.present && r.marks !== null) as { studentId: string; marks: number }[];
+  // Sorted once, highest first: a student's rank is 1 + those above them, and
+  // those at or below are the rest (n - rank + 1). O(n log n).
+  const present = (results.filter((r) => r.present && r.marks !== null) as { studentId: string; marks: number }[]).sort((a, b) => b.marks - a.marks);
   const n = present.length;
   const out = new Map<string, { rank: number; percentile: number }>();
-  for (const r of present) {
-    const above = present.filter((o) => o.marks > r.marks).length;
-    const atOrBelow = present.filter((o) => o.marks <= r.marks).length;
-    out.set(r.studentId, { rank: above + 1, percentile: round2((atOrBelow / n) * 100) });
-  }
+  let rank = 0;
+  present.forEach((r, i) => {
+    if (i === 0 || r.marks !== present[i - 1].marks) rank = i + 1;
+    out.set(r.studentId, { rank, percentile: round2(((n - rank + 1) / n) * 100) });
+  });
   return out;
 }
 

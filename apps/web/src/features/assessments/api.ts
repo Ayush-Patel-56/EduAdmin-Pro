@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
 export type Difficulty = 'EASY' | 'MEDIUM' | 'HARD'
@@ -127,7 +127,8 @@ export type ImportPreview = {
   applied: boolean
   created: number
   skipped: number
-  rows: { row: number; label: string; action: 'create' | 'error'; errors: string[] }[]
+  /** `options`: an MCQ's four options as read from the file, so a wrong split shows before confirming. */
+  rows: { row: number; label: string; action: 'create' | 'error'; errors: string[]; options?: string[] }[]
 }
 
 export const DIFFICULTY_LABELS: Record<Difficulty, string> = { EASY: 'Easy', MEDIUM: 'Medium', HARD: 'Hard' }
@@ -165,6 +166,31 @@ export type TestFilters = { q?: string; batchId?: string; programId?: string; au
 
 export function useTests(base: string, f: TestFilters) {
   return useQuery({ queryKey: [base, 'tests', f], queryFn: () => api<Page<Test>>(`${base}/tests?${query(f)}`), placeholderData: keepPreviousData })
+}
+
+/**
+ * Tests that have started, for picking one to grade (Academic Records):
+ * running now first, then finished ones newest first, 50 at a time with "load
+ * more", narrowed by a search (title, subject or batch). Paged by the API, so
+ * no test is out of reach.
+ */
+export function useGradableTests(base: string, q: string) {
+  const ongoing = useQuery({ queryKey: [base, 'tests', 'gradable', 'ongoing', q], queryFn: () => api<Page<Test>>(`${base}/tests?${query({ status: 'ONGOING', q, pageSize: 50 })}`) })
+  const completed = useInfiniteQuery({
+    queryKey: [base, 'tests', 'gradable', 'completed', q],
+    queryFn: ({ pageParam }) => api<Page<Test>>(`${base}/tests?${query({ status: 'COMPLETED', q, page: pageParam, pageSize: 50 })}`),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.page * last.pageSize < last.total ? last.page + 1 : undefined),
+  })
+  const finished = completed.data?.pages.flatMap((p) => p.items) ?? []
+  return {
+    tests: [...(ongoing.data?.items ?? []), ...finished],
+    loaded: !!ongoing.data && !!completed.data,
+    error: ongoing.error ?? completed.error,
+    remaining: Math.max(0, (completed.data?.pages.at(-1)?.total ?? 0) - finished.length),
+    loadMore: () => completed.fetchNextPage(),
+    loadingMore: completed.isFetchingNextPage,
+  }
 }
 
 export function useTestDetail(base: string, id: string | null) {
@@ -484,4 +510,30 @@ export function quickFill(paper: PaperQuestion[], text: string): Record<string, 
     out[q.id] = q.type === 'MCQ' ? mcqLetter(token)! : token
   }
   return out
+}
+
+/** Limits per save request: students, and answers in all (about 80 bytes each, well under the API's 2 MB). */
+export const SAVE_LIMITS = { students: 200, answers: 12_000 }
+
+/**
+ * Splits a results save into chunks, in order: a new chunk starts once it
+ * would pass the student or answer limit (a 90-question paper is about 130
+ * students a chunk; totals only, 200). A single student is never split.
+ */
+export function resultChunks<T extends { answers?: unknown[] }>(results: T[], limits = SAVE_LIMITS): T[][] {
+  const chunks: T[][] = []
+  let current: T[] = []
+  let answers = 0
+  for (const r of results) {
+    const n = r.answers?.length ?? 0
+    if (current.length && (current.length >= limits.students || answers + n > limits.answers)) {
+      chunks.push(current)
+      current = []
+      answers = 0
+    }
+    current.push(r)
+    answers += n
+  }
+  if (current.length) chunks.push(current)
+  return chunks
 }

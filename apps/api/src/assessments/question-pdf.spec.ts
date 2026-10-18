@@ -56,6 +56,20 @@ describe('question PDF text', () => {
     expect(partial.questions[0]).toMatchObject({ text: 'Only two?\n(A) one (B) two', options: [] });
   });
 
+  it('an earlier option naming later letters on one line is ambiguous (flagged, not guessed); on separate lines it reads cleanly', () => {
+    const head = 'Subject: Physics\nTopic: Heat\nDifficulty: Easy\nType: MCQ\n\n';
+    const oneLine = parseQuestionPdf(`${head}1. Choose one\n(A) Both (B) and (C) (B) x (C) y (D) z`);
+    expect(oneLine.questions[0]).toMatchObject({ text: 'Choose one', options: [], ambiguous: true });
+    const ownLines = parseQuestionPdf(`${head}1. Choose one\n(A) Both (B) and (C)\n(B) x\n(C) y\n(D) z`);
+    expect(ownLines.questions[0]).toEqual({ number: 1, text: 'Choose one', options: ['Both (B) and (C)', 'x', 'y', 'z'], answer: null });
+  });
+
+  it('options (A) to (C) without a (D) are no options (the MCQ is then reported as missing one)', () => {
+    const out = parseQuestionPdf('Subject: Physics\nTopic: Heat\nDifficulty: Easy\nType: MCQ\n\n1. Three only?\n(A) a\n(B) b\n(C) c');
+    expect(out.questions[0]).toMatchObject({ options: [] });
+    expect(out.questions[0].ambiguous).toBeUndefined();
+  });
+
   it('a question missing from the answer key has no answer (reported per row by the caller)', () => {
     expect(parseQuestionPdf(MCQ.replace('Q2. (C)', '')).questions[1].answer).toBeNull();
   });

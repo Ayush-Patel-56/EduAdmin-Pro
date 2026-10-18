@@ -252,56 +252,11 @@ New enums and new tables only (the question bank, tests, their papers and result
 - **Kept as records.** A student, or a batch, with test results can't be deleted (set a leaving or end date instead); a test with results is cancelled, not deleted. Deleting a batch with only scheduled tests takes them along. Clear All Data removes results, tests and questions with the rest of the academic data.
 - Sets `lock_timeout = 10s` like the others; if it times out behind a long query on `Batch` or `Student`, mark it `--rolled-back` and deploy again.
 - **`20261019100000_test_ends_at`** stores when each test ends (`startsAt` + `durationMinutes`, held by a CHECK), so the tests lists filter Scheduled / Ongoing / Completed and page in the database instead of reading a capped set. Existing tests get it from their start and length in the same transaction.
-
-## File storage (Cloudflare R2)
-
-Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.
-
-1. Create an R2 bucket (keep public access off) and an API token with Object Read & Write on it.
-2. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` on the API (all four, or none).
-3. Add a CORS rule to the bucket so the web app can upload and show files:
-
-   ```json
-   [{ "AllowedOrigins": ["https://<your web origin>"], "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["Content-Type"], "MaxAgeSeconds": 3600 }]
-   ```
-
-4. Add a lifecycle rule that deletes objects under the `uploads/` prefix after 1 day. The browser uploads to `uploads/<school>/<file>`; completing the upload checks the bytes and moves them to the key they are served from. The signed upload URL stays valid for its few minutes even after that, so a second PUT with it could leave bytes behind under `uploads/`. They are never served, and this rule removes them.
-
-Without these settings, production refuses uploads with a clear message (everything else works). For development without R2, set `FILE_STORAGE=local` (the API refuses to start with it in production): files then go to `apps/api/.storage` (git-ignored, served through the API with signed links that stop working when the API restarts), and an upload link stops working once its file is completed. Uploads that are never completed, and photos never attached to a student, are removed after a day; deleting a student, Clear All Data and deleting a school remove their files too.
-
-## After deploying the invite-code change: review existing admins
-
-Before this change, any admin account that entered a school's invite code, the same code teachers use, became an ADMIN of that school. Nothing records which code was used, so review every admin who is not the school's owner:
-
-```bash
-pnpm --filter api admins:audit -- --before 2026-10-11T00:00:00Z
-```
-
-(use the time the change was deployed for `--before`; the script is read-only). To revoke one that shouldn't have admin rights:
-
-```sql
-UPDATE "SchoolMembership" SET "status" = 'REVOKED' WHERE "id" = '<membership id from the report>';
-```
-
-A revoked member cannot rejoin with an invite code. Then rotate the school's codes from its dashboard (the refresh button next to each code), since the old teacher code is the one that leaked admin access.
-
-## Admin signup code (`ADMIN123`) is development-only (`20261012060000_revoke_admin123`)
-
-`ADMIN123` used to be a permanent public code that let anyone create an admin account. The migration revokes it in every environment (a migration can't tell production from development). Accounts already created with it keep working; only new signups with it are refused.
-
-- **Production:** issue a private code per client with `pnpm --filter api invite:create -- "Client name" --max-uses 1 --days 14`. After deploying, confirm the revoke:
+- **`20261019140000_assessment_school_keys`** ties a paper copy's bank question, and a question's or test's faculty member, to the row's school (composite keys with `ON DELETE SET NULL (column)`, PostgreSQL 15+), and gives `TestAnswer` a `testId` (filled from its result) so an answer always pairs a result and a paper question of the same test. Rows are only written through the API, which never crosses schools or tests; to check first (all must be 0):
 
   ```sql
-  SELECT code, "revokedAt" FROM "AdminInviteCode" WHERE code = 'ADMIN123';  -- revokedAt must be set
+  SELECT (SELECT count(*) FROM "Question" x WHERE x."facultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f.id = x."facultyId" AND f."schoolId" = x."schoolId")) AS questions,
+         (SELECT count(*) FROM "Test" x WHERE x."facultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f.id = x."facultyId" AND f."schoolId" = x."schoolId")) AS tests,
+         (SELECT count(*) FROM "TestQuestion" x WHERE x."questionId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Question" b WHERE b.id = x."questionId" AND b."schoolId" = x."schoolId")) AS papers,
+         (SELECT count(*) FROM "TestAnswer" a JOIN "TestResult" r ON r.id = a."resultId" JOIN "TestQuestion" p ON p.id = a."testQuestionId" WHERE r."testId" <> p."testId") AS mixed_answers;
   ```
-
-  Also review admins who signed up with it (`pnpm --filter api admins:audit`, see above).
-- **Development** (local database or the Neon `dev` branch): `NODE_ENV=development pnpm --filter api seed:dev` re-enables it. The script refuses to run when `NODE_ENV` is `production` or unset.
-
-## Environment
-
-See `apps/api/.env.example`. Production refuses to start without `WEB_ORIGIN` and SMTP settings, and refuses `REQUIRE_EMAIL_VERIFICATION=false`. Set `TRUST_PROXY` to the number of proxies in front of the API.
-
-## CI
-
-`.github/workflows/ci.yml` runs on every push and pull request (Node 22): install → typecheck → lint → unit tests → build, plus an API e2e job against a throwaway Postgres service container with all migrations applied from scratch. Node 20 isn't supported (the API tests crash a vitest worker).

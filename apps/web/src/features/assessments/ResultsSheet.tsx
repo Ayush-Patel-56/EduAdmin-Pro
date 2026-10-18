@@ -10,6 +10,7 @@ import {
   entryPayload,
   filterRows,
   previewScore,
+  resultChunks,
   resultsCsvRows,
   sameEntry,
   useInvalidateAssessments,
@@ -100,16 +101,26 @@ function Sheet({ base, view }: { base: string; view: ResultsView }) {
     }
     setBusy(true)
     setError(null)
+    // A large sheet goes in chunks (each its own save), so no request nears the size limit.
+    let done = 0
     try {
-      const next = await api<ResultsView>(`${base}/tests/${view.test.id}/results`, { method: 'PUT', body: JSON.stringify({ results: payload }) })
-      client.setQueryData([base, 'results', view.test.id], next)
-      setDrafts({})
-      setSaved(`Saved ${payload.length} result${payload.length === 1 ? '' : 's'}.`)
-      void invalidate()
+      const chunks = resultChunks(payload)
+      for (const [i, chunk] of chunks.entries()) {
+        // Only the last chunk asks for the whole sheet back (ranks and stats over everyone).
+        const last = i === chunks.length - 1
+        const next = await api<ResultsView | { saved: number }>(`${base}/tests/${view.test.id}/results`, { method: 'PUT', body: JSON.stringify({ results: chunk, ...(!last && { summaryOnly: true }) }) })
+        if ('rows' in next) client.setQueryData([base, 'results', view.test.id], next)
+        done += chunk.length
+        const savedIds = new Set(chunk.map((p) => p.studentId))
+        setDrafts((d) => Object.fromEntries(Object.entries(d).filter(([id]) => !savedIds.has(id))))
+      }
+      setSaved(`Saved ${done} result${done === 1 ? '' : 's'}.`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save the results')
+      const message = err instanceof Error ? err.message : 'Could not save the results'
+      setError(done ? `${message} (${done} of ${payload.length} were saved; the rest are still unsaved.)` : message)
     } finally {
       setBusy(false)
+      if (done) void invalidate()
     }
   }
 

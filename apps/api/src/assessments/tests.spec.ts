@@ -76,7 +76,7 @@ function build() {
     faculty: { findMany: vi.fn().mockResolvedValue([]), findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }) },
     program: { findMany: vi.fn().mockResolvedValue([]) },
     user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ fullName: 'Principal Mehta' }) },
-    test: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(row()), create: vi.fn().mockResolvedValue({ id: 't1' }) },
+    test: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(row()), findUniqueOrThrow: vi.fn().mockResolvedValue(row()), create: vi.fn().mockResolvedValue({ id: 't1' }) },
     question: { count: vi.fn().mockResolvedValue(0) },
     testQuestion: { findMany: vi.fn().mockResolvedValue([]) },
     testAnswer: { count: vi.fn().mockResolvedValue(0) },
@@ -301,9 +301,17 @@ describe('TestsService: results', () => {
     { id: 's2', fullName: 'Diya Rao', rollNumber: '02', batchId: 'b1' },
   ];
 
-  it('locks the batch (shared) before the test, grades from the roster, and replaces each student’s answers', async () => {
+  it('locks the batch (shared) before the test, grades from the roster, and saves every result and answer in three statements', async () => {
     const { service, tx } = build();
-    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce(locked());
+    // Batch lock, test lock, student locks, then the results upsert (returning each result's id).
+    tx.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(locked())
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: 'r-s1', studentId: 's1' },
+        { id: 'r-s2', studentId: 's2' },
+      ]);
     tx.student.findMany.mockResolvedValue(roster);
     tx.testQuestion.findMany.mockResolvedValue([paperRow('q1')]);
     await service.saveResults(teacher(), 't1', {
@@ -316,20 +324,21 @@ describe('TestsService: results', () => {
     expect(tx.$queryRaw.mock.calls[0].slice(1)).toEqual(['b1', 'school-1']);
     expect(sql(tx.$queryRaw.mock.calls[1])).toMatch(/FROM "Test".*FOR UPDATE/);
     // Then the students being graded (shared), so a student delete waits and refuses rather than racing the save.
-    expect(sql(tx.$queryRaw.mock.calls[2])).toMatch(/FROM "Student".*FOR SHARE/);
-    expect(tx.$queryRaw.mock.calls[2][1]).toEqual(Prisma.join(['s1', 's2']));
+    expect(sql(tx.$queryRaw.mock.calls[2])).toMatch(/FROM "Student" WHERE "id" IN \(\?\) AND "schoolId" = \? FOR SHARE/);
+    expect(tx.$queryRaw.mock.calls[2].slice(1)).toEqual([Prisma.join(['s1', 's2']), 'school-1']);
     expect(tx.$queryRaw.mock.invocationCallOrder[2]).toBeLessThan(tx.student.findMany.mock.invocationCallOrder[0]);
     expect(tx.student.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', OR: [{ batchId: 'b1', status: 'ACTIVE' }, { testResults: { some: { testId: 't1' } } }] });
-    expect(tx.testResult.upsert.mock.calls[0][0]).toMatchObject({
-      where: { testId_studentId: { testId: 't1', studentId: 's1' } },
-      create: { schoolId: 'school-1', testId: 't1', studentId: 's1', present: true, marks: 4, correct: 1, incorrect: 0, unattempted: 0, gradedById: 'u-t', gradedBy: 'Ayush' },
-    });
-    expect(tx.testAnswer.deleteMany.mock.calls.map((c) => c[0].where)).toEqual([
-      { resultId: 'r-s1', schoolId: 'school-1' },
-      { resultId: 'r-s2', schoolId: 'school-1' },
-    ]);
-    expect(tx.testAnswer.createMany.mock.calls).toHaveLength(1);
-    expect(tx.testAnswer.createMany.mock.calls[0][0].data).toEqual([{ schoolId: 'school-1', resultId: 'r-s1', testQuestionId: 'q1', response: 'B', outcome: 'CORRECT', marksAwarded: 4 }]);
+    // One upsert for every student, by the test + student key.
+    const upsert = tx.$queryRaw.mock.calls[3];
+    expect(sql(upsert)).toMatch(/INSERT INTO "TestResult" .*VALUES \?\s+ON CONFLICT \("testId", "studentId"\) DO UPDATE SET\s.*RETURNING "id", "studentId"/s);
+    const values = (upsert[1] as Prisma.Sql).values;
+    // s1: present, 4 marks, 1 correct, 0, 0, no remarks; s2: absent, no marks or counts; both by this teacher.
+    expect(values.slice(1, 12)).toEqual(['school-1', 't1', 's1', true, 4, 1, 0, 0, null, 'u-t', 'Ayush']);
+    expect(values.slice(13, 24)).toEqual(['school-1', 't1', 's2', false, null, null, null, null, null, 'u-t', 'Ayush']);
+    expect(tx.testResult.upsert).not.toHaveBeenCalled();
+    // Their old answers go in one statement, the new ones in another, each answer tied to the test.
+    expect(tx.testAnswer.deleteMany.mock.calls).toEqual([[{ where: { schoolId: 'school-1', resultId: { in: ['r-s1', 'r-s2'] } } }]]);
+    expect(tx.testAnswer.createMany.mock.calls).toEqual([[{ data: [{ schoolId: 'school-1', testId: 't1', resultId: 'r-s1', testQuestionId: 'q1', response: 'B', outcome: 'CORRECT', marksAwarded: 4 }] }]]);
   });
 
   it('refuses a cancelled test, one not started, a student twice, someone outside the roster, and names the student with a bad result', async () => {
@@ -347,11 +356,29 @@ describe('TestsService: results', () => {
     expect(tx.testResult.upsert).not.toHaveBeenCalled();
   });
 
+  it('the sheet is read after the save commits; a chunk asking for a summary gets just the count', async () => {
+    const { service, prisma, tx } = build();
+    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce(locked()).mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'r-s1', studentId: 's1' }]);
+    tx.student.findMany.mockResolvedValue(roster);
+    const out = await service.saveResults(admin, 't1', { results: [{ studentId: 's1', present: false }], summaryOnly: true } as never);
+    expect(out).toEqual({ saved: 1 });
+    expect(prisma.testResult.findMany).not.toHaveBeenCalled();
+    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce(locked()).mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'r-s1', studentId: 's1' }]);
+    await service.saveResults(admin, 't1', { results: [{ studentId: 's1', present: false }] } as never);
+    // The full sheet comes from outside the transaction (prisma, not tx), after it.
+    expect(prisma.testResult.findMany).toHaveBeenCalled();
+    expect(tx.testResult.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction.mock.invocationCallOrder[1]).toBeLessThan(prisma.testResult.findMany.mock.invocationCallOrder[0]);
+  });
+
   it('a student deleted at the same moment is a 400 asking to refresh, not a 500', async () => {
     const { service, prisma, tx } = build();
-    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce(locked());
+    tx.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(locked())
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated on the constraint: TestResult_studentId_schoolId_fkey', { code: 'P2003', clientVersion: 'test' }));
     tx.student.findMany.mockResolvedValue(roster);
-    tx.testResult.upsert.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated on the constraint: TestResult_studentId_schoolId_fkey', { code: 'P2003', clientVersion: 'test' }));
     await expect(service.saveResults(admin, 't1', { results: [{ studentId: 's1', present: false }] } as never)).rejects.toEqual(
       new BadRequestException("Some students aren't in this test's batch. Refresh and try again."),
     );

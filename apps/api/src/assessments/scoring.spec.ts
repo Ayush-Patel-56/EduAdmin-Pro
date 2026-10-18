@@ -71,6 +71,18 @@ describe('totals and the class', () => {
     });
     expect(ranks.has('x')).toBe(false);
     expect(Object.fromEntries(rankAndPercentile([{ studentId: 'solo', present: true, marks: 10 }]))).toEqual({ solo: { rank: 1, percentile: 100 } });
+    // Unsorted input, ties at the bottom, negative marks: the same competition ranks and NTA percentiles.
+    expect(Object.fromEntries(rankAndPercentile([
+      { studentId: 'w', present: true, marks: -2 },
+      { studentId: 'x', present: true, marks: 50 },
+      { studentId: 'y', present: true, marks: -2 },
+      { studentId: 'z', present: true, marks: 70 },
+    ]))).toEqual({ z: { rank: 1, percentile: 100 }, x: { rank: 2, percentile: 75 }, w: { rank: 3, percentile: 50 }, y: { rank: 3, percentile: 50 } });
+    // 1,000 results in well under 50 ms (sorted once, not compared pairwise).
+    const many = Array.from({ length: 1000 }, (_, i) => ({ studentId: `s${i}`, present: true, marks: i % 300 }));
+    const t0 = performance.now();
+    expect(rankAndPercentile(many).get('s299')).toEqual({ rank: 1, percentile: 100 });
+    expect(performance.now() - t0).toBeLessThan(50);
   });
 
   it('class performance: of those present only; nothing graded is "no data", not zero', () => {
