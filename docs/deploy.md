@@ -214,6 +214,14 @@ This finishes the conversion to `timestamptz` and adds the UTC session guard. Ev
   WHERE table_schema = 'public' AND data_type = 'timestamp without time zone' AND table_name <> '_prisma_migrations';
   ```
 
+## Daily reports (`20261018090000_daily_reports`)
+
+A new table only (teachers' daily class reports), wrapped in a transaction, so there is nothing to check before deploying.
+
+- **On Time or Late.** A report is On Time only when it is first submitted on the day it is about, in India (IST). One submitted the next day or later, or for an earlier day, is Late; a day still to come is refused. The API works this out, and a CHECK constraint holds `late` to the same rule against `submittedAt`. Editing a report keeps its status (it was submitted when it was); moving it to another day makes it a report for that day, submitted at that moment.
+- **One per class.** A unique index allows one report per teacher, batch, subject (any letter case) and day, so a double submit is a 409 and the first report can be edited instead.
+- **Kept as records.** A batch with daily reports can't be deleted (set an end date instead; the batch delete confirmation says so). A report keeps its teacher's name if the faculty profile is deleted later. Clear All Data removes daily reports with the rest of the academic data.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.
