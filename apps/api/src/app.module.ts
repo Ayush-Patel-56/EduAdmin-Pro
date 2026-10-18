@@ -22,6 +22,7 @@ import { MeetingsModule } from './meetings/meetings.module.js';
 import { CalendarModule } from './calendar/calendar.module.js';
 import { DailyReportsModule } from './daily-reports/daily-reports.module.js';
 import { FeedbackModule } from './feedback/feedback.module.js';
+import { PtmNotesModule } from './ptm-notes/ptm-notes.module.js';
 import { AssessmentsModule } from './assessments/assessments.module.js';
 
 @Module({
@@ -46,6 +47,7 @@ import { AssessmentsModule } from './assessments/assessments.module.js';
     CalendarModule,
     DailyReportsModule,
     FeedbackModule,
+    PtmNotesModule,
     AssessmentsModule,
   ],
   controllers: [AppController],

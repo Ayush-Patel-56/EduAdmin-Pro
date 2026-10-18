@@ -88,6 +88,14 @@ describe('Clear All Data is one transaction', () => {
     expect(i).toBeLessThan(deleted.indexOf('faculty'));
   });
 
+  it('clears PTM notes before the students they are about', async () => {
+    await schools.clearAllData(auth, 'school-1', 'Demo School');
+    const i = deleted.indexOf('ptmNote');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(deleteMany.mock.calls[i][0]).toEqual({ where: { schoolId: 'school-1' } });
+    expect(i).toBeLessThan(deleted.indexOf('student'));
+  });
+
   it('clears test results before students, tests before batches, questions before chapters and faculty', async () => {
     await schools.clearAllData(auth, 'school-1', 'Demo School');
     const at = (model: string) => deleted.indexOf(model);
