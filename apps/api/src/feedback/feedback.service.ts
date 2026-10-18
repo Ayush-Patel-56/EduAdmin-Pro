@@ -209,7 +209,8 @@ export class FeedbackService {
    * unique per school in the database, so the same sheet uploaded again (by
    * another admin, on another day, or twice at once) never stores a row
    * twice. Rows imported before the faculty-id key are matched by their old
-   * key too. A large sheet comes in chunks (`firstRow`, `priorKeys`).
+   * key too, with the teacher written any of the ways they can be (name, email
+   * or employee ID). A large sheet comes in chunks (`firstRow`, `priorKeys`).
    */
   async import(schoolId: string, userId: string, dto: FeedbackImportDto): Promise<ImportPreview> {
     const [importer, faculty] = await Promise.all([
@@ -218,11 +219,12 @@ export class FeedbackService {
     ]);
     const today = istToday();
     const findFaculty = (text: string) => {
-      const key = text.trim().toLowerCase();
+      const key = cell(text);
       const byId = faculty.filter((f) => f.email?.toLowerCase() === key || f.employeeId?.toLowerCase() === key);
-      return byId.length ? byId : faculty.filter((f) => f.name.trim().toLowerCase() === key);
+      // Spacing and letter case ignored, as in the import key (" RAVI   kumar " is Ravi Kumar).
+      return byId.length ? byId : faculty.filter((f) => cell(f.name) === key);
     };
-    type Ready = Prisma.FeedbackCreateManyInput & { importKey: string; legacyKey: string };
+    type Ready = Prisma.FeedbackCreateManyInput & { importKey: string; legacyKeys: string[] };
     const ready: (Ready | null)[] = [];
     const firstRowNumber = dto.firstRow ?? 2;
     const rows: ImportPreview['rows'] = dto.rows.map((raw, i) => {
@@ -245,12 +247,13 @@ export class FeedbackService {
       let sender = raw.sender?.trim() ?? '';
       let senderFacultyId: string | null = null;
       let target = { toAllFaculty: false, targetFacultyId: null as string | null, targetName: null as string | null };
+      let teacher: (typeof faculty)[number] | null = null;
       if (direction === 'TEACHER_TO_MANAGEMENT') {
         if (!sender) errors.push('Sender is required: the teacher who gave the feedback');
         else {
           // Any profile, active or not: a sheet can hold feedback from before someone left.
           const match = findFaculty(sender);
-          if (match.length === 1) [senderFacultyId, sender] = [match[0].id, match[0].name];
+          if (match.length === 1) [senderFacultyId, sender, teacher] = [match[0].id, match[0].name, match[0]];
           else errors.push(match.length ? `Sender ${sender} matches more than one faculty member; use their email` : `No faculty member matches sender ${sender}`);
         }
       } else if (direction === 'MANAGEMENT_TO_TEACHER') {
@@ -259,7 +262,7 @@ export class FeedbackService {
         else {
           const match = findFaculty(raw.target!);
           const active = match.filter((f) => f.status !== 'INACTIVE');
-          if (active.length === 1) target = { toAllFaculty: false, targetFacultyId: active[0].id, targetName: active[0].name };
+          if (active.length === 1) [target, teacher] = [{ toAllFaculty: false, targetFacultyId: active[0].id, targetName: active[0].name }, active[0]];
           else if (active.length > 1) errors.push(`Target ${raw.target} matches more than one faculty member; use their email`);
           else errors.push(match.length ? `${match[0].name} is no longer active in this school, so feedback can't be sent to them` : `No faculty member matches target ${raw.target}`);
         }
@@ -285,7 +288,7 @@ export class FeedbackService {
         feedbackDate: date,
         source: 'IMPORT' as const,
         importKey: importKeyOf(raw, direction, givenDate, { senderFacultyId, ...target }),
-        legacyKey: legacyImportKeyOf(raw, direction, givenDate),
+        legacyKeys: legacyImportKeysOf(raw, direction, givenDate, { teacher, toAllFaculty: target.toAllFaculty }),
       });
       return { row: firstRowNumber + i, label, action: 'create' as const, errors: [] };
     });
@@ -303,11 +306,11 @@ export class FeedbackService {
       else skip(i, `Appears twice in this file (same as row ${first})`);
     });
     // Uploaded before (by its key, or the key it had before teachers were keyed by id).
-    const keys = ready.flatMap((r) => (r ? [r.importKey, r.legacyKey] : []));
+    const keys = [...new Set(ready.flatMap((r) => (r ? [r.importKey, ...r.legacyKeys] : [])))];
     const existing = keys.length
       ? new Set((await this.prisma.feedback.findMany({ where: { schoolId, importKey: { in: keys } }, select: { importKey: true } })).map((r) => r.importKey))
       : new Set<string | null>();
-    ready.forEach((r, i) => r && (existing.has(r.importKey) || existing.has(r.legacyKey)) && skip(i, 'Already imported (an earlier upload has this row)'));
+    ready.forEach((r, i) => r && (existing.has(r.importKey) || r.legacyKeys.some((k) => existing.has(k))) && skip(i, 'Already imported (an earlier upload has this row)'));
 
     const toCreate = ready.flatMap((r) => (r ? [withoutLegacy(r)] : []));
     if (!dto.dryRun && toCreate.length) {
@@ -347,7 +350,7 @@ export class FeedbackService {
   }
 }
 
-const withoutLegacy = <T extends { legacyKey: string }>({ legacyKey: _legacy, ...row }: T) => row;
+const withoutLegacy = <T extends { legacyKeys: string[] }>({ legacyKeys: _legacy, ...row }: T) => row;
 
 const cell = (v: string | undefined) => (v ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 const hash = (parts: string[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
@@ -371,8 +374,33 @@ export function importKeyOf(
 }
 
 /** The key rows were imported under before teachers were keyed by id: every cell as written. */
-export function legacyImportKeyOf(raw: FeedbackImportRow, direction: FeedbackDirection, date: Date | null): string {
-  return hash([direction, cell(raw.sender), cell(raw.target), cell(raw.rating), cell(raw.content), cell(raw.subject), cell(raw.category), date ? toIsoDate(date)! : '']);
+export function legacyImportKeyOf(raw: FeedbackImportRow, direction: FeedbackDirection, date: Date | null, as: { sender?: string; target?: string } = {}): string {
+  const [sender, target] = [as.sender ?? raw.sender, as.target ?? raw.target];
+  return hash([direction, cell(sender), cell(target), cell(raw.rating), cell(raw.content), cell(raw.subject), cell(raw.category), date ? toIsoDate(date)! : '']);
+}
+
+/** How a sheet could have written "all faculty" (any of these reads as all faculty). */
+const ALL_FACULTY_SPELLINGS = ['', 'all', 'all faculty', 'all teachers', 'everyone', 'staff', 'all staff'];
+
+/**
+ * The old keys a row may have been imported under before teachers were keyed
+ * by id. The old key took the teacher as written then, so a row uploaded again
+ * with the teacher written another way (name, email or employee ID; or another
+ * spelling of "all faculty") is tried under each of those too. Only a teacher
+ * renamed since the old upload is missed.
+ */
+export function legacyImportKeysOf(
+  raw: FeedbackImportRow,
+  direction: FeedbackDirection,
+  date: Date | null,
+  who: { teacher: { name: string; email: string | null; employeeId: string | null } | null; toAllFaculty: boolean },
+): string[] {
+  const ways = who.teacher ? [who.teacher.name, who.teacher.email ?? '', who.teacher.employeeId ?? ''].filter(Boolean) : [];
+  const variants: { sender?: string; target?: string }[] = [{}];
+  if (direction === 'TEACHER_TO_MANAGEMENT') variants.push(...ways.map((sender) => ({ sender })));
+  else if (who.toAllFaculty) variants.push(...ALL_FACULTY_SPELLINGS.map((target) => ({ target })));
+  else variants.push(...ways.map((target) => ({ target })));
+  return [...new Set(variants.map((v) => legacyImportKeyOf(raw, direction, date, v)))];
 }
 
 /** A teacher profile deleted between the check and the insert (foreign key) is a 400, not a 500. */

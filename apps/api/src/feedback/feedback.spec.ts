@@ -6,7 +6,7 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import { FeedbackImportDto, FeedbackStatusDto, type FeedbackImportRow, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
 import { categoriesMatching, isAllFaculty, parseCategory, parseDirection, sentimentKeywords } from './feedback-rules.js';
 import { Prisma } from '../generated/prisma/client.js';
-import { FEEDBACK_LIST_LIMIT, FeedbackService, importKeyOf, legacyImportKeyOf } from './feedback.service.js';
+import { FEEDBACK_LIST_LIMIT, FeedbackService, importKeyOf, legacyImportKeyOf, legacyImportKeysOf } from './feedback.service.js';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
 const NOW = new Date('2026-10-18T05:00:00Z'); // 10:30 IST, 18 Oct
@@ -337,6 +337,62 @@ describe('FeedbackService: import', () => {
     expect(importKeyOf(same, 'TEACHER_TO_MANAGEMENT', null, none)).not.toBe(importKeyOf(same, 'MANAGEMENT_TO_TEACHER', null, none));
     expect(legacyImportKeyOf(same, 'TEACHER_TO_MANAGEMENT', null)).not.toBe(legacyImportKeyOf(same, 'MANAGEMENT_TO_TEACHER', null));
     expect(key).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('the old key (before teachers were keyed by id) is exactly the hash main stored: pinned digests (#41)', () => {
+    // Expected values computed with main's importKeyOf at 4025095 (sha-256 of the JSON cell array) and checked independently.
+    const t = { type: 'Teacher -> Management', sender: ' Ravi  Kumar ', target: 'Principal', rating: '4', content: 'Lab 3 needs  new benches.', subject: 'Infrastructure', category: 'Administration' };
+    expect(legacyImportKeyOf(t, 'TEACHER_TO_MANAGEMENT', d('2026-10-17'))).toBe('0d4bfa72b447bdc52bd0ee8998aa13aabb7d0a3e23cd26791273c8af52c87613');
+    const m = { type: 'Management -> Teacher', sender: 'Principal Mehta', target: 'Staff', rating: '5', content: 'Well done', category: 'Academics' };
+    expect(legacyImportKeyOf(m, 'MANAGEMENT_TO_TEACHER', null)).toBe('159bafdd26e96efe57e3ff8d2b2ed5cc453e710070acd9e17b633fd195f700da');
+  });
+
+  it('a row imported before #39 is found again with the teacher written another way: name, email or employee ID (#41)', async () => {
+    const { service, prisma } = build();
+    const before = { type: 'Teacher -> Management', sender: 'Mrs. Gupta', rating: '4', content: 'Projector in Lab 2 flickers.', category: 'Administration', date: '2026-10-10' };
+    const toAyush = { type: 'Management -> Teacher', sender: 'Principal Mehta', rating: '5', content: 'Great unit test.', target: 'Ayush', category: 'Academics', date: '2026-10-10' };
+    const toAll = { type: 'Management -> Teacher', sender: 'Principal Mehta', rating: '3', content: 'Keep the staff room tidy.', target: 'All Faculty', category: 'Administration', date: '2026-10-10' };
+    // Stored under the old key, with the teacher (or all faculty) as written then.
+    const old = [legacyImportKeyOf(before, 'TEACHER_TO_MANAGEMENT', d('2026-10-10')), legacyImportKeyOf(toAyush, 'MANAGEMENT_TO_TEACHER', d('2026-10-10')), legacyImportKeyOf(toAll, 'MANAGEMENT_TO_TEACHER', d('2026-10-10'))];
+    prisma.feedback.findMany.mockImplementation(({ where }: { where: { importKey: { in: string[] } } }) => Promise.resolve(where.importKey.in.filter((k) => old.includes(k)).map((importKey) => ({ importKey }))));
+    const preview = await service.import(
+      'school-1',
+      'admin-1',
+      sheet([
+        { ...before, sender: 'gupta@school.example' },
+        { ...toAyush, target: 'EMP-1', date: '10-10-2026' },
+        { ...toAll, target: 'Staff' },
+        // A different teacher is a different row.
+        { ...before, sender: 'Ayush' },
+      ]),
+    );
+    const already = ['Already imported (an earlier upload has this row)'];
+    expect(preview.rows.map((r) => r.errors)).toEqual([already, already, already, []]);
+    // The old key itself, then each way of writing the teacher; no duplicates.
+    const teacher = { name: 'Mrs. Gupta', email: 'gupta@school.example', employeeId: 'EMP-2' };
+    const keys = legacyImportKeysOf({ ...before, sender: 'EMP-2' }, 'TEACHER_TO_MANAGEMENT', d('2026-10-10'), { teacher, toAllFaculty: false });
+    expect(keys).toHaveLength(3);
+    expect(keys).toContain(old[0]);
+    expect(legacyImportKeysOf(before, 'MANAGEMENT_TO_TEACHER', null, { teacher: null, toAllFaculty: false })).toEqual([legacyImportKeyOf(before, 'MANAGEMENT_TO_TEACHER', null)]);
+  });
+
+  it('a teacher written with doubled inner spaces or another letter case still matches (#41)', async () => {
+    const { service, prisma } = build();
+    const preview = await service.import(
+      'school-1',
+      'admin-1',
+      sheet([
+        { type: 'Teacher -> Management', sender: ' MRS.   gupta ', rating: '4', content: 'Fine.', category: 'Administration' },
+        { type: 'Management -> Teacher', rating: '4', content: 'Fine.', target: '  AYUSH ', category: 'Academics' },
+        { type: 'Management -> Teacher', rating: '4', content: 'Fine.', target: ' GUPTA@school.example ', category: 'Academics' },
+      ]),
+    );
+    expect(preview.rows.map((r) => [r.action, r.errors])).toEqual([['create', []], ['create', []], ['create', []]]);
+    expect(preview.rows[0].label).toContain('Mrs. Gupta');
+    // A profile saved with doubled spaces matches a sheet that writes them once.
+    prisma.faculty.findMany.mockResolvedValueOnce([{ id: 'fac-7', name: 'Ravi  Kumar', email: null, employeeId: null, status: 'ACTIVE' }]);
+    const spaced = await service.import('school-1', 'admin-1', sheet([{ type: 'Teacher -> Management', sender: 'Ravi Kumar', rating: '4', content: 'Fine.', category: 'Administration' }]));
+    expect(spaced.rows[0].action).toBe('create');
   });
 
   it('refuses what it cannot place, with a reason per row', async () => {
