@@ -58,7 +58,11 @@ const STOPWORDS = new Set(
     'now of off on once only or other our ours out over own same she should so some such than that the their theirs them then there these they this ' +
     'those through to too under until up very was we were what when where which while who whom why will with would you your yours ' +
     'get got make made much many really well good great nice ok okay thank thanks please hello hi sir madam maam dear also one two three ' +
-    'teacher teachers management school student students class classes feedback'
+    'teacher teachers management school student students class classes feedback ' +
+    // Contractions say nothing on their own either.
+    "it's i'm i've i'd i'll you're you've we're we've they're they've that's there's what's let's " +
+    "don't doesn't didn't can't couldn't won't wouldn't isn't aren't wasn't weren't hasn't haven't shouldn't"
+
   ).split(' '),
 );
 
@@ -73,7 +77,8 @@ export type Keyword = { phrase: string; mentions: number; averageRating: number 
 export function sentimentKeywords(entries: { content: string; rating: number }[], limit = 8): Keyword[] {
   const seen = new Map<string, { entries: number; ratingSum: number }>();
   for (const e of entries) {
-    const words = e.content.toLowerCase().match(/[a-z][a-z'-]*[a-z]|[a-z]/g) ?? [];
+    // Letters of any script (so Hindi counts too), with ' and - inside a word; curly ’ is read as '.
+    const words = e.content.toLowerCase().replace(/\u2019/g, "'").match(/[\p{L}\p{M}][\p{L}\p{M}'-]*[\p{L}\p{M}]|\p{L}/gu) ?? [];
     const topics = new Set<string>();
     words.forEach((w, i) => {
       if (w.length < 3 || STOPWORDS.has(w)) return;
@@ -98,7 +103,7 @@ export function sentimentKeywords(entries: { content: string; rating: number }[]
     // "doubt clearing" (3 entries) makes "doubt" (3) and "clearing" (3) redundant.
     const covered = words.length === 1 && out.some((k) => k.phrase.toLowerCase().split(' ').includes(phrase) && k.mentions >= s.entries);
     if (covered) continue;
-    out.push({ phrase: words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' '), mentions: s.entries, averageRating: Math.round((s.ratingSum / s.entries) * 10) / 10 });
+    out.push({ phrase: words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), mentions: s.entries, averageRating: Math.round((s.ratingSum / s.entries) * 10) / 10 });
   }
   return out;
 }

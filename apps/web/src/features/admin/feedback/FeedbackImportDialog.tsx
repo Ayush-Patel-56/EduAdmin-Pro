@@ -2,31 +2,13 @@ import { useRef, useState, type DragEvent } from 'react'
 import { Check, Download, Folder, Info, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { MAX_IMPORT_ROWS, readSpreadsheet, rowsToRecords } from '@/lib/spreadsheet'
-import { todayIst } from '@/lib/dates'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
 import type { ImportPreview } from '@/features/academic/api'
 import { ImportPreviewTable } from '@/features/academic/ImportPreviewTable'
 import { feedbackPath } from '@/features/feedback/api'
+import { FEEDBACK_COLUMNS, HEADERS, sampleRows } from '@/features/feedback/sheet'
 
-/** Our field names and the header spellings each accepts. */
-export const FEEDBACK_COLUMNS = {
-  type: ['Type', 'Direction'],
-  sender: ['Sender', 'From'],
-  rating: ['Rating', 'Stars'],
-  content: ['Content', 'Content (Comment)', 'Comment', 'Feedback'],
-  subject: ['Subject'],
-  target: ['Batch / Target', 'Batch', 'Target', 'To'],
-  category: ['Category'],
-  date: ['Date'],
-}
-
-const HEADERS = ['Type', 'Sender', 'Rating', 'Content', 'Subject', 'Target', 'Category', 'Date']
-/** The format table and the template show the same two examples. */
-export const sampleRows = (today = todayIst()) => [
-  ['Management -> Teacher', 'Principal Mehta', '5', 'Excellent results in the last unit test.', 'Unit Test 1', 'teacher@school.example', 'Academics', today],
-  ['Teacher -> Management', 'teacher@school.example', '5', 'New smartboard in Lab 3 works great.', 'Chemistry Lab', '', 'Administration', today],
-]
 const RULES: [string, boolean, string][] = [
   ['Type', true, 'Management -> Teacher or Teacher -> Management'],
   ['Sender', false, 'For a teacher’s feedback: the teacher (name, email or employee ID). For management’s: who gave it; blank is you.'],

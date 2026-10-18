@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { rowsToRecords } from '@/lib/spreadsheet'
-import { FEEDBACK_COLUMNS, sampleRows } from '@/features/admin/feedback/FeedbackImportDialog'
+import { FEEDBACK_COLUMNS, sampleRows } from './sheet'
 import { dayLabel, keywordTone, percent } from './api'
 
 describe('feedback display', () => {

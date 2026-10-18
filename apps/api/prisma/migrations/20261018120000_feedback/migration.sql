@@ -3,6 +3,9 @@
 -- before deploying.
 BEGIN;
 
+-- Fail cleanly instead of queueing every request behind a long-running query.
+SET LOCAL lock_timeout = '10s';
+
 -- CreateEnum
 CREATE TYPE "FeedbackDirection" AS ENUM ('TEACHER_TO_MANAGEMENT', 'MANAGEMENT_TO_TEACHER');
 

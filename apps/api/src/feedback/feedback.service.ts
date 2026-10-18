@@ -1,11 +1,12 @@
+import { createHash } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { TeacherScope } from '../academic/access.service.js';
 import { type ImportPreview, parseImportDate } from '../academic/import-utils.js';
 import { istToday, toIsoDate } from '../common/dates.js';
 import { likeEscape } from '../common/like-escape.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import type { FeedbackImportDto, FeedbackQuery, FeedbackStatusDto, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
+import type { FeedbackImportDto, FeedbackImportRow, FeedbackQuery, FeedbackStatusDto, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
 import { MAX_FEEDBACK_LENGTH } from './feedback.dto.js';
 import {
   CATEGORY_LABELS,
@@ -48,12 +49,19 @@ export class FeedbackService {
 
   // Admin
 
+  /**
+   * The list for one view (and direction and search), with the KPIs, counts
+   * and charts for the direction tab: All mixes both directions, the other
+   * tabs show how teachers rate management or how management rates teachers.
+   * Dismissed (archived) entries don't count towards ratings or keywords.
+   */
   async adminList(schoolId: string, query: FeedbackQuery) {
     const view = query.view ?? 'pending';
+    const scope: Prisma.FeedbackWhereInput = { schoolId, ...(query.direction && { direction: query.direction }) };
+    const counted: Prisma.FeedbackWhereInput = { ...scope, status: { not: 'DISMISSED' } };
     const where: Prisma.FeedbackWhereInput = {
-      schoolId,
+      ...scope,
       status: query.status ? query.status : { in: [...(view === 'pending' ? PENDING : CLOSED)] },
-      ...(query.direction && { direction: query.direction }),
       ...searchWhere(query.q),
     };
     const today = istToday();
@@ -62,11 +70,11 @@ export class FeedbackService {
     const [total, rows, thisMonth, ratings, byStatus, recent] = await Promise.all([
       this.prisma.feedback.count({ where }),
       this.prisma.feedback.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: FEEDBACK_LIST_LIMIT }),
-      this.prisma.feedback.count({ where: { schoolId, feedbackDate: { gte: monthStart } } }),
-      this.prisma.feedback.groupBy({ by: ['rating'], where: { schoolId }, _count: { _all: true } }),
-      this.prisma.feedback.groupBy({ by: ['status'], where: { schoolId }, _count: { _all: true } }),
+      this.prisma.feedback.count({ where: { ...scope, feedbackDate: { gte: monthStart } } }),
+      this.prisma.feedback.groupBy({ by: ['rating'], where: counted, _count: { _all: true } }),
+      this.prisma.feedback.groupBy({ by: ['status'], where: scope, _count: { _all: true } }),
       this.prisma.feedback.findMany({
-        where: { schoolId, feedbackDate: { gte: keywordFrom }, status: { not: 'DISMISSED' } },
+        where: { ...counted, feedbackDate: { gte: keywordFrom } },
         select: { content: true, rating: true },
         orderBy: { createdAt: 'desc' },
         take: 1000,
@@ -101,31 +109,38 @@ export class FeedbackService {
     return faculty.map((f) => ({ id: f.id, name: f.name, subject: f.primarySubject ?? f.subjects[0] ?? 'General' }));
   }
 
+  /**
+   * The teacher's row is share-locked for the insert, so a profile being
+   * deleted meanwhile either waits for this (and the entry keeps their name)
+   * or goes first (and this is a clear 400, not a foreign-key 500).
+   */
   async send(schoolId: string, userId: string, dto: SendFeedbackDto) {
     const sender = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { fullName: true } });
-    let target: { toAllFaculty: boolean; targetFacultyId: string | null; targetName: string | null } = { toAllFaculty: true, targetFacultyId: null, targetName: null };
-    if (dto.target.toUpperCase() !== 'ALL') {
-      const faculty = await this.prisma.faculty.findFirst({
-        where: { id: dto.target, schoolId, status: { not: 'INACTIVE' } },
-        select: { id: true, name: true },
-      });
-      if (!faculty) throw new BadRequestException('Select a faculty member of this school, or All Faculty');
-      target = { toAllFaculty: false, targetFacultyId: faculty.id, targetName: faculty.name };
-    }
-    const row = await this.prisma.feedback.create({
-      data: {
-        schoolId,
-        direction: 'MANAGEMENT_TO_TEACHER',
-        senderName: sender.fullName,
-        createdById: userId,
-        ...target,
-        rating: dto.rating,
-        content: dto.content,
-        category: dto.category,
-        feedbackDate: istToday(),
-      },
-      select: { id: true },
-    });
+    const row = await withTeacherGone(() =>
+      this.prisma.$transaction(async (tx) => {
+        let target: { toAllFaculty: boolean; targetFacultyId: string | null; targetName: string | null } = { toAllFaculty: true, targetFacultyId: null, targetName: null };
+        if (dto.target.toUpperCase() !== 'ALL') {
+          const [faculty] = await tx.$queryRaw<{ id: string; name: string }[]>`
+            SELECT "id", "name" FROM "Faculty" WHERE "id" = ${dto.target} AND "schoolId" = ${schoolId} AND "status" <> 'INACTIVE' FOR SHARE`;
+          if (!faculty) throw new BadRequestException('Select a faculty member of this school, or All Faculty');
+          target = { toAllFaculty: false, targetFacultyId: faculty.id, targetName: faculty.name };
+        }
+        return tx.feedback.create({
+          data: {
+            schoolId,
+            direction: 'MANAGEMENT_TO_TEACHER',
+            senderName: sender.fullName,
+            createdById: userId,
+            ...target,
+            rating: dto.rating,
+            content: dto.content,
+            category: dto.category,
+            feedbackDate: istToday(),
+          },
+          select: { id: true },
+        });
+      }),
+    );
     return { id: row.id };
   }
 
@@ -134,7 +149,7 @@ export class FeedbackService {
     const actor = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { fullName: true } });
     const { count } = await this.prisma.feedback.updateMany({
       where: { id, schoolId },
-      data: { status: dto.status, statusChangedAt: new Date(), statusChangedBy: actor.fullName },
+      data: { status: dto.status, statusChangedAt: new Date(), statusChangedBy: actor.fullName, statusChangedById: userId },
     });
     if (!count) throw new NotFoundException('Feedback not found');
     return { id, status: dto.status };
@@ -182,16 +197,20 @@ export class FeedbackService {
 
   /**
    * Bulk upload (HLD: validate direction, rating, content, sender/target,
-   * category). A teacher sender, and a teacher target, must be a faculty
-   * member of the school (name, email or employee ID); a blank target, or
-   * "All Faculty" / "Staff", addresses everyone. A row already imported
-   * (same direction, people, date and text) is skipped, so a sheet can be
-   * uploaded again safely.
+   * category). A teacher sender must be a faculty member of the school (name,
+   * email or employee ID); a teacher target must be one still active there,
+   * as Send requires. A blank target, or "All Faculty" / "Staff", addresses
+   * everyone.
+   *
+   * Each row is keyed by its cells as written (a blank sender or date stays
+   * blank, rather than becoming the importing admin or today), and the key is
+   * unique per school in the database, so the same sheet uploaded again (by
+   * another admin, on another day, or twice at once) never stores a row twice.
    */
   async import(schoolId: string, userId: string, dto: FeedbackImportDto): Promise<ImportPreview> {
     const [importer, faculty] = await Promise.all([
       this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { fullName: true } }),
-      this.prisma.faculty.findMany({ where: { schoolId }, select: { id: true, name: true, email: true, employeeId: true } }),
+      this.prisma.faculty.findMany({ where: { schoolId }, select: { id: true, name: true, email: true, employeeId: true, status: true } }),
     ]);
     const today = istToday();
     const findFaculty = (text: string) => {
@@ -199,7 +218,7 @@ export class FeedbackService {
       const byId = faculty.filter((f) => f.email?.toLowerCase() === key || f.employeeId?.toLowerCase() === key);
       return byId.length ? byId : faculty.filter((f) => f.name.trim().toLowerCase() === key);
     };
-    type Ready = Prisma.FeedbackCreateManyInput & { key: string };
+    type Ready = Prisma.FeedbackCreateManyInput & { importKey: string };
     const ready: (Ready | null)[] = [];
     const rows: ImportPreview['rows'] = dto.rows.map((raw, i) => {
       const errors: string[] = [];
@@ -214,7 +233,8 @@ export class FeedbackService {
       else if (content.length > MAX_FEEDBACK_LENGTH) errors.push(`Content must be under ${MAX_FEEDBACK_LENGTH} characters`);
       const category = parseCategory(raw.category);
       if (!category) errors.push(`Category must be one of ${Object.values(CATEGORY_LABELS).join(', ')}`);
-      const date = parseImportDate(raw.date, 'Date', errors) ?? today;
+      const givenDate = parseImportDate(raw.date, 'Date', errors);
+      const date = givenDate ?? today;
       if (date > today) errors.push("Date can't be in the future");
 
       let sender = raw.sender?.trim() ?? '';
@@ -223,6 +243,7 @@ export class FeedbackService {
       if (direction === 'TEACHER_TO_MANAGEMENT') {
         if (!sender) errors.push('Sender is required: the teacher who gave the feedback');
         else {
+          // Any profile, active or not: a sheet can hold feedback from before someone left.
           const match = findFaculty(sender);
           if (match.length === 1) [senderFacultyId, sender] = [match[0].id, match[0].name];
           else errors.push(match.length ? `Sender ${sender} matches more than one faculty member; use their email` : `No faculty member matches sender ${sender}`);
@@ -232,8 +253,10 @@ export class FeedbackService {
         if (isAllFaculty(raw.target)) target = { toAllFaculty: true, targetFacultyId: null, targetName: null };
         else {
           const match = findFaculty(raw.target!);
-          if (match.length === 1) target = { toAllFaculty: false, targetFacultyId: match[0].id, targetName: match[0].name };
-          else errors.push(match.length ? `Target ${raw.target} matches more than one faculty member; use their email` : `No faculty member matches target ${raw.target}`);
+          const active = match.filter((f) => f.status !== 'INACTIVE');
+          if (active.length === 1) target = { toAllFaculty: false, targetFacultyId: active[0].id, targetName: active[0].name };
+          else if (active.length > 1) errors.push(`Target ${raw.target} matches more than one faculty member; use their email`);
+          else errors.push(match.length ? `${match[0].name} is no longer active in this school, so feedback can't be sent to them` : `No faculty member matches target ${raw.target}`);
         }
       }
       const label = direction
@@ -243,7 +266,7 @@ export class FeedbackService {
         ready.push(null);
         return { row: i + 2, label, action: 'error' as const, errors };
       }
-      const data = {
+      ready.push({
         schoolId,
         direction,
         senderName: sender,
@@ -256,43 +279,87 @@ export class FeedbackService {
         category,
         feedbackDate: date,
         source: 'IMPORT' as const,
-      };
-      ready.push({ ...data, key: dedupeKey(data) });
+        importKey: importKeyOf(raw, direction, givenDate),
+      });
       return { row: i + 2, label, action: 'create' as const, errors: [] };
     });
 
-    // Already imported, or twice in this file.
-    const dates = [...new Set(ready.flatMap((r) => (r ? [toIsoDate(r.feedbackDate as Date)!] : [])))].map((d) => new Date(`${d}T00:00:00Z`));
-    const existing = dates.length
-      ? await this.prisma.feedback.findMany({
-          where: { schoolId, source: 'IMPORT', feedbackDate: { in: dates } },
-          select: { direction: true, senderName: true, toAllFaculty: true, targetName: true, feedbackDate: true, content: true },
-        })
-      : [];
-    const taken = new Set(existing.map(dedupeKey));
+    const skip = (i: number, error: string) => {
+      rows[i] = { ...rows[i], action: 'error', errors: [error] };
+      ready[i] = null;
+    };
+    // Twice in this file: the first one counts.
+    const firstRow = new Map<string, number>();
     ready.forEach((r, i) => {
       if (!r) return;
-      if (taken.has(r.key)) {
-        rows[i] = { ...rows[i], action: 'error', errors: ['Already imported (same people, date and feedback)'] };
-        ready[i] = null;
-      } else taken.add(r.key);
+      const first = firstRow.get(r.importKey);
+      if (first === undefined) firstRow.set(r.importKey, rows[i].row);
+      else skip(i, `Appears twice in this file (same as row ${first})`);
     });
+    // Uploaded before.
+    const keys = ready.flatMap((r) => (r ? [r.importKey] : []));
+    const existing = keys.length
+      ? new Set((await this.prisma.feedback.findMany({ where: { schoolId, importKey: { in: keys } }, select: { importKey: true } })).map((r) => r.importKey))
+      : new Set<string | null>();
+    ready.forEach((r, i) => r && existing.has(r.importKey) && skip(i, 'Already imported (an earlier upload has this row)'));
 
-    const toCreate = ready.flatMap((r) => (r ? [(({ key: _key, ...data }) => data)(r)] : []));
-    if (!dto.dryRun && toCreate.length) await this.prisma.feedback.createMany({ data: toCreate });
-    return {
-      applied: !dto.dryRun,
-      created: toCreate.length,
-      updated: 0,
-      skipped: rows.filter((r) => r.action === 'error').length,
-      rows,
-    };
+    const toCreate = ready.flatMap((r) => (r ? [r] : []));
+    if (!dto.dryRun && toCreate.length) {
+      const inserted = await withTeacherGone(() =>
+        this.prisma.$transaction(
+          async (tx) => {
+            // The teachers named are share-locked, in id order, so a profile deleted or
+            // deactivated since the check stops the import instead of failing it with a 500.
+            const ids = [...new Set(toCreate.flatMap((r) => [r.senderFacultyId, r.targetFacultyId].filter((x): x is string => !!x)))].sort();
+            if (ids.length) {
+              const live = await tx.$queryRaw<{ id: string; status: string }[]>`
+                SELECT "id", "status"::text AS "status" FROM "Faculty" WHERE "schoolId" = ${schoolId} AND "id" = ANY(${ids}::text[]) ORDER BY "id" FOR SHARE`;
+              const gone = toCreate.find(
+                (r) =>
+                  (r.senderFacultyId && !live.some((f) => f.id === r.senderFacultyId)) ||
+                  (r.targetFacultyId && !live.some((f) => f.id === r.targetFacultyId && f.status !== 'INACTIVE')),
+              );
+              if (gone) {
+                throw new BadRequestException(
+                  `${gone.targetName ?? gone.senderName} was removed or deactivated while the file was being checked. Nothing was imported; check the file again.`,
+                );
+              }
+            }
+            // An upload finishing at the same moment may have stored some of these: they are skipped, not doubled.
+            return tx.feedback.createManyAndReturn({ data: toCreate, skipDuplicates: true, select: { importKey: true } });
+          },
+          { timeout: 60_000, maxWait: 10_000 },
+        ),
+      );
+      const stored = new Set(inserted.map((r) => r.importKey));
+      ready.forEach((r, i) => r && !stored.has(r.importKey) && skip(i, 'Already imported (by an upload that finished at the same time)'));
+    }
+    const created = ready.filter(Boolean).length;
+    return { applied: !dto.dryRun, created, updated: 0, skipped: rows.length - created, rows };
   }
 }
 
-function dedupeKey(r: { direction: string; senderName: string; toAllFaculty?: boolean | null; targetName?: string | null; feedbackDate: Date | string; content: string }) {
-  const day = typeof r.feedbackDate === 'string' ? r.feedbackDate.slice(0, 10) : toIsoDate(r.feedbackDate);
-  return [r.direction, r.senderName.toLowerCase(), r.toAllFaculty ? '*' : (r.targetName ?? '').toLowerCase(), day, r.content.toLowerCase()].join('|');
+/**
+ * A row's identity: its cells as written (trimmed, spacing and letter case
+ * ignored, a date in either accepted format read as the same day), blanks
+ * kept blank. Hashed, so a long comment still fits a unique index.
+ */
+export function importKeyOf(raw: FeedbackImportRow, direction: FeedbackDirection, date: Date | null): string {
+  const cell = (v: string | undefined) => (v ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const parts = [direction, cell(raw.sender), cell(raw.target), cell(raw.rating), cell(raw.content), cell(raw.subject), cell(raw.category), date ? toIsoDate(date) : ''];
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+}
+
+/** A teacher profile deleted between the check and the insert (foreign key) is a 400, not a 500. */
+async function withTeacherGone<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
+      throw new BadRequestException('That teacher was just removed from the school. Refresh and pick again.');
+    }
+    throw err;
+  }
 }
 
 /** Content, sender, subject, target (teacher or batch) and category, in any letter case. */

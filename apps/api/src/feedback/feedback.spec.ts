@@ -3,9 +3,10 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import { type FeedbackImportRow, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
+import { FeedbackStatusDto, type FeedbackImportRow, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
 import { categoriesMatching, isAllFaculty, parseCategory, parseDirection, sentimentKeywords } from './feedback-rules.js';
-import { FEEDBACK_LIST_LIMIT, FeedbackService } from './feedback.service.js';
+import { Prisma } from '../generated/prisma/client.js';
+import { FEEDBACK_LIST_LIMIT, FeedbackService, importKeyOf } from './feedback.service.js';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
 const NOW = new Date('2026-10-18T05:00:00Z'); // 10:30 IST, 18 Oct
@@ -34,11 +35,13 @@ const row = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 const FACULTY = [
-  { id: 'fac-1', name: 'Ayush', email: 'ayush@school.example', employeeId: 'EMP-1' },
-  { id: 'fac-2', name: 'Mrs. Gupta', email: 'gupta@school.example', employeeId: 'EMP-2' },
-  { id: 'fac-3', name: 'R. Sharma', email: 'rs1@school.example', employeeId: null },
-  { id: 'fac-4', name: 'R. Sharma', email: 'rs2@school.example', employeeId: null },
+  { id: 'fac-1', name: 'Ayush', email: 'ayush@school.example', employeeId: 'EMP-1', status: 'ACTIVE' },
+  { id: 'fac-2', name: 'Mrs. Gupta', email: 'gupta@school.example', employeeId: 'EMP-2', status: 'ACTIVE' },
+  { id: 'fac-3', name: 'R. Sharma', email: 'rs1@school.example', employeeId: null, status: 'ACTIVE' },
+  { id: 'fac-4', name: 'R. Sharma', email: 'rs2@school.example', employeeId: null, status: 'ON_LEAVE' },
+  { id: 'fac-5', name: 'Left Teacher', email: 'left@school.example', employeeId: 'EMP-5', status: 'INACTIVE' },
 ];
+const p2003 = () => new Prisma.PrismaClientKnownRequestError('fk', { code: 'P2003', clientVersion: 't', meta: { constraint: 'Feedback_targetFacultyId_fkey' } });
 
 function build() {
   const prisma = {
@@ -47,7 +50,8 @@ function build() {
       findMany: vi.fn().mockResolvedValue([]),
       groupBy: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({ id: 'fb-new' }),
-      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      // Stores every row given (skipDuplicates finds none) unless a test says otherwise.
+      createManyAndReturn: vi.fn(({ data }: { data: { importKey: string }[]; skipDuplicates?: boolean }) => Promise.resolve(data.map((r) => ({ importKey: r.importKey })))),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     faculty: {
@@ -56,7 +60,14 @@ function build() {
       findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }),
     },
     user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ fullName: 'Principal Mehta' }) },
+    // The teacher row lock: the teacher(s) asked for, still there.
+    $queryRaw: vi.fn(),
+    $transaction: vi.fn(),
   };
+  prisma.$queryRaw.mockImplementation((sql: TemplateStringsArray) =>
+    Promise.resolve(sql.join('?').includes('ANY(') ? FACULTY.map(({ id, status }) => ({ id, status })) : [{ id: 'fac-1', name: 'Ayush' }]),
+  );
+  prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => unknown) => run(prisma));
   return { prisma, service: new FeedbackService(prisma as unknown as PrismaService) };
 }
 
@@ -98,6 +109,12 @@ describe('feedback rules', () => {
     expect(keywords.map((k) => k.phrase)).not.toContain('Doubt');
     expect(keywords.map((k) => k.phrase)).not.toContain('Transport');
   });
+
+  it('a topic only one entry mentions is never a keyword; contractions are not topics; any script counts', () => {
+    expect(sentimentKeywords([{ content: 'Transport delays again', rating: 1 }, { content: 'Library hours', rating: 4 }])).toEqual([]);
+    expect(sentimentKeywords([{ content: "It's fine", rating: 3 }, { content: 'It\u2019s okay, it’s fine', rating: 3 }]).map((k) => k.phrase)).toEqual(['Fine']);
+    expect(sentimentKeywords([{ content: 'पढ़ाई अच्छी है', rating: 5 }, { content: 'पढ़ाई बहुत अच्छी', rating: 5 }]).map((k) => k.phrase)).toEqual(['अच्छी', 'पढ़ाई']);
+  });
 });
 
 describe('FeedbackService: admin', () => {
@@ -124,9 +141,19 @@ describe('FeedbackService: admin', () => {
     // This month counts by the day it was given (1 Oct onwards, India).
     expect(prisma.feedback.count.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', feedbackDate: { gte: d('2026-10-01') } });
     // Keywords read the last 30 days, leaving out dismissed entries.
-    expect(prisma.feedback.findMany.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', feedbackDate: { gte: d('2026-09-19') }, status: { not: 'DISMISSED' } });
+    expect(prisma.feedback.findMany.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', status: { not: 'DISMISSED' }, feedbackDate: { gte: d('2026-09-19') } });
     expect(out.items[0]).toMatchObject({ id: 'fb1', target: { all: false, name: 'Ayush' }, sender: { name: 'Principal Mehta', facultyId: null }, date: '2026-10-18' });
     expect(out.items[1].target).toBeNull();
+  });
+
+  it('the direction tab scopes the KPIs and charts; dismissed entries count in neither the rating nor the keywords', async () => {
+    const { service, prisma } = build();
+    await service.adminList('school-1', { direction: 'TEACHER_TO_MANAGEMENT' });
+    const scope = { schoolId: 'school-1', direction: 'TEACHER_TO_MANAGEMENT' };
+    expect(prisma.feedback.count.mock.calls[1][0].where).toEqual({ ...scope, feedbackDate: { gte: d('2026-10-01') } });
+    expect(prisma.feedback.groupBy.mock.calls[0][0].where).toEqual({ ...scope, status: { not: 'DISMISSED' } });
+    expect(prisma.feedback.groupBy.mock.calls[1][0].where).toEqual(scope);
+    expect(prisma.feedback.findMany.mock.calls[1][0].where).toEqual({ ...scope, status: { not: 'DISMISSED' }, feedbackDate: { gte: d('2026-09-19') } });
   });
 
   it('no feedback: average rating is empty rather than 0', async () => {
@@ -149,7 +176,7 @@ describe('FeedbackService: admin', () => {
     expect(where(2).OR).toContainEqual({ targetName: { contains: 'Academics', mode: 'insensitive' } });
   });
 
-  it('sends to all faculty, or to one teacher of this school, in the admin’s name and today’s date', async () => {
+  it('sends to all faculty, or to one active teacher of this school (row locked for the insert), in the admin’s name and today’s date', async () => {
     const { service, prisma } = build();
     await service.send('school-1', 'admin-1', plainToInstance(SendFeedbackDto, { target: 'ALL', content: 'Great term', rating: 5, category: 'GENERAL' }));
     expect(prisma.feedback.create.mock.calls[0][0].data).toEqual({
@@ -165,19 +192,32 @@ describe('FeedbackService: admin', () => {
       category: 'GENERAL',
       feedbackDate: d('2026-10-18'),
     });
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
     await service.send('school-1', 'admin-1', plainToInstance(SendFeedbackDto, { target: 'fac-1', content: 'Thanks', rating: 4, category: 'ACADEMICS' }));
-    expect(prisma.faculty.findFirst.mock.calls[0][0].where).toEqual({ id: 'fac-1', schoolId: 'school-1', status: { not: 'INACTIVE' } });
+    const [sql, ...values] = prisma.$queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    expect(sql.join('?')).toMatch(/FROM "Faculty" WHERE "id" = \? AND "schoolId" = \? AND "status" <> 'INACTIVE' FOR SHARE/);
+    expect(values).toEqual(['fac-1', 'school-1']);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.feedback.create.mock.invocationCallOrder[1]);
     expect(prisma.feedback.create.mock.calls[1][0].data).toMatchObject({ toAllFaculty: false, targetFacultyId: 'fac-1', targetName: 'Ayush' });
-    prisma.faculty.findFirst.mockResolvedValueOnce(null);
+    prisma.$queryRaw.mockResolvedValueOnce([]);
     await expect(service.send('school-1', 'admin-1', plainToInstance(SendFeedbackDto, { target: 'fac-x', content: 'x', rating: 4, category: 'ACADEMICS' }))).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.feedback.create).toHaveBeenCalledTimes(2);
   });
 
-  it('moves an entry through the workflow, recording who and when; scoped in the write', async () => {
+  it('a teacher removed at the same moment is a 400, not a foreign-key 500', async () => {
+    const { service, prisma } = build();
+    prisma.feedback.create.mockRejectedValueOnce(p2003());
+    await expect(service.send('school-1', 'admin-1', plainToInstance(SendFeedbackDto, { target: 'fac-1', content: 'x', rating: 4, category: 'ACADEMICS' }))).rejects.toEqual(
+      new BadRequestException('That teacher was just removed from the school. Refresh and pick again.'),
+    );
+  });
+
+  it('moves an entry through the workflow, recording who (name and id) and when; scoped in the write', async () => {
     const { service, prisma } = build();
     await expect(service.setStatus('school-1', 'admin-1', 'fb1', { status: 'ACTIONED' })).resolves.toEqual({ id: 'fb1', status: 'ACTIONED' });
     expect(prisma.feedback.updateMany.mock.calls[0][0]).toEqual({
       where: { id: 'fb1', schoolId: 'school-1' },
-      data: { status: 'ACTIONED', statusChangedAt: NOW, statusChangedBy: 'Principal Mehta' },
+      data: { status: 'ACTIONED', statusChangedAt: NOW, statusChangedBy: 'Principal Mehta', statusChangedById: 'admin-1' },
     });
     prisma.feedback.updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(service.setStatus('school-1', 'admin-1', 'fb-x', { status: 'DISMISSED' })).rejects.toBeInstanceOf(NotFoundException);
@@ -226,14 +266,14 @@ describe('FeedbackService: faculty', () => {
 
 describe('FeedbackService: import', () => {
   const sheet = (rows: FeedbackImportRow[], dryRun = true) => ({ rows, dryRun });
+  const rows: FeedbackImportRow[] = [
+    { type: 'Management -> Teacher', sender: 'Principal Mehta', rating: '5', content: 'Excellent results in the last unit test.', subject: 'Unit test', target: 'ayush@school.example', category: 'Academics', date: '2026-10-17' },
+    { type: 'Teacher -> Management', sender: 'Mrs. Gupta', rating: '4', content: 'New smartboard in Lab 3 works great.', target: 'Staff', category: 'Administration' },
+    { type: 'Management -> Teacher', rating: '3', content: 'Keep the staff room tidy.', target: 'All Faculty' },
+  ];
 
-  it('checks every row, and creates only on confirm', async () => {
+  it('checks every row, and creates only on confirm, with each row’s key', async () => {
     const { service, prisma } = build();
-    const rows = [
-      { type: 'Management -> Teacher', sender: 'Principal Mehta', rating: '5', content: 'Excellent results in the last unit test.', subject: 'Unit test', target: 'ayush@school.example', category: 'Academics', date: '2026-10-17' },
-      { type: 'Teacher -> Management', sender: 'Mrs. Gupta', rating: '4', content: 'New smartboard in Lab 3 works great.', target: 'Staff', category: 'Administration' },
-      { type: 'Management -> Teacher', rating: '3', content: 'Keep the staff room tidy.', target: 'All Faculty' },
-    ];
     const preview = await service.import('school-1', 'admin-1', sheet(rows));
     expect(preview).toMatchObject({ applied: false, created: 3, skipped: 0 });
     expect(preview.rows.map((r) => r.label)).toEqual([
@@ -241,10 +281,13 @@ describe('FeedbackService: import', () => {
       'Teacher -> Management: Mrs. Gupta',
       'Management -> Teacher: Principal Mehta to All Faculty',
     ]);
-    expect(prisma.feedback.createMany).not.toHaveBeenCalled();
-    await service.import('school-1', 'admin-1', sheet(rows, false));
-    const data = prisma.feedback.createMany.mock.calls[0][0].data;
-    expect(data[0]).toEqual({
+    expect(prisma.feedback.createManyAndReturn).not.toHaveBeenCalled();
+    // Faculty are looked up in this school only: another school's teacher never matches.
+    expect(prisma.faculty.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1' });
+    await expect(service.import('school-1', 'admin-1', sheet(rows, false))).resolves.toMatchObject({ applied: true, created: 3, skipped: 0 });
+    const call = prisma.feedback.createManyAndReturn.mock.calls[0][0];
+    expect(call.skipDuplicates).toBe(true);
+    expect(call.data[0]).toEqual({
       schoolId: 'school-1',
       direction: 'MANAGEMENT_TO_TEACHER',
       senderName: 'Principal Mehta',
@@ -259,11 +302,24 @@ describe('FeedbackService: import', () => {
       category: 'ACADEMICS',
       feedbackDate: d('2026-10-17'),
       source: 'IMPORT',
+      importKey: importKeyOf(rows[0], 'MANAGEMENT_TO_TEACHER', d('2026-10-17')),
     });
-    // A teacher's feedback is linked to their profile; the target column is ignored for it.
-    expect(data[1]).toMatchObject({ direction: 'TEACHER_TO_MANAGEMENT', senderName: 'Mrs. Gupta', senderFacultyId: 'fac-2', toAllFaculty: false, targetName: null, feedbackDate: d('2026-10-18') });
-    // A blank sender of management feedback is the importing admin.
-    expect(data[2]).toMatchObject({ senderName: 'Principal Mehta', toAllFaculty: true, category: 'GENERAL' });
+    expect(call.data[1]).toMatchObject({ direction: 'TEACHER_TO_MANAGEMENT', senderName: 'Mrs. Gupta', senderFacultyId: 'fac-2', toAllFaculty: false, targetName: null, feedbackDate: d('2026-10-18') });
+    expect(call.data[2]).toMatchObject({ senderName: 'Principal Mehta', toAllFaculty: true, category: 'GENERAL' });
+    // The teachers it names are share-locked, sorted, in one statement, before the insert.
+    const lock = prisma.$queryRaw.mock.calls.find((c) => (c[0] as string[]).join('?').includes('ANY('))!;
+    expect((lock[0] as string[]).join('?')).toMatch(/FROM "Faculty" WHERE "schoolId" = \? AND "id" = ANY\(\?::text\[\]\) ORDER BY "id" FOR SHARE/);
+    expect(lock.slice(1)).toEqual(['school-1', ['fac-1', 'fac-2']]);
+  });
+
+  it('the key is the sheet as written: a blank sender or date stays blank, so any admin on any day gets the same key', () => {
+    const row = { type: 'Management -> Teacher', rating: '4', content: 'Well  done', target: 'EMP-1' };
+    const key = importKeyOf(row, 'MANAGEMENT_TO_TEACHER', null);
+    expect(importKeyOf({ ...row, content: ' well done ', target: 'emp-1' }, 'MANAGEMENT_TO_TEACHER', null)).toBe(key);
+    expect(importKeyOf({ ...row, sender: 'Admin C' }, 'MANAGEMENT_TO_TEACHER', null)).not.toBe(key);
+    expect(importKeyOf({ ...row, date: '17-10-2026' }, 'MANAGEMENT_TO_TEACHER', d('2026-10-17'))).toBe(importKeyOf({ ...row, date: '2026-10-17' }, 'MANAGEMENT_TO_TEACHER', d('2026-10-17')));
+    expect(importKeyOf(row, 'MANAGEMENT_TO_TEACHER', d('2026-10-18'))).not.toBe(key);
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('refuses what it cannot place, with a reason per row', async () => {
@@ -285,17 +341,46 @@ describe('FeedbackService: import', () => {
     ]);
   });
 
-  it('a row already imported, or repeated in the file, is skipped so a sheet can be uploaded again', async () => {
+  it('an inactive teacher can be a sender (an older sheet) but not a target, as Send refuses them too', async () => {
+    const { service } = build();
+    const preview = await service.import('school-1', 'admin-1', sheet([
+      { type: 'Teacher -> Management', sender: 'left@school.example', rating: '4', content: 'From before I left' },
+      { type: 'Management -> Teacher', rating: '4', content: 'Thanks', target: 'EMP-5' },
+      { type: 'Management -> Teacher', rating: '4', content: 'Thanks', target: 'rs2@school.example' },
+    ]));
+    expect(preview.rows.map((r) => r.action)).toEqual(['create', 'error', 'create']);
+    expect(preview.rows[1].errors).toEqual(["Left Teacher is no longer active in this school, so feedback can't be sent to them"]);
+  });
+
+  it('a row already uploaded, or twice in this file, is skipped with the reason', async () => {
     const { service, prisma } = build();
-    prisma.feedback.findMany.mockResolvedValueOnce([
-      { direction: 'TEACHER_TO_MANAGEMENT', senderName: 'Mrs. Gupta', toAllFaculty: false, targetName: null, feedbackDate: d('2026-10-18'), content: 'New smartboard works great.' },
-    ]);
     const again = { type: 'Teacher -> Management', sender: 'gupta@school.example', rating: '5', content: 'New smartboard works great.', date: '2026-10-18' };
     const twice = { type: 'Management -> Teacher', rating: '4', content: 'Well done', target: 'EMP-1' };
+    prisma.feedback.findMany.mockResolvedValueOnce([{ importKey: importKeyOf(again, 'TEACHER_TO_MANAGEMENT', d('2026-10-18')) }]);
     const preview = await service.import('school-1', 'admin-1', sheet([again, twice, twice]));
     expect(preview.rows.map((r) => r.action)).toEqual(['error', 'create', 'error']);
-    expect(preview.rows[0].errors).toEqual(['Already imported (same people, date and feedback)']);
-    expect(prisma.feedback.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', source: 'IMPORT', feedbackDate: { in: [d('2026-10-18')] } });
+    expect(preview.rows[0].errors).toEqual(['Already imported (an earlier upload has this row)']);
+    expect(preview.rows[2].errors).toEqual(['Appears twice in this file (same as row 3)']);
+    expect(prisma.feedback.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', importKey: { in: [importKeyOf(again, 'TEACHER_TO_MANAGEMENT', d('2026-10-18')), importKeyOf(twice, 'MANAGEMENT_TO_TEACHER', null)] } });
+  });
+
+  it('two confirms at once: rows the other upload stored are reported as skipped, never stored twice', async () => {
+    const { service, prisma } = build();
+    // The database kept only the first row of ours (the other upload had stored the rest).
+    prisma.feedback.createManyAndReturn.mockImplementationOnce(({ data }: { data: { importKey: string }[] }) => Promise.resolve([{ importKey: data[0].importKey }]));
+    const out = await service.import('school-1', 'admin-1', sheet(rows, false));
+    expect(out).toMatchObject({ applied: true, created: 1, skipped: 2 });
+    expect(out.rows.map((r) => r.action)).toEqual(['create', 'error', 'error']);
+    expect(out.rows[1].errors).toEqual(['Already imported (by an upload that finished at the same time)']);
+  });
+
+  it('a teacher removed or deactivated since the check stops the import (400), nothing stored', async () => {
+    const { service, prisma } = build();
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'fac-2', status: 'ACTIVE' }]); // Ayush (the target) is gone
+    await expect(service.import('school-1', 'admin-1', sheet(rows, false))).rejects.toThrow('Ayush was removed or deactivated while the file was being checked. Nothing was imported');
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'fac-1', status: 'INACTIVE' }, { id: 'fac-2', status: 'ACTIVE' }]);
+    await expect(service.import('school-1', 'admin-1', sheet(rows, false))).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.feedback.createManyAndReturn).not.toHaveBeenCalled();
   });
 });
 
@@ -312,5 +397,12 @@ describe('feedback DTOs', () => {
     });
     expect(await first(TeacherFeedbackDto, { content: 'Good', rating: '4' })).toEqual({});
     expect(await first(TeacherFeedbackDto, { content: 'Good', rating: 4.5 })).toEqual({ rating: 'Give a rating of 1 to 5 stars' });
+    expect(await first(TeacherFeedbackDto, { content: 'Good', rating: 6 })).toEqual({ rating: 'Give a rating of 1 to 5 stars' });
+  });
+
+  it('an entry can be moved to Reviewed, Actioned or Dismissed, never back to Submitted', async () => {
+    const errors = async (status: string) => (await validate(plainToInstance(FeedbackStatusDto, { status }))).map((e) => Object.values(e.constraints ?? {})[0]);
+    for (const ok of ['REVIEWED', 'ACTIONED', 'DISMISSED']) expect(await errors(ok)).toEqual([]);
+    expect(await errors('SUBMITTED')).toEqual(['Status must be Reviewed, Actioned or Dismissed']);
   });
 });
