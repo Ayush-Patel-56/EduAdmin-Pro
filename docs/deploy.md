@@ -241,6 +241,18 @@ A new table only (parent-teacher meeting notes), wrapped in a transaction with `
 - **Checks.** Discussion notes are required, a meeting can't be logged for a day still to come (API), and a CHECK keeps the follow-up date on or after the meeting.
 - **Kept as records.** A note names its batch and teacher as they were, so it still reads right after either is deleted (the links become null). Deleting a student removes their notes, as it does their counseling sessions; Clear All Data removes them with the rest.
 
+## Tests & Question Bank (`20261019090000_assessments`)
+
+New enums and new tables only (the question bank, tests, their papers and results), wrapped in a transaction, so there is nothing to check before deploying. These tables feed the student reports, so they hold results question by question.
+
+- **Question bank.** Each school's questions, with their author (a teacher, or an admin with no faculty link). CHECK constraints keep marks at 1-100 and negative marks at 0-9, and the answer consistent with the type: an MCQ has four options and an A-D answer, an Integer answer is a whole number, a Numerical answer is a number, and a Subjective question has no options (its model answer is optional).
+- **Tests.** Scheduled for one batch at an IST date and time, with a length (1-720 minutes) and total (1-10000). Only Scheduled or Cancelled is stored, with a CHECK tying the cancellation time to the status; Ongoing and Completed follow from the clock.
+- **Papers are copies.** A test's questions are copied from the bank when attached, so editing or deleting a bank question never changes a paper or its results (a deleted one keeps its copy, unlinked). A bank question appears on a paper at most once (a partial unique index). Once answers are entered against a paper it can't change.
+- **Results.** One per student per test, present (with marks) or absent (with no marks or counts), held by a CHECK. Answers are stored per question with their outcome (correct, partial, incorrect, unattempted) and marks; an unattempted question earns nothing. Ranks and percentiles are worked out when read, so they never go stale.
+- **Kept as records.** A student, or a batch, with test results can't be deleted (set a leaving or end date instead); a test with results is cancelled, not deleted. Deleting a batch with only scheduled tests takes them along. Clear All Data removes results, tests and questions with the rest of the academic data.
+- Sets `lock_timeout = 10s` like the others; if it times out behind a long query on `Batch` or `Student`, mark it `--rolled-back` and deploy again.
+- **`20261019100000_test_ends_at`** stores when each test ends (`startsAt` + `durationMinutes`, held by a CHECK), so the tests lists filter Scheduled / Ongoing / Completed and page in the database instead of reading a capped set. Existing tests get it from their start and length in the same transaction.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

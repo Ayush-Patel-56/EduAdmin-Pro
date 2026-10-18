@@ -96,6 +96,16 @@ describe('Clear All Data is one transaction', () => {
     expect(i).toBeLessThan(deleted.indexOf('student'));
   });
 
+  it('clears test results before students, tests before batches, questions before chapters and faculty', async () => {
+    await schools.clearAllData(auth, 'school-1', 'Demo School');
+    const at = (model: string) => deleted.indexOf(model);
+    for (const model of ['testResult', 'test', 'question']) expect(deleteMany.mock.calls[at(model)][0]).toEqual({ where: { schoolId: 'school-1' } });
+    expect(at('testResult')).toBeLessThan(at('student'));
+    expect(at('test')).toBeLessThan(at('batch'));
+    expect(at('question')).toBeLessThan(at('curriculumChapter'));
+    expect(at('question')).toBeLessThan(at('faculty'));
+  });
+
   it('clears calendar events', async () => {
     await schools.clearAllData(auth, 'school-1', 'Demo School');
     const i = deleted.indexOf('calendarEvent');

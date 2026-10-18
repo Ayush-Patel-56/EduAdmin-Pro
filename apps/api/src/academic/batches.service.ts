@@ -200,6 +200,13 @@ export class BatchesService {
           `${reports} daily report${reports === 1 ? ' is' : 's are'} recorded for this batch. Set an end date for the batch instead.`,
         );
       }
+      // Test results too (saving results share-locks the batch, so none slip in); tests without results go with the batch.
+      const results = await tx.testResult.count({ where: { schoolId, test: { batchId } } });
+      if (results > 0) {
+        throw new ConflictException(
+          `${results} test result${results === 1 ? ' is' : 's are'} recorded for this batch. Set an end date for the batch instead.`,
+        );
+      }
       const teachers = await tx.facultyBatch.findMany({
         where: { batchId },
         select: { facultyId: true },

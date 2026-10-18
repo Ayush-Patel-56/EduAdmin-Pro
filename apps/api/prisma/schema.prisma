@@ -337,6 +337,11 @@ model School {
   dailyReports    DailyReport[]
   feedback        Feedback[]
   ptmNotes        PtmNote[]
+  questions       Question[]
+  tests           Test[]
+  testQuestions   TestQuestion[]
+  testResults     TestResult[]
+  testAnswers     TestAnswer[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -421,6 +426,7 @@ model Batch {
   calendarEvents CalendarEvent[]
   dailyReports   DailyReport[]
   ptmNotes       PtmNote[]
+  tests          Test[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -477,6 +483,8 @@ model Faculty {
   feedbackSent       Feedback[]          @relation("FeedbackSender")
   feedbackReceived   Feedback[]          @relation("FeedbackTarget")
   ptmNotes           PtmNote[]
+  questions          Question[]
+  tests              Test[]
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -587,11 +595,12 @@ model CurriculumChapter {
   createdAt     DateTime @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime @updatedAt @db.Timestamptz(3)
 
-  school   School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school    School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   // NoAction (checked at end of statement) lets a school delete cascade; the
   // programs service unlinks chapters before deleting a single program.
-  program  Program?            @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
-  concepts CurriculumConcept[]
+  program   Program?            @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  concepts  CurriculumConcept[]
+  questions Question[]
 
   @@unique([schoolId, code])
   @@unique([id, schoolId])
@@ -787,6 +796,7 @@ model Student {
   attendance  AttendanceRecord[]
   feeDues     FeeDue[]
   ptmNotes    PtmNote[]
+  testResults TestResult[]
 
   @@unique([schoolId, admissionNumber])
   @@unique([schoolId, aadharNumber])
@@ -1508,4 +1518,187 @@ model PtmNote {
   @@index([facultyId, meetingDate])
   @@index([studentId])
   @@index([batchId])
+}
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestionType {
+  MCQ
+  NUMERICAL
+  INTEGER
+  SUBJECTIVE
+}
+
+enum TestType {
+  UNIT_TEST
+  MOCK
+  DPP
+}
+
+// Stored state only: Ongoing and Completed follow from the clock.
+enum TestStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+// How one student did on one question of a paper.
+enum AnswerOutcome {
+  CORRECT
+  PARTIAL // a subjective answer given some, not all, of its marks
+  INCORRECT
+  UNATTEMPTED
+}
+
+// The question bank (PRD 4.10, 5.11). Faculty keep their own questions; admins
+// see and manage every question of the school. Tests copy questions into their
+// paper (TestQuestion), so editing or deleting one here never rewrites a test.
+model Question {
+  id            String             @id @default(uuid())
+  schoolId      String
+  subject       String
+  chapterId     String? // a curriculum chapter of the school; null once it is deleted
+  chapterName   String? // as it was when picked
+  topic         String // Concept / Topic
+  difficulty    QuestionDifficulty
+  type          QuestionType
+  text          String
+  options       String[]           @default([]) // A-D for an MCQ, empty otherwise
+  correctAnswer String? // "A"-"D", a number, or a model answer (subjective)
+  marks         Int
+  negativeMarks Int                @default(0) // marks taken off for a wrong answer (0-9)
+  source        String             @default("Custom")
+  facultyId     String? // the teacher who added it; null for admins, or once the profile is deleted
+  authorName    String // who added it, as they were named then
+  createdById   String?
+  createdAt     DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime           @updatedAt @db.Timestamptz(3)
+
+  school  School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  chapter CurriculumChapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  faculty Faculty?           @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  papers  TestQuestion[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, subject])
+  @@index([facultyId])
+  @@index([chapterId])
+}
+
+// A test, administered outside the platform (HLD 9.6): scheduled by an admin
+// or a teacher for one batch, with a paper of questions from the bank and
+// results entered by staff.
+model Test {
+  id              String     @id @default(uuid())
+  schoolId        String
+  title           String
+  type            TestType
+  subject         String
+  batchId         String
+  startsAt        DateTime   @db.Timestamptz(3) // the date and time entered, in India
+  durationMinutes Int
+  endsAt          DateTime   @db.Timestamptz(3) // startsAt + durationMinutes (a CHECK keeps it so), for filtering by phase
+  totalMarks      Int
+  status          TestStatus @default(SCHEDULED)
+  cancelledAt     DateTime?  @db.Timestamptz(3)
+  facultyId       String? // the teacher who created it; null for admins, or once the profile is deleted
+  createdByName   String
+  createdById     String?
+  createdAt       DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime   @updatedAt @db.Timestamptz(3)
+
+  school    School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // A batch with recorded results can't be deleted (the API refuses); one with
+  // only scheduled tests takes them along.
+  batch     Batch          @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  faculty   Faculty?       @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  questions TestQuestion[]
+  results   TestResult[]
+
+  @@unique([id, schoolId])
+  @@index([schoolId, startsAt])
+  @@index([schoolId, endsAt])
+  @@index([batchId, startsAt])
+  @@index([facultyId])
+}
+
+// A question on a test's paper: a copy of it as it was when attached (HLD
+// 8.3), so curriculum and bank edits never change a paper or its results.
+model TestQuestion {
+  id            String             @id @default(uuid())
+  schoolId      String
+  testId        String
+  questionId    String? // the bank question it came from; null once that is deleted
+  position      Int
+  subject       String
+  chapterName   String?
+  topic         String
+  difficulty    QuestionDifficulty
+  type          QuestionType
+  text          String
+  options       String[]           @default([])
+  correctAnswer String?
+  marks         Int
+  negativeMarks Int                @default(0)
+
+  school   School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  test     Test         @relation(fields: [testId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  question Question?    @relation(fields: [questionId], references: [id], onDelete: SetNull)
+  answers  TestAnswer[]
+
+  @@unique([id, schoolId])
+  @@unique([testId, position])
+  @@index([questionId])
+}
+
+// One student's result on one test (HLD: unique per student and test, an
+// explicit present/absent state, bounded counts). Ranks and percentiles are
+// worked out when read, among the students who were present.
+model TestResult {
+  id          String   @id @default(uuid())
+  schoolId    String
+  testId      String
+  studentId   String
+  present     Boolean
+  marks       Decimal? @db.Decimal(8, 2) // null when absent; can be negative with negative marking
+  correct     Int?
+  incorrect   Int?
+  unattempted Int?
+  remarks     String?
+  gradedById  String?
+  gradedBy    String // who entered it last, as they were named then
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  school  School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  test    Test         @relation(fields: [testId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  // Results are records: a student with results can't be deleted (the API refuses).
+  student Student      @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  answers TestAnswer[]
+
+  @@unique([id, schoolId])
+  @@unique([testId, studentId])
+  @@index([studentId])
+}
+
+// How a student answered one question of the paper: what topic strength and
+// mistake history are built from (HLD 9.6).
+model TestAnswer {
+  id             String        @id @default(uuid())
+  schoolId       String
+  resultId       String
+  testQuestionId String
+  response       String? // the option or value given (objective questions)
+  outcome        AnswerOutcome
+  marksAwarded   Decimal       @db.Decimal(6, 2)
+
+  school       School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  result       TestResult   @relation(fields: [resultId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  testQuestion TestQuestion @relation(fields: [testQuestionId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@unique([resultId, testQuestionId])
+  @@index([testQuestionId])
 }

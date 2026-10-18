@@ -159,6 +159,13 @@ export class StudentsService {
           `This student has ${dues} fee due${dues === 1 ? '' : 's'} on record, so they can't be deleted. Set their status to Inactive or Transferred instead.`,
         );
       }
+      // So are their test results (the student reports read them).
+      const results = await tx.testResult.count({ where: { schoolId, studentId } });
+      if (results > 0) {
+        throw new ConflictException(
+          `This student has ${results} test result${results === 1 ? '' : 's'} on record, so they can't be deleted. Set their status to Inactive or Transferred instead.`,
+        );
+      }
       const row = await tx.student.findUniqueOrThrow({
         where: { id: studentId },
         select: { photo: { select: { id: true, key: true } } },

@@ -19,6 +19,7 @@ describe('SchoolsService.teacherDashboard: assignments to grade', () => {
       assignmentSubmission: { count: vi.fn().mockResolvedValue(4) },
       dailyReport: { findMany: vi.fn().mockResolvedValue([]) },
       feedback: { findMany: vi.fn().mockResolvedValue([{ id: 'fb1', content: 'Great doubt sessions', createdAt: new Date('2026-10-18T05:00:00Z') }]) },
+      test: { count: vi.fn().mockResolvedValue(2) },
     };
     const schedule = { classesOn: vi.fn().mockResolvedValue([]) };
     const service = new SchoolsService(prisma as unknown as PrismaService, {} as AccessService, {} as FilesService, schedule as unknown as ScheduleService);
@@ -66,6 +67,7 @@ describe('SchoolsService.teacherDashboard: pending daily reports', () => {
         assignmentSubmission: { count: vi.fn().mockResolvedValue(0) },
         dailyReport: { findMany },
         feedback: { findMany: vi.fn().mockResolvedValue([]) },
+        test: { count: vi.fn().mockResolvedValue(0) },
       };
       // Physics twice in b1 (reported, any letter case), Chemistry in b1 and Physics in b2 (not reported).
       const schedule = { classesOn: vi.fn().mockResolvedValue([cls('b1', 'Physics'), cls('b1', 'Physics'), cls('b1', 'Chemistry'), cls('b2', 'Physics')]) };
@@ -91,6 +93,7 @@ describe('SchoolsService.teacherDashboard: feedback from admin', () => {
       faculty: { findUnique: vi.fn().mockResolvedValue({ id: 'f1', status, batchAssignments: [] }) },
       assignmentSubmission: { count: vi.fn() },
       feedback: { findMany: vi.fn().mockResolvedValue([{ id: 'fb1', content: 'Great doubt sessions', createdAt: new Date('2026-10-18T05:00:00Z') }]) },
+      test: { count: vi.fn().mockResolvedValue(2) },
     };
     const service = new SchoolsService(prisma as unknown as PrismaService, {} as AccessService, {} as FilesService, { classesOn: vi.fn() } as unknown as ScheduleService);
     return { prisma, service };
@@ -115,5 +118,38 @@ describe('SchoolsService.teacherDashboard: feedback from admin', () => {
     const out = await service.teacherDashboard({ userId: 'u1' } as never);
     expect(out.adminFeedback).toEqual([]);
     expect(prisma.feedback.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('SchoolsService.teacherDashboard: upcoming tests', () => {
+  it('counts the tests of their batches starting in the next 7 days (cancelled ones left out)', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-18T05:00:00Z') });
+    try {
+      const count = vi.fn().mockResolvedValue(2);
+      const prisma = {
+        user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ accountType: 'TEACHER' }) },
+        schoolMembership: {
+          findFirst: vi.fn().mockResolvedValue({
+            school: { id: 's1', name: 'S', board: 'CBSE', classes: [], mouStartDate: null, mouEndDate: null, programs: [], announcements: [] },
+          }),
+        },
+        faculty: { findUnique: vi.fn().mockResolvedValue({ id: 'f1', status: 'ACTIVE', batchAssignments: [{ batchId: 'b1' }] }) },
+        assignmentSubmission: { count: vi.fn().mockResolvedValue(0) },
+        dailyReport: { findMany: vi.fn().mockResolvedValue([]) },
+        feedback: { findMany: vi.fn().mockResolvedValue([]) },
+        test: { count },
+      };
+      const service = new SchoolsService(prisma as unknown as PrismaService, {} as AccessService, {} as FilesService, { classesOn: vi.fn().mockResolvedValue([]) } as unknown as ScheduleService);
+      const out = await service.teacherDashboard({ userId: 'u1' } as never);
+      expect(out.stats.upcomingTests).toBe(2);
+      expect(count.mock.calls[0][0].where).toEqual({
+        schoolId: 's1',
+        batchId: { in: ['b1'] },
+        status: 'SCHEDULED',
+        startsAt: { gte: new Date('2026-10-18T05:00:00Z'), lt: new Date('2026-10-25T05:00:00Z') },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
