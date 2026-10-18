@@ -122,7 +122,7 @@ function DailyClassReport() {
 
       {options.error && <div className="mt-4"><ErrorBanner message={options.error.message} /></div>}
       {o && !o.active && (
-        <Notice>Your faculty profile isn’t active in this school, so you can’t submit daily reports. Your earlier reports are still listed below.</Notice>
+        <Notice>Your faculty profile isn’t active in this school, so daily reports aren’t available. Contact your school admin if this is a mistake.</Notice>
       )}
       {o?.active && o.batches.length === 0 && (
         <Notice>You don’t have any batches assigned yet. Once your admin assigns you a batch, you can report on it here.</Notice>

@@ -155,9 +155,9 @@ export class DailyReportsService {
     };
   }
 
-  /** Your Recent Submissions: the teacher's own reports, newest day first. Kept readable after they leave. */
+  /** Your Recent Submissions: the teacher's own reports, newest day first. An inactive teacher has no access (as in the other teacher pages). */
   async teacherList(scope: TeacherScope) {
-    if (!scope.facultyId) return [];
+    if (!scope.active || !scope.facultyId) return [];
     const rows = await this.prisma.dailyReport.findMany({
       where: { schoolId: scope.schoolId, facultyId: scope.facultyId },
       include,
@@ -212,10 +212,14 @@ export class DailyReportsService {
     const submittedAt = moved ? now : current.submittedAt;
     // A move is a new submission for that day; otherwise the teacher changed the content.
     const editedAt = moved ? null : now;
+    // The batch's dates bound a report's day only when the day or the batch changes, so a
+    // typo can always be fixed (even after an admin moved the batch's start or end).
+    const samePlace = !moved && dto.batchId === current.batchId;
     return duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
-          withinBatch(date, await lockBatch(tx, scope.schoolId, dto.batchId));
+          const batch = await lockBatch(tx, scope.schoolId, dto.batchId);
+          if (!samePlace) withinBatch(date, batch);
           // Scoped in the write, so a report deleted meanwhile is a 404, not a 500.
           const { count } = await tx.dailyReport.updateMany({
             where: { id, schoolId: scope.schoolId, facultyId },

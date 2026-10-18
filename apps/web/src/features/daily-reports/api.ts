@@ -34,7 +34,7 @@ export type AdminDay = {
 export type ReportOptions = {
   /** Today in India, YYYY-MM-DD: the form's default date. */
   today: string
-  /** false once the teacher's profile is inactive: they can still read their reports. */
+  /** false once the teacher's profile is inactive: no access (no form, no list). */
   active: boolean
   batches: { id: string; name: string; program: string }[]
   subjects: string[]

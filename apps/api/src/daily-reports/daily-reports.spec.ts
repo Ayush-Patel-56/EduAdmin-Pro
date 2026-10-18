@@ -41,6 +41,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   updatedAt: new Date('2026-10-18T04:45:00Z'),
   ...over,
 });
+const sql = (call: unknown[]) => (call[0] as string[]).join('?');
 const dup = () =>
   new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 't', meta: { target: ['DailyReport_one_per_class_key'] } });
 
@@ -164,6 +165,37 @@ describe('DailyReportsService: faculty', () => {
     expect(call.data).toMatchObject({ reportDate: d('2026-10-18'), submittedAt: new Date('2026-10-18T04:45:00Z'), late: false, topics: 'Projectile motion and range' });
     // The content changed now, which is what "Edited" shows (an admin's flag doesn't count).
     expect(call.data.editedAt).toEqual(new Date('2026-10-20T06:00:00Z'));
+  });
+
+  it('after an admin moves the batch’s dates, a text-only edit of a report outside them saves; moving its day or batch is still bounded', async () => {
+    const { service, prisma } = build();
+    // The report is for 18 Oct; Batch 1A now ended on 16 Oct.
+    prisma.$queryRaw.mockResolvedValue([{ startDate: d('2026-04-01'), endDate: d('2026-10-16') }]);
+    await expect(service.update(scope(), 'r1', dto({ topics: 'Typo fixed' }))).resolves.toEqual({ id: 'r1', late: false });
+    // Its batch is still locked first (a delete waits), only the date check is skipped.
+    expect(sql(prisma.$queryRaw.mock.calls[0])).toContain('FOR SHARE');
+    await expect(service.update(scope(), 'r1', dto({ date: '2026-10-17' }))).rejects.toThrow('This batch ended on 16 Oct 2026; pick a day up to then');
+    // Moved to another batch whose dates exclude the day.
+    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: d('2026-10-19'), endDate: null }]);
+    await expect(service.update(scope(), 'r1', dto({ batchId: 'b2' }))).rejects.toThrow('This batch started on 19 Oct 2026; pick a day from then');
+    // The start moved later (11 Oct), the report is from 10 Oct: a text-only edit still saves.
+    prisma.dailyReport.findFirst.mockResolvedValueOnce({ batchId: 'b1', reportDate: d('2026-10-10'), submittedAt: new Date('2026-10-10T05:00:00Z') });
+    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: d('2026-10-11'), endDate: null }]);
+    await expect(service.update(scope(), 'r1', dto({ date: '2026-10-10', topics: 'Typo fixed' }))).resolves.toMatchObject({ id: 'r1' });
+    expect(prisma.dailyReport.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('the batch’s end day itself is allowed; the day after is not', async () => {
+    const { service, prisma } = build();
+    prisma.$queryRaw.mockResolvedValue([{ startDate: d('2026-04-01'), endDate: d('2026-10-16') }]);
+    await expect(service.submit(scope(), dto({ date: '2026-10-16' }))).resolves.toMatchObject({ id: 'r1' });
+    await expect(service.submit(scope(), dto({ date: '2026-10-17' }))).rejects.toThrow('This batch ended on 16 Oct 2026');
+  });
+
+  it('an inactive teacher has no access to their reports (the list is empty)', async () => {
+    const { service, prisma } = build();
+    await expect(service.teacherList(scope({ active: false }))).resolves.toEqual([]);
+    expect(prisma.dailyReport.findMany).not.toHaveBeenCalled();
   });
 
   it('an edit can only move a report to a batch still assigned to the teacher', async () => {
