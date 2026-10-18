@@ -3,10 +3,10 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import { FeedbackStatusDto, type FeedbackImportRow, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
+import { FeedbackImportDto, FeedbackStatusDto, type FeedbackImportRow, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
 import { categoriesMatching, isAllFaculty, parseCategory, parseDirection, sentimentKeywords } from './feedback-rules.js';
 import { Prisma } from '../generated/prisma/client.js';
-import { FEEDBACK_LIST_LIMIT, FeedbackService, importKeyOf } from './feedback.service.js';
+import { FEEDBACK_LIST_LIMIT, FeedbackService, importKeyOf, legacyImportKeyOf } from './feedback.service.js';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
 const NOW = new Date('2026-10-18T05:00:00Z'); // 10:30 IST, 18 Oct
@@ -302,8 +302,10 @@ describe('FeedbackService: import', () => {
       category: 'ACADEMICS',
       feedbackDate: d('2026-10-17'),
       source: 'IMPORT',
-      importKey: importKeyOf(rows[0], 'MANAGEMENT_TO_TEACHER', d('2026-10-17')),
+      importKey: importKeyOf(rows[0], 'MANAGEMENT_TO_TEACHER', d('2026-10-17'), { senderFacultyId: null, toAllFaculty: false, targetFacultyId: 'fac-1' }),
     });
+    // The legacy key is only for matching earlier uploads; it isn't stored.
+    expect(call.data[0]).not.toHaveProperty('legacyKey');
     expect(call.data[1]).toMatchObject({ direction: 'TEACHER_TO_MANAGEMENT', senderName: 'Mrs. Gupta', senderFacultyId: 'fac-2', toAllFaculty: false, targetName: null, feedbackDate: d('2026-10-18') });
     expect(call.data[2]).toMatchObject({ senderName: 'Principal Mehta', toAllFaculty: true, category: 'GENERAL' });
     // The teachers it names are share-locked, sorted, in one statement, before the insert.
@@ -312,13 +314,28 @@ describe('FeedbackService: import', () => {
     expect(lock.slice(1)).toEqual(['school-1', ['fac-1', 'fac-2']]);
   });
 
-  it('the key is the sheet as written: a blank sender or date stays blank, so any admin on any day gets the same key', () => {
+  it('the key: a teacher by who they resolve to (email or name alike); other cells as written, blanks kept blank; direction counts', () => {
+    const toAyush = { senderFacultyId: null, toAllFaculty: false, targetFacultyId: 'fac-1' };
     const row = { type: 'Management -> Teacher', rating: '4', content: 'Well  done', target: 'EMP-1' };
-    const key = importKeyOf(row, 'MANAGEMENT_TO_TEACHER', null);
-    expect(importKeyOf({ ...row, content: ' well done ', target: 'emp-1' }, 'MANAGEMENT_TO_TEACHER', null)).toBe(key);
-    expect(importKeyOf({ ...row, sender: 'Admin C' }, 'MANAGEMENT_TO_TEACHER', null)).not.toBe(key);
-    expect(importKeyOf({ ...row, date: '17-10-2026' }, 'MANAGEMENT_TO_TEACHER', d('2026-10-17'))).toBe(importKeyOf({ ...row, date: '2026-10-17' }, 'MANAGEMENT_TO_TEACHER', d('2026-10-17')));
-    expect(importKeyOf(row, 'MANAGEMENT_TO_TEACHER', d('2026-10-18'))).not.toBe(key);
+    const key = importKeyOf(row, 'MANAGEMENT_TO_TEACHER', null, toAyush);
+    // The same teacher written another way, spacing and case: the same row.
+    expect(importKeyOf({ ...row, content: ' well done ', target: 'Ayush' }, 'MANAGEMENT_TO_TEACHER', null, toAyush)).toBe(key);
+    // A management sender stays as written (blank isn't the importing admin).
+    expect(importKeyOf({ ...row, sender: 'Admin C' }, 'MANAGEMENT_TO_TEACHER', null, toAyush)).not.toBe(key);
+    expect(importKeyOf({ ...row, date: '17-10-2026' }, 'MANAGEMENT_TO_TEACHER', d('2026-10-17'), toAyush)).toBe(importKeyOf({ ...row, date: '2026-10-17' }, 'MANAGEMENT_TO_TEACHER', d('2026-10-17'), toAyush));
+    expect(importKeyOf(row, 'MANAGEMENT_TO_TEACHER', d('2026-10-18'), toAyush)).not.toBe(key);
+    // "All Faculty", "Staff" and blank are one target.
+    const all = { senderFacultyId: null, toAllFaculty: true, targetFacultyId: null };
+    expect(importKeyOf({ ...row, target: 'Staff' }, 'MANAGEMENT_TO_TEACHER', null, all)).toBe(importKeyOf({ ...row, target: '' }, 'MANAGEMENT_TO_TEACHER', null, all));
+    // A teacher sender by id: t1@x.test and Ravi Kumar (the same teacher) are one row.
+    const fromRavi = { senderFacultyId: 'fac-9', toAllFaculty: false, targetFacultyId: null };
+    const t = { type: 'Teacher -> Management', rating: '4', content: 'Lab needs repairs' };
+    expect(importKeyOf({ ...t, sender: 't1@x.test' }, 'TEACHER_TO_MANAGEMENT', null, fromRavi)).toBe(importKeyOf({ ...t, sender: 'Ravi Kumar' }, 'TEACHER_TO_MANAGEMENT', null, fromRavi));
+    // The two directions never share a key, for otherwise identical cells.
+    const same = { type: 'x', sender: 'S', target: 'T', rating: '4', content: 'Same words' };
+    const none = { senderFacultyId: null, toAllFaculty: false, targetFacultyId: null };
+    expect(importKeyOf(same, 'TEACHER_TO_MANAGEMENT', null, none)).not.toBe(importKeyOf(same, 'MANAGEMENT_TO_TEACHER', null, none));
+    expect(legacyImportKeyOf(same, 'TEACHER_TO_MANAGEMENT', null)).not.toBe(legacyImportKeyOf(same, 'MANAGEMENT_TO_TEACHER', null));
     expect(key).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -356,12 +373,37 @@ describe('FeedbackService: import', () => {
     const { service, prisma } = build();
     const again = { type: 'Teacher -> Management', sender: 'gupta@school.example', rating: '5', content: 'New smartboard works great.', date: '2026-10-18' };
     const twice = { type: 'Management -> Teacher', rating: '4', content: 'Well done', target: 'EMP-1' };
-    prisma.feedback.findMany.mockResolvedValueOnce([{ importKey: importKeyOf(again, 'TEACHER_TO_MANAGEMENT', d('2026-10-18')) }]);
-    const preview = await service.import('school-1', 'admin-1', sheet([again, twice, twice]));
+    // Imported before teachers were keyed by id: found by its old key.
+    prisma.feedback.findMany.mockResolvedValueOnce([{ importKey: legacyImportKeyOf(again, 'TEACHER_TO_MANAGEMENT', d('2026-10-18')) }]);
+    const preview = await service.import('school-1', 'admin-1', sheet([again, twice, { ...twice, target: 'ayush@school.example' }]));
     expect(preview.rows.map((r) => r.action)).toEqual(['error', 'create', 'error']);
     expect(preview.rows[0].errors).toEqual(['Already imported (an earlier upload has this row)']);
+    // EMP-1 and ayush@school.example are the same teacher: the same row.
     expect(preview.rows[2].errors).toEqual(['Appears twice in this file (same as row 3)']);
-    expect(prisma.feedback.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', importKey: { in: [importKeyOf(again, 'TEACHER_TO_MANAGEMENT', d('2026-10-18')), importKeyOf(twice, 'MANAGEMENT_TO_TEACHER', null)] } });
+    const keys = prisma.feedback.findMany.mock.calls[0][0].where.importKey.in;
+    expect(keys).toContain(importKeyOf(again, 'TEACHER_TO_MANAGEMENT', d('2026-10-18'), { senderFacultyId: 'fac-2', toAllFaculty: false, targetFacultyId: null }));
+    expect(keys).toContain(legacyImportKeyOf(again, 'TEACHER_TO_MANAGEMENT', d('2026-10-18')));
+    // Each new row comes back with its key (for the next chunk); errors don't.
+    expect(preview.rows[1].key).toMatch(/^[0-9a-f]{64}$/);
+    expect(preview.rows[0].key).toBeUndefined();
+  });
+
+  it('a large sheet in chunks: rows numbered from the chunk’s first sheet row, and a repeat of an earlier chunk is still "twice in this file"', async () => {
+    const { service } = build();
+    const first = await service.import('school-1', 'admin-1', sheet(rows));
+    const priorKeys = first.rows.flatMap((r) => (r.key ? [{ key: r.key, row: r.row }] : []));
+    const next = await service.import('school-1', 'admin-1', { rows: [rows[1], { type: 'Management -> Teacher', rating: '3', content: 'Something new', target: 'All Faculty' }], dryRun: true, firstRow: 202, priorKeys });
+    expect(next.rows.map((r) => [r.row, r.action, r.errors[0] ?? ''])).toEqual([
+      [202, 'error', 'Appears twice in this file (same as row 3)'],
+      [203, 'create', ''],
+    ]);
+  });
+
+  it('chunk fields: first row from 2, prior keys are sha-256 hex', async () => {
+    const msgs = async (plain: object) => (await validate(plainToInstance(FeedbackImportDto, { rows: [], dryRun: true, ...plain }))).map((e) => e.property);
+    expect(await msgs({ firstRow: 202, priorKeys: [{ key: 'a'.repeat(64), row: 3 }] })).toEqual([]);
+    expect(await msgs({ firstRow: 1 })).toEqual(['firstRow']);
+    expect(await msgs({ priorKeys: [{ key: 'nope', row: 3 }] })).toEqual(['priorKeys']);
   });
 
   it('two confirms at once: rows the other upload stored are reported as skipped, never stored twice', async () => {
