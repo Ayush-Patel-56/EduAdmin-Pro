@@ -68,6 +68,8 @@ export class QuestionsService {
   async list(actor: Actor, query: QuestionQuery) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? PAGE_SIZE;
+    // An inactive teacher has no access to the bank (as in the other teacher pages).
+    if (isTeacher(actor) && (!actor.scope.active || !actor.scope.facultyId)) return { total: 0, page, pageSize, items: [] };
     const where: Prisma.QuestionWhereInput = {
       schoolId: actor.schoolId,
       ...(query.subject && { subject: query.subject }),
@@ -211,8 +213,7 @@ export class QuestionsService {
 /** Teachers: their own bank, or the whole school's to build a paper. Admins: optionally one author. */
 function authorWhere(actor: Actor, query: QuestionQuery): Prisma.QuestionWhereInput {
   if (isTeacher(actor)) {
-    if (query.bank === 'school') return {};
-    return { facultyId: actor.scope.facultyId ?? '00000000-0000-0000-0000-000000000000' };
+    return query.bank === 'school' ? {} : { facultyId: actor.scope.facultyId! };
   }
   if (query.author === 'admin') return { facultyId: null };
   return query.author ? { facultyId: query.author } : {};

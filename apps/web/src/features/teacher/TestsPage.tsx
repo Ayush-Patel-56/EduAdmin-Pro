@@ -5,7 +5,7 @@ import { assessmentsBase, useAssessmentOptions } from '@/features/assessments/ap
 import { QuestionBank } from '@/features/assessments/QuestionBank'
 import { TestsTable } from '@/features/assessments/TestsTable'
 import { TestWorkspace } from '@/features/assessments/TestWorkspace'
-import { Spinner, Tabs } from '@/features/assessments/ui'
+import { InactiveNotice, Spinner, Tabs } from '@/features/assessments/ui'
 import { useTeacherContext } from './useTeacherDashboard'
 
 type Tab = 'questions' | 'tests'
@@ -34,9 +34,10 @@ export function TestsPage() {
           <ErrorBanner message={options.error.message} />
         </div>
       )}
-      {options.data && !options.data.active && <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">Your faculty profile is inactive, so this page is read-only.</p>}
       <div className="mt-6">
-        {testId && options.data ? (
+        {options.data && !options.data.active ? (
+          <InactiveNotice />
+        ) : testId && options.data ? (
           <TestWorkspace base={base} testId={testId} options={options.data} institute={dashboard?.school?.name ?? ''} onBack={() => setParams({ tab: 'tests' })} />
         ) : (
           <>

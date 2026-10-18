@@ -120,6 +120,15 @@ describe('QuestionsService', () => {
     expect(prisma.question.findMany.mock.calls[3][0]).toMatchObject({ skip: 10, take: 10 });
   });
 
+  it('an inactive teacher has no access: no questions of their own or the school’s, and no writes', async () => {
+    const { service, prisma } = build();
+    await expect(service.list(teacher({ active: false }), {})).resolves.toEqual({ total: 0, page: 1, pageSize: 20, items: [] });
+    await expect(service.list(teacher({ active: false }), { bank: 'school' })).resolves.toMatchObject({ total: 0, items: [] });
+    expect(prisma.question.findMany).not.toHaveBeenCalled();
+    await expect(service.update(teacher({ active: false }), 'q1', dto())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.remove(teacher({ active: false }), 'q1')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('a teacher edits and deletes only their own questions; admins any; scoped in the write', async () => {
     const { service, prisma } = build();
     await service.update(teacher(), 'q1', dto());

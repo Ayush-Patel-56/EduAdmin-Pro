@@ -120,3 +120,12 @@ export function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs:
 export const thClass = 'px-4 py-3 text-left text-[11px] font-bold tracking-wider whitespace-nowrap text-slate-500 uppercase'
 export const tdClass = 'px-4 py-3 align-top text-sm text-slate-700'
 export const iconBtn = 'rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40'
+
+/** An inactive faculty profile has no access to tests, the question bank or results. */
+export function InactiveNotice() {
+  return (
+    <Card>
+      <Empty>Your faculty profile is inactive, so tests, the question bank and results aren’t available. Contact your school admin if this is a mistake.</Empty>
+    </Card>
+  )
+}

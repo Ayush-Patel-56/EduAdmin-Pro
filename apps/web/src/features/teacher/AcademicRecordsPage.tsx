@@ -3,18 +3,21 @@ import { ClipboardList } from 'lucide-react'
 import { ErrorBanner } from '@/components/ui/form'
 import { Select } from '@/components/ui/Select'
 import { formatDay } from '@/features/portal/format'
-import { assessmentsBase, PHASE_LABELS, useTests } from '@/features/assessments/api'
+import { assessmentsBase, PHASE_LABELS, useAssessmentOptions, useTests } from '@/features/assessments/api'
 import { ResultsSheet } from '@/features/assessments/ResultsSheet'
-import { Card, Empty, Spinner } from '@/features/assessments/ui'
+import { Card, Empty, InactiveNotice, Spinner } from '@/features/assessments/ui'
 
 const base = assessmentsBase()
 
 /** Academic Records, "Test Results Entry" (PRD 5.12): pick a test of your batches and enter its results. */
 export function AcademicRecordsPage() {
   const [params, setParams] = useSearchParams()
-  // Tests that have started (results can be entered), latest first.
-  const tests = useTests(base, { pageSize: 200 })
-  const started = (tests.data?.items ?? []).filter((t) => t.phase === 'ONGOING' || t.phase === 'COMPLETED')
+  const options = useAssessmentOptions(base)
+  // Tests that have started (results can be entered): running now, then the latest 200 finished.
+  const ongoing = useTests(base, { status: 'ONGOING', pageSize: 50 })
+  const completed = useTests(base, { status: 'COMPLETED', pageSize: 200 })
+  const tests = { data: ongoing.data && completed.data, error: ongoing.error ?? completed.error }
+  const started = [...(ongoing.data?.items ?? []), ...(completed.data?.items ?? [])]
   const selected = params.get('test') && started.some((t) => t.id === params.get('test')) ? params.get('test')! : (started[0]?.id ?? null)
 
   return (
@@ -45,7 +48,9 @@ export function AcademicRecordsPage() {
         </div>
       )}
       <div className="mt-6">
-        {!tests.data && !tests.error ? (
+        {options.data && !options.data.active ? (
+          <InactiveNotice />
+        ) : !tests.data && !tests.error ? (
           <Spinner />
         ) : !selected ? (
           <Card>
