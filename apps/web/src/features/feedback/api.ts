@@ -1,0 +1,114 @@
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+import { todayIst } from '@/lib/dates'
+
+export type FeedbackDirection = 'TEACHER_TO_MANAGEMENT' | 'MANAGEMENT_TO_TEACHER'
+export type FeedbackCategory = 'ACADEMICS' | 'DISCIPLINE' | 'PUNCTUALITY' | 'TEACHING_QUALITY' | 'ADMINISTRATION' | 'GENERAL'
+export type FeedbackStatus = 'SUBMITTED' | 'REVIEWED' | 'ACTIONED' | 'DISMISSED'
+
+export type Feedback = {
+  id: string
+  direction: FeedbackDirection
+  sender: { name: string; facultyId: string | null }
+  /** Management -> Teacher only: every teacher, or one. */
+  target: { all: boolean; name: string } | null
+  rating: number
+  content: string
+  subject: string | null
+  category: FeedbackCategory
+  /** The day it was given, YYYY-MM-DD. */
+  date: string
+  status: FeedbackStatus
+  statusChangedAt: string | null
+  statusChangedBy: string | null
+  source: 'APP' | 'IMPORT'
+  createdAt: string
+}
+
+export type Keyword = { phrase: string; mentions: number; averageRating: number }
+
+export type AdminFeedback = {
+  kpis: { thisMonth: number; averageRating: number | null; pending: number; actioned: number }
+  counts: { pending: number; closed: number }
+  ratingDistribution: { stars: number; count: number }[]
+  keywords: Keyword[]
+  total: number
+  items: Feedback[]
+}
+
+export type AdminFilters = { view: 'pending' | 'closed'; status: '' | 'ACTIONED'; direction: '' | FeedbackDirection; q: string }
+
+export const CATEGORIES: FeedbackCategory[] = ['ACADEMICS', 'DISCIPLINE', 'PUNCTUALITY', 'TEACHING_QUALITY', 'ADMINISTRATION', 'GENERAL']
+export const CATEGORY_LABELS: Record<FeedbackCategory, string> = {
+  ACADEMICS: 'Academics',
+  DISCIPLINE: 'Discipline',
+  PUNCTUALITY: 'Punctuality',
+  TEACHING_QUALITY: 'Teaching Quality',
+  ADMINISTRATION: 'Administration',
+  GENERAL: 'General',
+}
+export const DIRECTION_LABELS: Record<FeedbackDirection, string> = {
+  TEACHER_TO_MANAGEMENT: 'Teacher -> Management',
+  MANAGEMENT_TO_TEACHER: 'Management -> Teacher',
+}
+export const STATUS_LABELS: Record<FeedbackStatus, string> = { SUBMITTED: 'Submitted', REVIEWED: 'Reviewed', ACTIONED: 'Actioned', DISMISSED: 'Dismissed' }
+export const STATUS_HINTS: Record<FeedbackStatus, string> = {
+  SUBMITTED: 'Newly received, awaiting initial review',
+  REVIEWED: 'Investigated by school administration',
+  ACTIONED: 'Resolution completed and updated',
+  DISMISSED: 'Archived or marked inactive',
+}
+
+export const feedbackPath = (schoolId: string) => `/schools/${schoolId}/feedback`
+export const TEACHER_FEEDBACK_PATH = '/teacher/feedback'
+
+export function useAdminFeedback(schoolId: string, f: AdminFilters) {
+  const params = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][])
+  return useQuery({
+    queryKey: [schoolId, 'feedback', f],
+    queryFn: () => api<AdminFeedback>(`${feedbackPath(schoolId)}?${params}`),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useRecipients(schoolId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [schoolId, 'feedback', 'recipients'],
+    queryFn: () => api<{ id: string; name: string; subject: string }[]>(`${feedbackPath(schoolId)}/recipients`),
+    enabled,
+  })
+}
+
+export function useInvalidateFeedback(schoolId: string) {
+  const client = useQueryClient()
+  return () => client.invalidateQueries({ queryKey: [schoolId, 'feedback'] })
+}
+
+export function useTeacherFeedback() {
+  return useQuery({ queryKey: ['teacher-feedback'], queryFn: () => api<{ received: Feedback[]; sent: Feedback[] }>(TEACHER_FEEDBACK_PATH) })
+}
+
+export function useInvalidateTeacherFeedback() {
+  const client = useQueryClient()
+  // The dashboard's "Feedback from Admin" reads the same entries.
+  return () => Promise.all([client.invalidateQueries({ queryKey: ['teacher-feedback'] }), client.invalidateQueries({ queryKey: ['teacher-dashboard'] })])
+}
+
+/** A share of the total, rounded, for the rating chart (0 when there is nothing yet). */
+export const percent = (count: number, total: number) => (total ? Math.round((count / total) * 100) : 0)
+
+/** Green for topics people rate well, red for ones they rate poorly. */
+export function keywordTone(k: Keyword): 'positive' | 'negative' | 'neutral' {
+  if (k.averageRating >= 4) return 'positive'
+  if (k.averageRating <= 2.5) return 'negative'
+  return 'neutral'
+}
+
+/** "Today", "Yesterday" or "18 Oct 2026" for a YYYY-MM-DD day (India). */
+export function dayLabel(isoDate: string, today = todayIst()): string {
+  if (isoDate === today) return 'Today'
+  const yesterday = new Date(`${today}T00:00:00Z`)
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1)
+  if (isoDate === yesterday.toISOString().slice(0, 10)) return 'Yesterday'
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${isoDate}T00:00:00Z`))
+}

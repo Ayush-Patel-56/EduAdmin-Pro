@@ -222,6 +222,17 @@ A new table only (teachers' daily class reports), wrapped in a transaction, so t
 - **One per class.** A unique index allows one report per teacher, batch, subject (any letter case) and day, so a double submit is a 409 and the first report can be edited instead.
 - **Kept as records.** A batch with daily reports can't be deleted (set an end date instead; the batch delete confirmation says so). A report keeps its teacher's name if the faculty profile is deleted later. Clear All Data removes daily reports with the rest of the academic data.
 
+## Feedback (`20261018120000_feedback`)
+
+New enums and a new table only (feedback between management and faculty), wrapped in a transaction, so there is nothing to check before deploying.
+
+- **Both ways.** Teachers send feedback to management; admins send to one teacher or to all faculty. CHECK constraints keep the rating at 1-5, the content non-blank, and the direction consistent: Teacher -> Management has no target, and Management -> Teacher goes to all faculty or to one named teacher.
+- **Review workflow.** Admins move every entry Submitted -> Reviewed -> Actioned, or Dismissed (archived), recording who and when; a CHECK ties that record to the status. Dismissed feedback no longer shows to teachers.
+- **Kept as records.** An entry keeps the sender's and the target teacher's names, so it still reads right if a faculty profile is deleted later. Clear All Data removes feedback with the rest of the school's data.
+- **Bulk upload.** A sheet's teacher sender must match a faculty member, and a teacher target an active one (name, email or employee ID).
+- **`20261018130000_feedback_import_key`** keys each imported row by its cells as written (a hash, unique per school through a partial unique index), so the same sheet uploaded again (by another admin, on another day, or twice at once) never stores a row twice; any imported rows from before get a key of their own. It also records the id of the admin who last changed an entry's status, next to their name.
+- Both migrations set `lock_timeout = 10s`: if a long-running query holds `School` or `Faculty`, they fail cleanly (and roll back) instead of queueing requests; mark the failed one `--rolled-back` and deploy again.
+
 ## PTM notes (`20261018150000_ptm_notes`)
 
 A new table only (parent-teacher meeting notes), wrapped in a transaction with `lock_timeout = 10s`, so there is nothing to check before deploying.

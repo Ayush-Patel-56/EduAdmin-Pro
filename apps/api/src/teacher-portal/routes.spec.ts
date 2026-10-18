@@ -16,6 +16,7 @@ import { FeesController } from '../fees/fees.controller.js';
 import { MeetingsController } from '../meetings/meetings.controller.js';
 import { CalendarController } from '../calendar/calendar.controller.js';
 import { AdminDailyReportsController, TeacherDailyReportsController } from '../daily-reports/daily-reports.controller.js';
+import { AdminFeedbackController, TeacherFeedbackController } from '../feedback/feedback.controller.js';
 import { TeacherPtmNotesController } from '../ptm-notes/ptm-notes.controller.js';
 import {
   AdminScheduleController,
@@ -66,6 +67,8 @@ describe.each([
   ['CalendarController', (a: AccessService) => new CalendarController(a, untouched() as never), 5],
   // Admins read daily reports; only teachers write them.
   ['AdminDailyReportsController', (a: AccessService) => new AdminDailyReportsController(a, untouched() as never), 1],
+  // Feedback Management: reads, sending, imports and the review workflow are all admin only.
+  ['AdminFeedbackController', (a: AccessService) => new AdminFeedbackController(a, untouched() as never), 5],
 ])('%s: admin routes of /schools/:schoolId', (_name, build, minimum) => {
   const assertAdmin = vi.fn();
   const controller = build({ assertAdmin } as unknown as AccessService);
@@ -94,6 +97,7 @@ describe.each([
   ['TeacherScheduleController', (a: AccessService) => new TeacherScheduleController(a, untouched() as never)],
   ['TeacherAttendanceController', (a: AccessService) => new TeacherAttendanceController(a, untouched() as never)],
   ['TeacherDailyReportsController', (a: AccessService) => new TeacherDailyReportsController(a, untouched() as never)],
+  ['TeacherFeedbackController', (a: AccessService) => new TeacherFeedbackController(a, untouched() as never)],
   // PTM notes are faculty only: there is no admin controller at all.
   ['TeacherPtmNotesController', (a: AccessService) => new TeacherPtmNotesController(a, untouched() as never)],
 ])('%s: faculty routes', (_name, build) => {
