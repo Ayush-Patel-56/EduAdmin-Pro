@@ -142,8 +142,13 @@ export function splitOptions(text: string): { start: number; options: string[] }
     const c = b && after(lines(cs), b)[0];
     const d = c && after(lines(ds), c)[0];
     if (!b || !c || !d) continue;
-    const runAfter = after(as, d).some((a2) => after(bs, a2).some((b2) => after(cs, b2).some((c2) => after(ds, c2).length > 0)));
+    // Another full (A)–(D) run starting on a later line means this one is a list in the question.
+    // A run inside (D)'s own line is part of that option ("Neither (A) nor (B) nor (C) nor (D)").
+    const eol = text.indexOf('\n', d.end);
+    const later = eol === -1 ? [] : as.filter((x) => x.index > eol);
+    const runAfter = later.some((a2) => after(bs, a2).some((b2) => after(cs, b2).some((c2) => after(ds, c2).length > 0)));
     if (!runAfter) return { start: a.index, options: options([a, b, c, d]) };
+    // An earlier own-line run ends no later than this one, so it has a run after it too: go to rule 2.
     break;
   }
 

@@ -81,6 +81,33 @@ describe('question PDF text', () => {
     });
   });
 
+  it('own-line options whose (D) names (A)-(D) read as the four lines (the run inside (D) is part of it) (#44)', () => {
+    const out = parseQuestionPdf(
+      ['Subject: Physics', 'Topic: Logic', 'Difficulty: Easy', 'Type: MCQ', '', '1. Which is true?', '(A) x', '(B) y', '(C) z', '(D) Neither (A) nor (B) nor (C) nor (D) of these', 'ANSWER KEY', '1. D'].join('\n'),
+    );
+    expect(out.questions[0]).toEqual({ number: 1, text: 'Which is true?', options: ['x', 'y', 'z', 'Neither (A) nor (B) nor (C) nor (D) of these'], answer: 'D' });
+  });
+
+  it('two own-line lists in the question, then the options on one line: both lists stay in the question (#44)', () => {
+    // Rule 1 stops at the last own-line run when another run follows it: any earlier own-line run
+    // ends no later, so it has that run after it too, and rule 2 reads the options.
+    const out = parseQuestionPdf(
+      [
+        'Subject: Physics', 'Topic: Units', 'Difficulty: Easy', 'Type: MCQ', '',
+        '1. Column I:', '(A) Force', '(B) Energy', '(C) Power', '(D) Pressure',
+        'Column II:', '(A) Pascal', '(B) Watt', '(C) Joule', '(D) Newton',
+        '(A) A-D, B-C, C-B, D-A (B) A-A, B-B, C-C, D-D (C) A-B, B-A, C-D, D-C (D) A-C, B-D, C-A, D-B',
+        'ANSWER KEY', '1. A',
+      ].join('\n'),
+    );
+    expect(out.questions[0]).toEqual({
+      number: 1,
+      text: 'Column I:\n(A) Force\n(B) Energy\n(C) Power\n(D) Pressure\nColumn II:\n(A) Pascal\n(B) Watt\n(C) Joule\n(D) Newton',
+      options: ['A-D, B-C, C-B, D-A', 'A-A, B-B, C-C, D-D', 'A-B, B-A, C-D, D-C', 'A-C, B-D, C-A, D-B'],
+      answer: 'A',
+    });
+  });
+
   it('options (A) to (C) without a (D) are no options (the MCQ is then reported as missing one)', () => {
     const out = parseQuestionPdf('Subject: Physics\nTopic: Heat\nDifficulty: Easy\nType: MCQ\n\n1. Three only?\n(A) a\n(B) b\n(C) c');
     expect(out.questions[0]).toMatchObject({ options: [] });
