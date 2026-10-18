@@ -206,4 +206,61 @@ describe('student reports on the database (e2e)', () => {
     await expect(marks.removeProgress(admin, card)).resolves.toEqual({ ok: true });
     expect(await prisma.studentMark.count({ where: { studentId: r1 } })).toBe(0);
   }, 60_000);
+
+  it('a card save that changes only the total marks is saved (and refused for a teacher on an old-batch mark)', async () => {
+    const [b3, b4, r1] = [id(), id(), id()];
+    await prisma.batch.createMany({ data: [{ id: b3, schoolId: ids.school, programId: ids.program, name: 'B3', startDate: new Date('2026-04-01T00:00:00Z') }, { id: b4, schoolId: ids.school, programId: ids.program, name: 'B4', startDate: new Date('2026-04-01T00:00:00Z') }] });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Meera Nair', rollNumber: 'T01', batchId: b3, status: 'ACTIVE' } });
+    const sheet = (batchId: string, subject: string) => ({ batchId, year, term: 'TERM_1', subject, dryRun: false, rows: [{ rollNo: 'T01', name: 'Meera', marks: '40', maxMarks: '50' }] }) as MarksImportDto;
+    const card = { studentId: r1, year, term: 'TERM_1' as const };
+    const mark = (subject: string) => prisma.studentMark.findFirstOrThrow({ where: { studentId: r1, term: 'TERM_1', subject } });
+    await marks.importMarks(admin, sheet(b3, 'Physics'));
+    await marks.saveProgress(admin, { ...card, subjects: [{ subject: 'Physics', marks: 40, maxMarks: 60 }] } as never);
+    expect(Number((await mark('Physics')).maxMarks)).toBe(60);
+    expect(await mark('Physics')).toMatchObject({ source: 'MANUAL', batchId: b3 });
+    // Moved to B4: B4's teacher can't change only the total of B3's mark either.
+    await prisma.student.update({ where: { id: r1 }, data: { batchId: b4 } });
+    const b4Teacher = { kind: 'TEACHER' as const, schoolId: ids.school, userId: ids.user, scope: { schoolId: ids.school, facultyId: ids.faculty, batchIds: [b4], programIds: [], active: true } };
+    await marks.importMarks(b4Teacher, sheet(b4, 'Mathematics'));
+    await expect(marks.saveProgress(b4Teacher, { ...card, subjects: [{ subject: 'Physics', marks: 40, maxMarks: 50 }, { subject: 'Mathematics', marks: 40, maxMarks: 50 }] } as never)).rejects.toThrow('Physics was entered in B3; only an admin can change it');
+    expect(Number((await mark('Physics')).maxMarks)).toBe(60);
+    await marks.removeProgress(admin, card);
+  }, 60_000);
+
+  it('a sheet deleted while its card is saved unchanged leaves no report without marks', async () => {
+    const [b5, r1] = [id(), id()];
+    await prisma.batch.create({ data: { id: b5, schoolId: ids.school, programId: ids.program, name: 'B5', startDate: new Date('2026-04-01T00:00:00Z') } });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Ishaan Roy', rollNumber: 'U01', batchId: b5, status: 'ACTIVE' } });
+    const card = { studentId: r1, year, term: 'TERM_1' as const };
+    const physics = [{ subject: 'Physics', marks: 40, maxMarks: 50 }];
+    await marks.importMarks(admin, { batchId: b5, year, term: 'TERM_1', subject: 'Physics', dryRun: false, rows: [{ rollNo: 'U01', name: 'Ishaan', marks: '40', maxMarks: '50' }] } as MarksImportDto);
+    await marks.saveProgress(admin, { ...card, subjects: physics, teacherRemarks: 'First' } as never);
+    // The sheet delete has removed the marks and the then-empty report but not
+    // committed yet, when a save of the card with Physics unchanged comes in.
+    let save: Promise<unknown> = Promise.resolve();
+    await prisma.$transaction(async (tx) => {
+      const where = { studentId: r1, academicYear: year, term: 'TERM_1' as const };
+      await tx.studentMark.deleteMany({ where });
+      await tx.progressReport.deleteMany({ where });
+      save = marks.saveProgress(admin, { ...card, subjects: physics, teacherRemarks: 'Second' } as never);
+      save.catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 1000));
+    }, { timeout: 20_000 });
+    await save;
+    // The save waited for the delete, then wrote Physics back with its remarks.
+    expect(await prisma.progressReport.count({ where: { studentId: r1 } })).toBe(1);
+    expect(await prisma.studentMark.count({ where: { studentId: r1 } })).toBe(1);
+    await marks.removeProgress(admin, card);
+  }, 60_000);
+
+  it('ratings: the batch end day can be rated, the day after it cannot', async () => {
+    const [b6, r1] = [id(), id()];
+    await prisma.batch.create({ data: { id: b6, schoolId: ids.school, programId: ids.program, name: 'B6', startDate: new Date('2026-04-01T00:00:00Z'), endDate: new Date('2026-05-31T00:00:00Z') } });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Tara Sen', rollNumber: 'V01', batchId: b6, status: 'ACTIVE' } });
+    const scope = { ...teacher, batchIds: [b6] };
+    await expect(ratings.save(scope, { date: '2026-05-31', batchId: b6, ratings: [rate(r1, 4, 4, 4, 4)] } as never)).resolves.toEqual({ saved: 1 });
+    await expect(ratings.save(scope, { date: '2026-06-01', batchId: b6, ratings: [rate(r1, 4, 4, 4, 4)] } as never)).rejects.toThrow('Pick a day on or before the batch ended (31 May 2026)');
+    expect(await prisma.dailyRating.count({ where: { studentId: r1 } })).toBe(1);
+    await prisma.dailyRating.deleteMany({ where: { studentId: r1 } });
+  });
 });

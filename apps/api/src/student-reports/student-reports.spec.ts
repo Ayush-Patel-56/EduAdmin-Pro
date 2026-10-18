@@ -368,6 +368,17 @@ describe('RatingsService (Student Ratings)', () => {
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
+  it('the day the batch ended can be rated, the day after it cannot', async () => {
+    const prisma = prismaMock();
+    const service = new RatingsService(prisma as unknown as PrismaService);
+    const batch = { startDate: new Date('2026-04-01T00:00:00Z'), endDate: new Date('2026-04-30T00:00:00Z') };
+    prisma.$queryRaw.mockResolvedValueOnce([batch]).mockResolvedValueOnce([{ id: 's1' }]);
+    await expect(service.save(scope(), dto({ date: '2026-04-30' }))).resolves.toEqual({ saved: 1 });
+    prisma.$queryRaw.mockResolvedValueOnce([batch]);
+    await expect(service.save(scope(), dto({ date: '2026-05-01' }))).rejects.toThrow('Pick a day on or before the batch ended (30 Apr 2026)');
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
   it("saves one row per student for the day and this teacher, updating the teacher's own rating", async () => {
     const prisma = prismaMock();
     prisma.$queryRaw.mockResolvedValueOnce([{ startDate: new Date('2026-04-01T00:00:00Z') }]).mockResolvedValueOnce([{ id: 's1' }]);
