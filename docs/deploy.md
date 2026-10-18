@@ -247,7 +247,16 @@ A new table only (parent-teacher meeting notes), wrapped in a transaction with `
 
 - **Faculty only.** Teachers log meetings with the parents of students in their own batches, and read, correct or delete only the notes they logged. There is no admin screen; the notes are kept for the student's record (the 5-in-1 report).
 - **Checks.** Discussion notes are required, a meeting can't be logged for a day still to come (API), and a CHECK keeps the follow-up date on or after the meeting.
-- **Kept as records.** A note names its batch and teacher as they were, so it still reads right after either is deleted (the links become null). Deleting a student removes their notes, as it does their counseling sessions; Clear All Data removes them with the rest.
+- **Kept as records.** A note names its batch and teacher as they were, so it still reads right after either is deleted (the links become null). Deleting a student removes their notes, as it does their counseling sessions (the delete confirmation says how many); Clear All Data removes them with the rest.
+- **`20261019110000_ptm_note_school_keys`** ties a note's batch and faculty links to its school (composite keys, like the student link), with `ON DELETE SET NULL ("batchId")` / `("facultyId")` so deleting a batch or profile still nulls only that link. Needs PostgreSQL 15+ (Neon runs 18). Notes are only written through the API, which never crosses schools, so nothing should fail; to check first:
+
+  ```sql
+  SELECT count(*) FROM "PtmNote" n
+  WHERE (n."batchId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Batch" b WHERE b."id" = n."batchId" AND b."schoolId" = n."schoolId"))
+     OR (n."facultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f."id" = n."facultyId" AND f."schoolId" = n."schoolId"));
+  ```
+
+  It must be 0. Prisma warns that `SetNull` is set on a relation whose `schoolId` is required; the column list is what makes it safe. Prisma can't write the column list itself, so CI checks it on the migrated database (`apps/api/test/schema-constraints.e2e-spec.ts`); a later migration that regenerates these keys must keep it.
 
 ## Tests & Question Bank (`20261019090000_assessments`)
 

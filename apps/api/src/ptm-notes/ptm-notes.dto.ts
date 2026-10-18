@@ -17,8 +17,15 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
  * first, so "required" goes last on each field.
  */
 export class PtmNoteDto {
+  /**
+   * Required for a new note. When correcting one, leaving it out keeps the
+   * note's batch as recorded (even one deleted since); naming one re-checks
+   * the student and batch like a new note.
+   */
+  @Transform(blankToNull)
+  @IsOptional()
   @IsUUID('4', { message: 'Select a batch' })
-  batchId: string;
+  batchId?: string | null;
 
   /** The meeting day; today by default in the form, never a day still to come. */
   @Matches(ISO_DATE, { message: 'Pick the meeting date' })

@@ -198,3 +198,9 @@ export async function searchStudents(portal: { kind: 'admin'; schoolId: string }
     group: 'Students',
   }))
 }
+
+/** "5 PTM notes", "1 counseling session": what deleting a student also removes. */
+export function removalLines(r: { ptmNotes: number; counselingSessions: number }): string[] {
+  const n = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`
+  return [r.ptmNotes ? n(r.ptmNotes, 'PTM note') : null, r.counselingSessions ? n(r.counselingSessions, 'counseling session') : null].filter((x): x is string => x !== null)
+}

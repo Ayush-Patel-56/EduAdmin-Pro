@@ -1513,8 +1513,11 @@ model PtmNote {
 
   school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   student Student  @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  batch   Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
-  faculty Faculty? @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  // Tied to the note's school. Deleting the batch or faculty profile nulls only that link
+  // (ON DELETE SET NULL ("batchId") / ("facultyId") in the migration; Prisma warns about
+  // SetNull with the required schoolId, which the column list makes safe).
+  batch   Batch?   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: SetNull)
+  faculty Faculty? @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
 
   @@index([schoolId, meetingDate])
   @@index([facultyId, meetingDate])

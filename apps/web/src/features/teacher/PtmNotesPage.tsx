@@ -128,6 +128,10 @@ function LogForm({ options, optionsError, editing, onDone, onCancel }: {
 
   const canLog = !!options?.active && options.batches.length > 0
   const batch = options?.batches.find((b) => b.id === f.batchId)
+  const recorded =
+    editing && !options?.batches.some((b) => b.id === editing.batch.id)
+      ? { value: editing.batch.id ?? '', label: `${editing.batch.name}${editing.batch.id ? '' : ' (batch deleted)'}` }
+      : null
   const students = useMemo(() => {
     const list = batch?.students ?? []
     // A note being corrected keeps showing its student, even one who has moved batch since.
@@ -137,7 +141,7 @@ function LogForm({ options, optionsError, editing, onDone, onCancel }: {
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    const problem = ptmProblem(f, today)
+    const problem = ptmProblem(f, today, editing ? { studentId: editing.student.id } : undefined)
     if (problem) return setError(problem)
     setBusy(true)
     setError(null)
@@ -159,14 +163,15 @@ function LogForm({ options, optionsError, editing, onDone, onCancel }: {
         {editing ? <Pencil className="size-4" /> : <Plus className="size-4" />} {editing ? 'Edit Parent Meeting' : 'Log New Parent Meeting'}
       </h2>
       {optionsError && <div className="mt-4"><ErrorBanner message={optionsError} /></div>}
-      {options && !options.active && <Notice>Your faculty profile isn’t active in this school, so you can’t log meetings. Your earlier notes are still listed.</Notice>}
+      {options && !options.active && <Notice>Your faculty profile isn’t active in this school, so PTM notes aren’t available. Contact your school admin if this is a mistake.</Notice>}
       {options?.active && options.batches.length === 0 && <Notice>You don’t have any batches assigned yet. Once your admin assigns you a batch, you can log meetings with its students’ parents.</Notice>}
 
       <fieldset disabled={!canLog || busy} className="mt-5 grid gap-x-4 gap-y-5 sm:grid-cols-2">
         <div>
           <label htmlFor="ptm-batch" className={label}>Batch</label>
           <select id="ptm-batch" value={f.batchId} onChange={(e) => { set('batchId', e.target.value); set('studentId', '') }} className={`${inputClass()} h-11`}>
-            {!f.batchId && <option value="">Select batch...</option>}
+            {/* A note being corrected keeps its recorded batch, even one deleted or no longer the teacher's. */}
+            {recorded ? <option value={recorded.value}>{recorded.label}</option> : !f.batchId && <option value="">Select batch...</option>}
             {(options?.batches ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         </div>

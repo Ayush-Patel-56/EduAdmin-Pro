@@ -45,9 +45,9 @@ export class PtmNotesService {
     };
   }
 
-  /** The teacher's own notes, newest meeting first; still readable after they leave. */
+  /** The teacher's own notes, newest meeting first. An inactive teacher has no access (as in the other teacher pages). */
   async list(scope: TeacherScope, query: PtmNoteQuery) {
-    if (!scope.facultyId) return { total: 0, items: [] };
+    if (!scope.active || !scope.facultyId) return { total: 0, items: [] };
     const where: Prisma.PtmNoteWhereInput = { schoolId: scope.schoolId, facultyId: scope.facultyId, ...searchWhere(query.q) };
     const [total, rows] = await Promise.all([
       this.prisma.ptmNote.count({ where }),
@@ -58,11 +58,12 @@ export class PtmNotesService {
 
   async create(scope: TeacherScope, dto: PtmNoteDto) {
     const facultyId = requireTeacher(scope);
-    const dates = meetingDates(dto);
+    if (!dto.batchId) throw new BadRequestException('Select a batch');
     const [batch, faculty] = await Promise.all([
       this.requireStudentInBatch(scope, dto.batchId, dto.studentId),
       this.prisma.faculty.findUniqueOrThrow({ where: { id: facultyId }, select: { name: true } }),
     ]);
+    const dates = meetingDates(dto, { day: batch.startDate, reason: 'the batch started' });
     const row = await studentGone(() =>
       this.prisma.ptmNote.create({
         data: {
@@ -83,19 +84,32 @@ export class PtmNotesService {
 
   /**
    * Corrects a note. Keeping its student and batch is always allowed (the
-   * student may have moved on since); choosing another is checked like a new
-   * note. Scoped in the write, so a note deleted meanwhile is a 404.
+   * student may have moved on, or the batch been deleted, since): leave the
+   * batch out, or send the one it has. Choosing another student or batch is
+   * checked like a new note. Scoped in the write, so a note deleted meanwhile
+   * is a 404.
    */
   async update(scope: TeacherScope, id: string, dto: PtmNoteDto) {
     const facultyId = requireTeacher(scope);
-    const dates = meetingDates(dto);
     const current = await this.prisma.ptmNote.findFirst({
       where: { id, schoolId: scope.schoolId, facultyId },
-      select: { studentId: true, batchId: true },
+      select: { studentId: true, batchId: true, meetingDate: true, batch: { select: { startDate: true } } },
     });
     if (!current) throw new NotFoundException('Meeting note not found');
-    const same = current.studentId === dto.studentId && current.batchId === dto.batchId;
-    const batch = same ? null : await this.requireStudentInBatch(scope, dto.batchId, dto.studentId);
+    const keep = current.studentId === dto.studentId && (!dto.batchId || dto.batchId === current.batchId);
+    if (!keep && !dto.batchId) throw new BadRequestException('Select a batch');
+    const batch = keep ? null : await this.requireStudentInBatch(scope, dto.batchId!, dto.studentId);
+    // The earliest-day bound applies only when the day or the batch changes, so a typo in a
+    // note can always be fixed (even after its batch's start date was moved later).
+    const sameDay = parseDate(dto.date, 'Meeting date').getTime() === current.meetingDate.getTime();
+    const floor = batch
+      ? { day: batch.startDate, reason: 'the batch started' }
+      : sameDay
+        ? null
+        : current.batch
+          ? { day: current.batch.startDate, reason: 'the batch started' }
+          : await this.schoolFloor(scope.schoolId);
+    const dates = meetingDates(dto, floor);
     const { count } = await studentGone(() =>
       this.prisma.ptmNote.updateMany({
         where: { id, schoolId: scope.schoolId, facultyId },
@@ -113,11 +127,26 @@ export class PtmNotesService {
     return { ok: true };
   }
 
+  /**
+   * The earliest day a note whose batch was deleted can move to: the school's
+   * earliest batch start, or the day the school was set up if that is earlier
+   * (or there are no batches left).
+   */
+  private async schoolFloor(schoolId: string) {
+    const [school, batches] = await Promise.all([
+      this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { createdAt: true } }),
+      this.prisma.batch.aggregate({ where: { schoolId }, _min: { startDate: true } }),
+    ]);
+    const created = istToday(school.createdAt);
+    const earliest = batches._min.startDate;
+    return { day: earliest && earliest < created ? earliest : created, reason: "this school's records start" };
+  }
+
   /** One of the teacher's batches, and a student who is in it now. */
   private async requireStudentInBatch(scope: TeacherScope, batchId: string, studentId: string) {
     if (!scope.batchIds.includes(batchId)) throw new ForbiddenException("You aren't assigned to that batch");
     const [batch, student] = await Promise.all([
-      this.prisma.batch.findFirst({ where: { id: batchId, schoolId: scope.schoolId }, select: { id: true, name: true } }),
+      this.prisma.batch.findFirst({ where: { id: batchId, schoolId: scope.schoolId }, select: { id: true, name: true, startDate: true } }),
       this.prisma.student.findFirst({ where: { id: studentId, schoolId: scope.schoolId, batchId }, select: { id: true } }),
     ]);
     if (!batch) throw new BadRequestException('Select one of your batches');
@@ -131,10 +160,18 @@ function requireTeacher(scope: TeacherScope): string {
   return scope.facultyId;
 }
 
-/** A meeting that has happened (up to today, India), and a follow-up on or after it. */
-function meetingDates(dto: PtmNoteDto) {
+const dayLabel = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
+
+/**
+ * A meeting that has happened (up to today, India), not before the earliest
+ * day allowed (its batch's start, or for a note whose batch was deleted, when
+ * the school's records start; none when an edit keeps the day and batch), and
+ * a follow-up on or after it.
+ */
+function meetingDates(dto: PtmNoteDto, floor: { day: Date; reason: string } | null) {
   const meetingDate = parseDate(dto.date, 'Meeting date');
   if (meetingDate > istToday()) throw new BadRequestException("You can't log a meeting that hasn't happened yet");
+  if (floor && meetingDate < floor.day) throw new BadRequestException(`The meeting can't be before ${floor.reason} (${dayLabel.format(floor.day)})`);
   const followUpDate = dto.followUpDate ? parseDate(dto.followUpDate, 'Follow-up date') : null;
   if (followUpDate && followUpDate < meetingDate) throw new BadRequestException("The follow-up can't be before the meeting");
   return { meetingDate, followUpDate };

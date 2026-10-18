@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { emptyPtmForm, ptmFormOf, ptmProblem, shortDay, studentLabel, toPtmPayload, type PtmNote } from './api'
+import { removalLines } from '@/features/students/api'
 import { ptmReportPdf } from './ptmReport'
 
 const note: PtmNote = {
@@ -25,6 +26,18 @@ describe('PTM form', () => {
     expect(ptmProblem({ ...f, studentId: 'st-1', discussion: 'x', date: '2026-10-19' }, '2026-10-18')).toBe("You can't log a meeting that hasn't happened yet")
     expect(ptmProblem({ ...f, studentId: 'st-1', discussion: 'x', followUpDate: '2026-10-17' }, '2026-10-18')).toBe("The follow-up can't be before the meeting")
     expect(ptmProblem({ ...f, studentId: 'st-1', discussion: 'x', followUpDate: '2026-11-01' }, '2026-10-18')).toBeNull()
+  })
+
+  it('a note whose batch was deleted is corrected without a batch (it keeps the recorded one); a new note needs one', () => {
+    const orphan: PtmNote = { ...note, batch: { id: null, name: 'A3' } }
+    const f = { ...ptmFormOf(orphan), discussion: 'Corrected' }
+    expect(f.batchId).toBe('')
+    expect(ptmProblem(f, '2026-10-18')).toBe('Select a batch')
+    expect(ptmProblem(f, '2026-10-18', { studentId: 'st-1' })).toBeNull()
+    expect(ptmProblem({ ...f, studentId: 'st-2' }, '2026-10-18', { studentId: 'st-1' })).toBe('Select a batch')
+    expect(toPtmPayload(f).batchId).toBeNull()
+    expect(removalLines({ ptmNotes: 5, counselingSessions: 1 })).toEqual(['5 PTM notes', '1 counseling session'])
+    expect(removalLines({ ptmNotes: 0, counselingSessions: 0 })).toEqual([])
   })
 
   it('sends blank optional fields as null and round-trips a note for editing', () => {

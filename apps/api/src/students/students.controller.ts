@@ -119,6 +119,17 @@ export class StudentsController {
     return this.students.update(schoolId, auth.userId, studentId, dto);
   }
 
+  /** What deleting this student also removes (shown in the delete confirmation). */
+  @Get(':studentId/removal')
+  async removal(
+    @Auth() auth: AuthContext,
+    @Id('schoolId') schoolId: string,
+    @Id('studentId') studentId: string,
+  ) {
+    await this.access.assertAdmin(auth.userId, schoolId);
+    return this.students.removal(schoolId, studentId);
+  }
+
   @Delete(':studentId')
   async remove(
     @Auth() auth: AuthContext,

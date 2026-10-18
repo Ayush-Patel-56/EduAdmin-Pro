@@ -139,6 +139,20 @@ export class StudentsService {
     return { id: studentId };
   }
 
+  /**
+   * Records that go with the student when they're deleted: faculty's PTM notes
+   * and counseling sessions about them (the delete confirmation names them).
+   */
+  async removal(schoolId: string, studentId: string) {
+    const student = await this.prisma.student.findFirst({ where: { id: studentId, schoolId }, select: { id: true } });
+    if (!student) throw new NotFoundException('Student not found');
+    const [ptmNotes, counselingSessions] = await Promise.all([
+      this.prisma.ptmNote.count({ where: { schoolId, studentId } }),
+      this.prisma.counselingSession.count({ where: { schoolId, studentId } }),
+    ]);
+    return { ptmNotes, counselingSessions };
+  }
+
   /** Removes the student with their guardians and batch history. */
   async remove(schoolId: string, studentId: string) {
     const student = await this.prisma.$transaction(async (tx) => {
