@@ -18,12 +18,11 @@ import {
   type TestQuery,
   type TestStatusDto,
 } from './assessments.dto.js';
-import { averagePercent, classStats, gradeAnswer, type GradedAnswer, PASS_PERCENT, type PaperQuestion, percentOf, phaseOf, rankAndPercentile, totalsOf } from './scoring.js';
+import { averagePercent, classStats, gradeAnswer, type GradedAnswer, PASS_PERCENT, type PaperQuestion, percentOf, phaseOf, rankAndPercentile, type TestPhase, totalsOf } from './scoring.js';
 
 const PAGE_SIZE = 20;
-/** Lists derive Scheduled / Ongoing / Completed from the clock, so they read at most this many matching tests. */
-export const TEST_SCAN_LIMIT = 1000;
 const DAY = 86_400_000;
+const STUDENTS_CHANGED = "Some students aren't in this test's batch. Refresh and try again.";
 const TX = { timeout: 60_000, maxWait: 10_000 };
 
 const testInclude = {
@@ -93,20 +92,22 @@ export class TestsService {
           { batch: { name: { contains: likeEscape(query.q.trim()), mode: 'insensitive' as const } } },
         ],
       }),
-      ...(query.status === 'CANCELLED' && { status: 'CANCELLED' }),
-      ...(query.status && query.status !== 'CANCELLED' && { status: 'SCHEDULED' }),
     };
-    const rows = await this.prisma.test.findMany({ where, include: testInclude, orderBy: [{ startsAt: query.from ? 'asc' : 'desc' }, { id: 'asc' }], take: TEST_SCAN_LIMIT });
     const now = new Date();
-    const matching = query.status ? rows.filter((t) => phaseOf(t, now) === query.status) : rows;
+    if (query.status) Object.assign(where, phaseWhere(query.status, now));
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? PAGE_SIZE;
-    return { total: matching.length, page, pageSize, items: matching.slice((page - 1) * pageSize, page * pageSize).map((t) => toTest(t, now)) };
+    const [total, rows] = await Promise.all([
+      this.prisma.test.count({ where }),
+      this.prisma.test.findMany({ where, include: testInclude, orderBy: [{ startsAt: query.from ? 'asc' : 'desc' }, { id: 'asc' }], skip: (page - 1) * pageSize, take: pageSize }),
+    ]);
+    return { total, page, pageSize, items: rows.map((t) => toTest(t, now)) };
   }
 
   async create(actor: Actor, dto: TestDto) {
     const facultyId = activeFacultyId(actor);
     await this.requireBatch(actor, dto.batchId);
+    const startsAt = testStart(dto, null);
     const row = await this.prisma.test.create({
       data: {
         schoolId: actor.schoolId,
@@ -114,7 +115,8 @@ export class TestsService {
         type: dto.type,
         subject: dto.subject,
         batchId: dto.batchId,
-        startsAt: istInstant(dto.date, dto.time, 'Test date'),
+        startsAt,
+        endsAt: endOf(startsAt, dto.durationMinutes),
         durationMinutes: dto.durationMinutes,
         totalMarks: dto.totalMarks,
         facultyId,
@@ -128,15 +130,19 @@ export class TestsService {
 
   /**
    * Edits a test. Once results are recorded it stays with its batch (they are
-   * that batch's results) and its total can't drop below a recorded score.
+   * that batch's results), it can't move to a time still to come (it was
+   * held), and its total can't drop below a recorded score.
    */
   async update(actor: Actor, id: string, dto: TestDto) {
     await this.requireBatch(actor, dto.batchId);
     return this.prisma.$transaction(async (tx) => {
       const test = await this.lockOwned(tx, actor, id);
-      if (test.batchId !== dto.batchId || test.totalMarks > dto.totalMarks) {
+      const startsAt = testStart(dto, test.startsAt);
+      const later = startsAt > new Date() && startsAt.getTime() !== test.startsAt.getTime();
+      if (test.batchId !== dto.batchId || test.totalMarks > dto.totalMarks || later) {
         const recorded = await tx.testResult.aggregate({ where: { testId: id, schoolId: actor.schoolId }, _count: { _all: true }, _max: { marks: true } });
         if (recorded._count._all && test.batchId !== dto.batchId) throw new ConflictException("Results are recorded for this test, so it can't move to another batch");
+        if (recorded._count._all && later) throw new ConflictException("Results are recorded for this test, so it can't move to a time still to come");
         const best = num(recorded._max.marks);
         if (best !== null && best > dto.totalMarks) throw new ConflictException(`A student scored ${best}, so total marks can't be less than that`);
       }
@@ -147,7 +153,8 @@ export class TestsService {
           type: dto.type,
           subject: dto.subject,
           batchId: dto.batchId,
-          startsAt: istInstant(dto.date, dto.time, 'Test date'),
+          startsAt,
+          endsAt: endOf(startsAt, dto.durationMinutes),
           durationMinutes: dto.durationMinutes,
           totalMarks: dto.totalMarks,
         },
@@ -213,7 +220,7 @@ export class TestsService {
       }
       const fresh = dto.questionIds.filter((qid) => !onPaper.has(qid));
       const bank = fresh.length ? await tx.question.findMany({ where: { id: { in: fresh }, schoolId: actor.schoolId } }) : [];
-      if (bank.length !== fresh.length) throw new BadRequestException('Some questions are no longer in the bank. Refresh and choose again.');
+      if (bank.length !== fresh.length) throw new BadRequestException('The paper or the question bank changed since you opened it. Refresh and choose again.');
       const byId = new Map(bank.map((q) => [q.id, q]));
       const picked = dto.questionIds.map((qid) => {
         const kept = onPaper.get(qid);
@@ -268,44 +275,54 @@ export class TestsService {
     activeFacultyId(actor);
     const found = await this.find(actor, id);
     const grader = await actorName(this.prisma, actor);
-    return this.prisma.$transaction(async (tx) => {
-      // The batch first (shared), as deleting a batch locks it before counting
-      // results: a batch delete and a save queue instead of losing results.
-      await tx.$queryRaw`SELECT 1 FROM "Batch" WHERE "id" = ${found.batchId} AND "schoolId" = ${actor.schoolId} FOR SHARE`;
-      const test = await lockTest(tx, actor.schoolId, id);
-      if (test.status === 'CANCELLED') throw new ConflictException('This test is cancelled. Restore it before entering results.');
-      if (test.startsAt > new Date()) throw new BadRequestException("This test hasn't started yet");
-      const ids = dto.results.map((r) => r.studentId);
-      if (new Set(ids).size !== ids.length) throw new BadRequestException('Each student can be graded only once');
-      const [roster, paper] = await Promise.all([this.roster(tx, actor.schoolId, test.id, test.batchId), tx.testQuestion.findMany({ where: { testId: id, schoolId: actor.schoolId }, orderBy: { position: 'asc' } })]);
-      const students = new Map(roster.map((s) => [s.id, s]));
-      const prepared = dto.results.map((r) => {
-        const student = students.get(r.studentId);
-        if (!student) throw new BadRequestException("Some students aren't in this test's batch. Refresh and try again.");
-        try {
-          return { studentId: r.studentId, ...prepareResult(r, paper.map(toScoring), test.totalMarks) };
-        } catch (err) {
-          throw new BadRequestException(`${student.fullName}${student.rollNumber ? ` (${student.rollNumber})` : ''}: ${err instanceof Error ? err.message : 'invalid result'}`);
-        }
-      });
-      for (const p of prepared) {
-        const data = { present: p.present, marks: p.marks, correct: p.correct, incorrect: p.incorrect, unattempted: p.unattempted, remarks: p.remarks, gradedById: actor.userId, gradedBy: grader };
-        const row = await tx.testResult.upsert({
-          where: { testId_studentId: { testId: id, studentId: p.studentId } },
-          create: { schoolId: actor.schoolId, testId: id, studentId: p.studentId, ...data },
-          update: data,
-          select: { id: true },
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // The batch first (shared), as deleting a batch locks it before counting
+        // results: a batch delete and a save queue instead of losing results.
+        await tx.$queryRaw`SELECT 1 FROM "Batch" WHERE "id" = ${found.batchId} AND "schoolId" = ${actor.schoolId} FOR SHARE`;
+        const test = await lockTest(tx, actor.schoolId, id);
+        if (test.status === 'CANCELLED') throw new ConflictException('This test is cancelled. Restore it before entering results.');
+        if (test.startsAt > new Date()) throw new BadRequestException("This test hasn't started yet");
+        const ids = dto.results.map((r) => r.studentId);
+        if (new Set(ids).size !== ids.length) throw new BadRequestException('Each student can be graded only once');
+        // The students too (shared): deleting a student locks it before counting
+        // its results, so a delete running now waits and then refuses (409)
+        // instead of the save failing on a student that just went.
+        if (ids.length) await tx.$queryRaw`SELECT 1 FROM "Student" WHERE "id" IN (${Prisma.join(ids)}) AND "schoolId" = ${actor.schoolId} FOR SHARE`;
+        const [roster, paper] = await Promise.all([this.roster(tx, actor.schoolId, test.id, test.batchId), tx.testQuestion.findMany({ where: { testId: id, schoolId: actor.schoolId }, orderBy: { position: 'asc' } })]);
+        const students = new Map(roster.map((s) => [s.id, s]));
+        const prepared = dto.results.map((r) => {
+          const student = students.get(r.studentId);
+          if (!student) throw new BadRequestException(STUDENTS_CHANGED);
+          try {
+            return { studentId: r.studentId, ...prepareResult(r, paper.map(toScoring), test.totalMarks) };
+          } catch (err) {
+            throw new BadRequestException(`${student.fullName}${student.rollNumber ? ` (${student.rollNumber})` : ''}: ${err instanceof Error ? err.message : 'invalid result'}`);
+          }
         });
-        await tx.testAnswer.deleteMany({ where: { resultId: row.id, schoolId: actor.schoolId } });
-        if (p.answers.length) {
-          await tx.testAnswer.createMany({
-            data: p.answers.map((a) => ({ schoolId: actor.schoolId, resultId: row.id, testQuestionId: a.testQuestionId, response: a.response, outcome: a.outcome, marksAwarded: a.marksAwarded })),
+        for (const p of prepared) {
+          const data = { present: p.present, marks: p.marks, correct: p.correct, incorrect: p.incorrect, unattempted: p.unattempted, remarks: p.remarks, gradedById: actor.userId, gradedBy: grader };
+          const row = await tx.testResult.upsert({
+            where: { testId_studentId: { testId: id, studentId: p.studentId } },
+            create: { schoolId: actor.schoolId, testId: id, studentId: p.studentId, ...data },
+            update: data,
+            select: { id: true },
           });
+          await tx.testAnswer.deleteMany({ where: { resultId: row.id, schoolId: actor.schoolId } });
+          if (p.answers.length) {
+            await tx.testAnswer.createMany({
+              data: p.answers.map((a) => ({ schoolId: actor.schoolId, resultId: row.id, testQuestionId: a.testQuestionId, response: a.response, outcome: a.outcome, marksAwarded: a.marksAwarded })),
+            });
+          }
         }
-      }
-      const full = await tx.test.findUniqueOrThrow({ where: { id }, include: testInclude });
-      return this.resultsView(tx, actor, full);
-    }, TX);
+        const full = await tx.test.findUniqueOrThrow({ where: { id }, include: testInclude });
+        return this.resultsView(tx, actor, full);
+      }, TX);
+    } catch (err) {
+      // A student removed by another request mid-save (the locks make this rare).
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') throw new BadRequestException(STUDENTS_CHANGED);
+      throw err;
+    }
   }
 
   /** Removes one student's result (it was entered by mistake). */
@@ -324,17 +341,17 @@ export class TestsService {
     const now = new Date();
     const weekStart = istWeekStart(now);
     const weekEnd = new Date(weekStart.getTime() + 7 * DAY);
-    const [week, totalQuestions, [avg], ended, mocks] = await Promise.all([
+    const [week, totalQuestions, [avg], completed, mocks] = await Promise.all([
       this.prisma.test.findMany({ where: { schoolId, startsAt: { gte: weekStart, lt: weekEnd } }, include: testInclude, orderBy: [{ startsAt: 'asc' }, { id: 'asc' }] }),
       this.prisma.question.count({ where: { schoolId } }),
       this.prisma.$queryRaw<{ average: number | null }[]>`
         SELECT round(avg(r."marks" / t."totalMarks" * 100), 2)::float AS "average"
         FROM "TestResult" r JOIN "Test" t ON t."id" = r."testId" AND t."schoolId" = r."schoolId"
         WHERE r."schoolId" = ${schoolId} AND r."present" AND t."status" = 'SCHEDULED'`,
-      // Tests that have started (ended ones are picked below), with their result counts.
+      // Tests that ended in the last year, with their result counts.
       this.prisma.test.findMany({
-        where: { schoolId, status: 'SCHEDULED', startsAt: { lt: now, gte: new Date(now.getTime() - 365 * DAY) } },
-        select: { id: true, batchId: true, startsAt: true, durationMinutes: true, status: true, _count: { select: { results: true } } },
+        where: { schoolId, ...phaseWhere('COMPLETED', now), endsAt: { lte: now, gte: new Date(now.getTime() - 365 * DAY) } },
+        select: { id: true, batchId: true, _count: { select: { results: true } } },
       }),
       this.prisma.test.findMany({
         where: { schoolId, status: 'SCHEDULED', type: 'MOCK', startsAt: { lt: now }, results: { some: { present: true } } },
@@ -344,7 +361,6 @@ export class TestsService {
       }),
     ]);
     // Pending grading: ended tests where fewer students have a result than the batch has active students.
-    const completed = ended.filter((t) => phaseOf(t, now) === 'COMPLETED');
     const rosters = completed.length
       ? await this.prisma.student.groupBy({ by: ['batchId'], where: { schoolId, status: 'ACTIVE', batchId: { in: [...new Set(completed.map((t) => t.batchId))] } }, _count: { _all: true } })
       : [];
@@ -493,6 +509,25 @@ async function lockTest(tx: Prisma.TransactionClient, schoolId: string, id: stri
     SELECT "id", "batchId", "facultyId", "status"::text AS "status", "startsAt", "totalMarks" FROM "Test" WHERE "id" = ${id} AND "schoolId" = ${schoolId} FOR UPDATE`;
   if (!row) throw new NotFoundException('Test not found');
   return row;
+}
+
+/** When a test with this start and length ends. */
+const endOf = (startsAt: Date, minutes: number) => new Date(startsAt.getTime() + minutes * 60_000);
+
+/** Tests are scheduled within a year either side of today; an edit may keep an older time as it is. */
+function testStart(dto: TestDto, current: Date | null): Date {
+  const startsAt = istInstant(dto.date, dto.time, 'Test date');
+  if (current && startsAt.getTime() === current.getTime()) return startsAt;
+  if (Math.abs(startsAt.getTime() - Date.now()) > 366 * DAY) throw new BadRequestException('Pick a test date within a year of today');
+  return startsAt;
+}
+
+/** The tests in a phase, in the database: Ongoing and Completed follow from the clock (as in phaseOf). */
+export function phaseWhere(phase: TestPhase, now: Date): Prisma.TestWhereInput {
+  if (phase === 'CANCELLED') return { status: 'CANCELLED' };
+  if (phase === 'SCHEDULED') return { status: 'SCHEDULED', startsAt: { gt: now } };
+  if (phase === 'ONGOING') return { status: 'SCHEDULED', startsAt: { lte: now }, endsAt: { gt: now } };
+  return { status: 'SCHEDULED', endsAt: { lte: now } };
 }
 
 /** Tests starting on the days from..to, in India (both inclusive). */

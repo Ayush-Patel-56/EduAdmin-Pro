@@ -1,10 +1,11 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
+import { Prisma } from '../generated/prisma/client.js';
 import { validate } from 'class-validator';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { Actor } from './actor.js';
-import { QuestionDto } from './assessments.dto.js';
+import { PaperDto, QuestionDto, ResultInput } from './assessments.dto.js';
 import { QuestionsService, shapeAnswer } from './questions.service.js';
 
 const scope = (over: Partial<TeacherScope> = {}): TeacherScope => ({ schoolId: 'school-1', facultyId: 'fac-1', batchIds: ['b1'], programIds: [], active: true, ...over });
@@ -28,6 +29,10 @@ const dto = (over: Partial<QuestionDto> = {}) =>
 
 function build() {
   const prisma = {
+    // Import: the bank's matching texts (lower case), and the per-school import lock.
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    $executeRaw: vi.fn().mockResolvedValue(1),
+    $transaction: vi.fn((fn: (t: unknown) => unknown) => fn(prisma)),
     question: {
       count: vi.fn().mockResolvedValue(0),
       findMany: vi.fn().mockResolvedValue([]),
@@ -162,7 +167,7 @@ describe('QuestionsService: PDF upload', () => {
 
   it('reports each problem question, one already in the bank, and one repeated in the file', async () => {
     const { service, prisma } = build();
-    prisma.question.findMany.mockResolvedValueOnce([{ text: 'Old question?' }]);
+    prisma.$queryRaw.mockResolvedValueOnce([{ text: 'old question?' }]);
     const text = pdf(
       [
         '1. Old question?\n(A) a\n(B) b\n(C) c\n(D) d',
@@ -181,7 +186,26 @@ describe('QuestionsService: PDF upload', () => {
       [4, 'create', ''],
       [5, 'error', 'Same as question 4 in this file'],
     ]);
-    expect(prisma.question.findMany.mock.calls[0][0].where).toMatchObject({ schoolId: 'school-1', subject: 'Physics' });
+    // Checked against the bank in any letter case, for this school and subject.
+    const call = prisma.$queryRaw.mock.calls[0];
+    expect((call[0] as string[]).join('?')).toMatch(/lower\("text"\) IN/);
+    expect(call.slice(1, 3)).toEqual(['school-1', 'Physics']);
+  });
+
+  it('"speed OF light?" counts as already in the bank next to "Speed of light?"; confirming re-checks under a per-school lock', async () => {
+    const { service, prisma } = build();
+    const text = pdf('1. speed OF light?\n(A) a\n(B) b\n(C) c\n(D) d\n\n2. Fresh one?\n(A) a\n(B) b\n(C) c\n(D) d\n\nANSWER KEY\n1. A\n2. B');
+    prisma.$queryRaw.mockResolvedValueOnce([{ text: 'speed of light?' }]);
+    const preview = await service.import(admin, { text, dryRun: true });
+    expect(preview.rows.map((r) => r.errors[0] ?? 'ok')).toEqual(['Already in the question bank', 'ok']);
+    expect(prisma.$queryRaw.mock.calls[0].at(-1)).toEqual(Prisma.join(['speed of light?', 'fresh one?']));
+    // Confirm: lock, then check again (another import may have added "Fresh one?" meanwhile), then add.
+    prisma.$queryRaw.mockResolvedValueOnce([{ text: 'speed of light?' }, { text: 'fresh one?' }]);
+    await expect(service.import(admin, { text, dryRun: false })).resolves.toMatchObject({ applied: true, created: 0, skipped: 2 });
+    expect((prisma.$executeRaw.mock.calls[0][0] as string[]).join('?')).toContain('pg_advisory_xact_lock');
+    expect(prisma.$executeRaw.mock.calls[0][1]).toBe('question-import:school-1');
+    expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.$queryRaw.mock.invocationCallOrder[1]);
+    expect(prisma.question.createMany).not.toHaveBeenCalled();
   });
 
   it('refuses a header it can’t use, naming each problem', async () => {
@@ -190,6 +214,17 @@ describe('QuestionsService: PDF upload', () => {
       'The header block has problems: Subject must be one of Physics, Chemistry, Mathematics, Biology, Botany, Zoology; Difficulty must be Easy, Medium or Hard; Type must be MCQ, Numerical, Integer or Subjective; Marks must be a whole number from 1 to 100; Negative Marks must be 0 to -9.',
     );
     await expect(service.import(admin, { text: 'Some text without a header', dryRun: true })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('paper and result limits', () => {
+  it('a paper has at most 200 questions; marks have at most 2 decimals', async () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `6f2c1d1e-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    expect(await validate(plainToInstance(PaperDto, { questionIds: ids(200) }))).toEqual([]);
+    expect((await validate(plainToInstance(PaperDto, { questionIds: ids(201) })))[0].constraints).toEqual({ arrayMaxSize: 'A paper can have at most 200 questions' });
+    const result = (marks: number) => plainToInstance(ResultInput, { studentId: '6f2c1d1e-0000-4000-8000-000000000001', present: true, marks });
+    expect(await validate(result(12.25))).toEqual([]);
+    expect((await validate(result(12.255)))[0].property).toBe('marks');
   });
 });
 

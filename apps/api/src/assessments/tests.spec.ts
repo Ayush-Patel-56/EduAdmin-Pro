@@ -4,7 +4,8 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import type { Actor } from './actor.js';
 import type { TestDto } from './assessments.dto.js';
 import type { PaperQuestion } from './scoring.js';
-import { prepareResult, TEST_SCAN_LIMIT, TestsService } from './tests.service.js';
+import { Prisma } from '../generated/prisma/client.js';
+import { phaseWhere, prepareResult, TestsService } from './tests.service.js';
 
 const scope = (over: Partial<TeacherScope> = {}): TeacherScope => ({ schoolId: 'school-1', facultyId: 'fac-1', batchIds: ['b1'], programIds: [], active: true, ...over });
 const teacher = (over: Partial<TeacherScope> = {}): Actor => ({ kind: 'TEACHER', schoolId: 'school-1', userId: 'u-t', scope: scope(over) });
@@ -48,6 +49,10 @@ const paperRow = (id: string, over: Record<string, unknown> = {}) => ({
 });
 const sql = (call: unknown[]) => (call[0] as string[]).join('?');
 
+// Today is 18 Oct 2026, 11:30 IST, for every test here (test dates are bounded to a year around today).
+beforeEach(() => vi.useFakeTimers({ now: new Date('2026-10-18T06:00:00Z'), toFake: ['Date'] }));
+afterEach(() => vi.useRealTimers());
+
 function build() {
   const tx = {
     $queryRaw: vi.fn().mockResolvedValue(locked()),
@@ -71,7 +76,7 @@ function build() {
     faculty: { findMany: vi.fn().mockResolvedValue([]), findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }) },
     program: { findMany: vi.fn().mockResolvedValue([]) },
     user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ fullName: 'Principal Mehta' }) },
-    test: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(row()), create: vi.fn().mockResolvedValue({ id: 't1' }) },
+    test: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(row()), create: vi.fn().mockResolvedValue({ id: 't1' }) },
     question: { count: vi.fn().mockResolvedValue(0) },
     testQuestion: { findMany: vi.fn().mockResolvedValue([]) },
     testAnswer: { count: vi.fn().mockResolvedValue(0) },
@@ -92,6 +97,7 @@ describe('TestsService: scheduling', () => {
       subject: 'Physics',
       batchId: 'b1',
       startsAt: new Date('2026-10-20T04:30:00Z'),
+      endsAt: new Date('2026-10-20T07:30:00Z'),
       durationMinutes: 180,
       totalMarks: 300,
       facultyId: 'fac-1',
@@ -103,6 +109,16 @@ describe('TestsService: scheduling', () => {
     prisma.batch.findFirst.mockResolvedValueOnce(null);
     await expect(service.create(admin, testDto({ batchId: 'other-school' }))).rejects.toEqual(new BadRequestException('Select a batch of this school'));
     expect(prisma.batch.findFirst.mock.calls.at(-1)?.[0].where).toEqual({ id: 'other-school', schoolId: 'school-1' });
+  });
+
+  it('a test date is within a year of today; an edit can keep an older time as it is', async () => {
+    const { service, tx } = build();
+    await expect(service.create(admin, testDto({ date: '1990-01-01' }))).rejects.toEqual(new BadRequestException('Pick a test date within a year of today'));
+    await expect(service.create(admin, testDto({ date: '2099-12-31' }))).rejects.toThrow('within a year of today');
+    await expect(service.create(admin, testDto({ date: '2027-10-15' }))).resolves.toEqual({ id: 't1' });
+    tx.$queryRaw.mockResolvedValueOnce(locked({ startsAt: new Date('2025-06-02T04:30:00Z') }));
+    await expect(service.update(admin, 't1', testDto({ date: '2025-06-02', title: 'Renamed' }))).resolves.toEqual({ id: 't1' });
+    expect(tx.test.update.mock.calls[0][0].data).toMatchObject({ startsAt: new Date('2025-06-02T04:30:00Z'), endsAt: new Date('2025-06-02T07:30:00Z') });
   });
 
   it('admins schedule for any batch of the school, with no faculty', async () => {
@@ -136,9 +152,10 @@ describe('TestsService: scheduling', () => {
   it('with results recorded: stays with its batch, total not below the best score, and is cancelled rather than deleted', async () => {
     const { service, tx } = build();
     tx.testResult.aggregate.mockResolvedValue({ _count: { _all: 3 }, _max: { marks: { toString: () => '212.5', valueOf: () => 212.5 } } });
-    await expect(service.update(admin, 't1', testDto({ batchId: 'b2' }))).rejects.toEqual(new ConflictException("Results are recorded for this test, so it can't move to another batch"));
-    await expect(service.update(admin, 't1', testDto({ totalMarks: 200 }))).rejects.toThrow("A student scored 212.5, so total marks can't be less than that");
-    await service.update(admin, 't1', testDto({ totalMarks: 250, title: 'Mock 1 (revised)' }));
+    await expect(service.update(admin, 't1', testDto({ batchId: 'b2', date: '2026-10-17' }))).rejects.toEqual(new ConflictException("Results are recorded for this test, so it can't move to another batch"));
+    await expect(service.update(admin, 't1', testDto({ totalMarks: 200, date: '2026-10-17' }))).rejects.toThrow("A student scored 212.5, so total marks can't be less than that");
+    await expect(service.update(admin, 't1', testDto({ date: '2026-12-01', totalMarks: 300 }))).rejects.toEqual(new ConflictException("Results are recorded for this test, so it can't move to a time still to come"));
+    await service.update(admin, 't1', testDto({ date: '2026-10-17', totalMarks: 250, title: 'Mock 1 (revised)' }));
     expect(tx.test.update.mock.calls[0][0]).toMatchObject({ where: { id: 't1' }, data: { totalMarks: 250, title: 'Mock 1 (revised)' } });
     tx.testResult.count.mockResolvedValueOnce(1);
     await expect(service.remove(admin, 't1')).rejects.toThrow('1 result is recorded for this test. Cancel it instead.');
@@ -154,33 +171,35 @@ describe('TestsService: lists', () => {
     const where = prisma.test.findMany.mock.calls[0][0].where;
     expect(where).toMatchObject({ schoolId: 'school-1', batchId: { in: ['b1'] }, type: 'UNIT_TEST', startsAt: { gte: new Date('2026-10-18T18:30:00Z'), lt: new Date('2026-10-25T18:30:00Z') } });
     expect(where.OR[0]).toEqual({ title: { contains: '100\\%', mode: 'insensitive' } });
-    expect(prisma.test.findMany.mock.calls[0][0]).toMatchObject({ orderBy: [{ startsAt: 'asc' }, { id: 'asc' }], take: TEST_SCAN_LIMIT });
+    expect(prisma.test.findMany.mock.calls[0][0]).toMatchObject({ orderBy: [{ startsAt: 'asc' }, { id: 'asc' }], skip: 0, take: 20 });
+    expect(prisma.test.count.mock.calls[0][0].where).toEqual(where);
     await service.list(admin, { author: 'admin', programId: 'p1' });
     expect(prisma.test.findMany.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', facultyId: null, batch: { programId: 'p1' } });
     await expect(service.list(admin, { from: '2026-10-25', to: '2026-10-19' })).rejects.toThrow("To can't be before from");
   });
 
-  it('the status filter reads the clock: Scheduled, Ongoing and Completed are worked out, then paged', async () => {
-    vi.useFakeTimers({ now: new Date('2026-10-18T06:00:00Z') });
-    try {
-      const { service, prisma } = build();
-      prisma.test.findMany.mockResolvedValue([
-        row({ id: 'later', startsAt: new Date('2026-10-19T04:30:00Z') }),
-        row({ id: 'now', startsAt: new Date('2026-10-18T04:30:00Z') }),
-        row({ id: 'done1', startsAt: new Date('2026-10-17T04:30:00Z') }),
-        row({ id: 'done2', startsAt: new Date('2026-10-16T04:30:00Z') }),
-      ]);
-      const done = await service.list(admin, { status: 'COMPLETED', pageSize: 1, page: 2 });
-      expect(prisma.test.findMany.mock.calls[0][0].where.status).toBe('SCHEDULED');
-      expect(done).toMatchObject({ total: 2, page: 2, pageSize: 1 });
-      expect(done.items.map((t) => [t.id, t.phase])).toEqual([['done2', 'COMPLETED']]);
-      const ongoing = await service.list(admin, { status: 'ONGOING' });
-      expect(ongoing.items[0]).toMatchObject({ id: 'now', phase: 'ONGOING', date: '2026-10-18', time: '10:00', program: { id: 'p1', name: 'JEE' }, faculty: { id: 'fac-1', name: 'Ayush' } });
-      await service.list(admin, { status: 'CANCELLED' });
-      expect(prisma.test.findMany.mock.calls[2][0].where.status).toBe('CANCELLED');
-    } finally {
-      vi.useRealTimers();
-    }
+  it('the status filter is in the database, so totals and later pages are right past 1,000 tests', async () => {
+    const { service, prisma } = build();
+    prisma.test.count.mockResolvedValue(1100);
+    prisma.test.findMany.mockResolvedValue([row({ id: 'done', startsAt: new Date('2025-11-01T04:30:00Z') })]);
+    const done = await service.list(admin, { status: 'COMPLETED', page: 6, pageSize: 200 });
+    expect(done).toMatchObject({ total: 1100, page: 6, pageSize: 200 });
+    expect(done.items.map((t) => [t.id, t.phase])).toEqual([['done', 'COMPLETED']]);
+    const call = prisma.test.findMany.mock.calls[0][0];
+    expect(call).toMatchObject({ skip: 1000, take: 200 });
+    expect(call.where).toMatchObject({ schoolId: 'school-1', status: 'SCHEDULED', endsAt: { lte: new Date() } });
+    expect(prisma.test.count.mock.calls[0][0].where).toEqual(call.where);
+    const unfiltered = await service.list(admin, { page: 6, pageSize: 200 });
+    expect(unfiltered.total).toBe(1100);
+    expect(prisma.test.findMany.mock.calls[1][0]).toMatchObject({ where: { schoolId: 'school-1' }, skip: 1000, take: 200 });
+  });
+
+  it('each phase, as the clock sees it (the same boundaries as phaseOf)', () => {
+    const now = new Date('2026-10-18T06:00:00Z');
+    expect(phaseWhere('SCHEDULED', now)).toEqual({ status: 'SCHEDULED', startsAt: { gt: now } });
+    expect(phaseWhere('ONGOING', now)).toEqual({ status: 'SCHEDULED', startsAt: { lte: now }, endsAt: { gt: now } });
+    expect(phaseWhere('COMPLETED', now)).toEqual({ status: 'SCHEDULED', endsAt: { lte: now } });
+    expect(phaseWhere('CANCELLED', now)).toEqual({ status: 'CANCELLED' });
   });
 });
 
@@ -215,7 +234,7 @@ describe('TestsService: paper', () => {
 
   it('refuses questions gone from the bank, and any change once answers are recorded', async () => {
     const { service, tx } = build();
-    await expect(service.setPaper(admin, 't1', { questionIds: ['gone'] })).rejects.toThrow('Some questions are no longer in the bank');
+    await expect(service.setPaper(admin, 't1', { questionIds: ['gone'] })).rejects.toThrow('The paper or the question bank changed since you opened it. Refresh and choose again.');
     tx.testAnswer.count.mockResolvedValueOnce(5);
     await expect(service.setPaper(admin, 't1', { questionIds: [] })).rejects.toEqual(new ConflictException("Answers are recorded against this paper, so it can't change"));
     expect(tx.testQuestion.deleteMany).not.toHaveBeenCalled();
@@ -296,6 +315,10 @@ describe('TestsService: results', () => {
     expect(sql(tx.$queryRaw.mock.calls[0])).toMatch(/FROM "Batch".*FOR SHARE/);
     expect(tx.$queryRaw.mock.calls[0].slice(1)).toEqual(['b1', 'school-1']);
     expect(sql(tx.$queryRaw.mock.calls[1])).toMatch(/FROM "Test".*FOR UPDATE/);
+    // Then the students being graded (shared), so a student delete waits and refuses rather than racing the save.
+    expect(sql(tx.$queryRaw.mock.calls[2])).toMatch(/FROM "Student".*FOR SHARE/);
+    expect(tx.$queryRaw.mock.calls[2][1]).toEqual(Prisma.join(['s1', 's2']));
+    expect(tx.$queryRaw.mock.invocationCallOrder[2]).toBeLessThan(tx.student.findMany.mock.invocationCallOrder[0]);
     expect(tx.student.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', OR: [{ batchId: 'b1', status: 'ACTIVE' }, { testResults: { some: { testId: 't1' } } }] });
     expect(tx.testResult.upsert.mock.calls[0][0]).toMatchObject({
       where: { testId_studentId: { testId: 't1', studentId: 's1' } },
@@ -322,6 +345,19 @@ describe('TestsService: results', () => {
     await expect(save([{ studentId: 'stranger', present: false }])).rejects.toThrow("Some students aren't in this test's batch");
     await expect(save([{ studentId: 's2', present: true, marks: 400 }])).rejects.toEqual(new BadRequestException('Diya Rao (02): Marks must be within 300'));
     expect(tx.testResult.upsert).not.toHaveBeenCalled();
+  });
+
+  it('a student deleted at the same moment is a 400 asking to refresh, not a 500', async () => {
+    const { service, prisma, tx } = build();
+    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce(locked());
+    tx.student.findMany.mockResolvedValue(roster);
+    tx.testResult.upsert.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated on the constraint: TestResult_studentId_schoolId_fkey', { code: 'P2003', clientVersion: 'test' }));
+    await expect(service.saveResults(admin, 't1', { results: [{ studentId: 's1', present: false }] } as never)).rejects.toEqual(
+      new BadRequestException("Some students aren't in this test's batch. Refresh and try again."),
+    );
+    // Anything else still surfaces as it is.
+    prisma.$transaction.mockRejectedValueOnce(new Error('connection lost'));
+    await expect(service.saveResults(admin, 't1', { results: [] })).rejects.toThrow('connection lost');
   });
 
   it('an inactive teacher can’t grade; clearing a result is scoped to the test and school', async () => {
@@ -351,15 +387,13 @@ describe('TestsService: results', () => {
 
 describe('TestsService: admin overview', () => {
   it('KPIs: this week’s scheduled tests, the bank’s size, the average score (null without data) and ended tests still to grade', async () => {
-    vi.useFakeTimers({ now: new Date('2026-10-18T06:00:00Z') });
-    try {
+    {
       const { service, prisma } = build();
       prisma.test.findMany
         .mockResolvedValueOnce([row({ id: 'w1' }), row({ id: 'w2', status: 'CANCELLED' })])
         .mockResolvedValueOnce([
-          { id: 'e1', batchId: 'b1', startsAt: new Date('2026-10-17T04:30:00Z'), durationMinutes: 180, status: 'SCHEDULED', _count: { results: 1 } },
-          { id: 'e2', batchId: 'b2', startsAt: new Date('2026-10-16T04:30:00Z'), durationMinutes: 180, status: 'SCHEDULED', _count: { results: 5 } },
-          { id: 'running', batchId: 'b1', startsAt: new Date('2026-10-18T05:00:00Z'), durationMinutes: 180, status: 'SCHEDULED', _count: { results: 0 } },
+          { id: 'e1', batchId: 'b1', _count: { results: 1 } },
+          { id: 'e2', batchId: 'b2', _count: { results: 5 } },
         ])
         .mockResolvedValueOnce([
           { id: 'm2', title: 'Mock 2', batchId: 'b1', totalMarks: 300, startsAt: new Date('2026-10-15T04:30:00Z'), batch: { name: 'JEE A' }, results: [{ marks: 150 }, { marks: 210 }] },
@@ -378,9 +412,13 @@ describe('TestsService: admin overview', () => {
       expect(out.week.from).toBe('2026-10-12');
       expect(prisma.student.groupBy.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', status: 'ACTIVE', batchId: { in: ['b1', 'b2'] } });
       expect(out.batchAverages).toEqual([{ batch: { id: 'b1', name: 'JEE A' }, test: { id: 'm2', title: 'Mock 2', date: '2026-10-15' }, averagePercent: 60, students: 2 }]);
-      expect(sql(prisma.$queryRaw.mock.calls[0])).toContain('r."present"');
-    } finally {
-      vi.useRealTimers();
+      // Ended tests (in the database), from the last year.
+      expect(prisma.test.findMany.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', status: 'SCHEDULED', endsAt: { lte: new Date(), gte: new Date('2025-10-18T06:00:00Z') } });
+      // Avg Score: this school's results only, of students present, on tests not cancelled.
+      const avg = sql(prisma.$queryRaw.mock.calls[0]);
+      expect(avg).toContain('r."present"');
+      expect(avg).toMatch(/WHERE r\."schoolId" = \?/);
+      expect(prisma.$queryRaw.mock.calls[0].slice(1)).toEqual(['school-1']);
     }
   });
 

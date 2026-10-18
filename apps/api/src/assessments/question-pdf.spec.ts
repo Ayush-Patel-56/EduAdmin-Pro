@@ -38,6 +38,24 @@ describe('question PDF text', () => {
     expect(out.questions).toEqual([{ number: 1, text: 'How long does the fall take?', options: [], answer: '4 seconds' }]);
   });
 
+  it('"(A)" and "(B)" inside the question text stay in it, with options on the next line or the same line', () => {
+    const head = 'Subject: Physics\nTopic: Grammar\nDifficulty: Easy\nType: MCQ\n\n';
+    const nextLine = parseQuestionPdf(`${head}1. Which of these is (A) a noun or (B) a verb?\n(A) run (B) dog (C) blue (D) fast\n\nANSWER KEY\n1. B`);
+    expect(nextLine.questions[0]).toEqual({ number: 1, text: 'Which of these is (A) a noun or (B) a verb?', options: ['run', 'dog', 'blue', 'fast'], answer: 'B' });
+    const sameLine = parseQuestionPdf(`${head}1. Which of these is (A) a noun or (B) a verb? (A) run (B) dog (C) blue (D) fast\n\nANSWER KEY\n1. B`);
+    expect(sameLine.questions[0]).toEqual(nextLine.questions[0]);
+    const ownLines = parseQuestionPdf(`${head}Q1. Pick (A) or (B):\n(A) run\n(B) dog\n(C) blue\n(D) fast`);
+    expect(ownLines.questions[0]).toMatchObject({ text: 'Pick (A) or (B):', options: ['run', 'dog', 'blue', 'fast'] });
+  });
+
+  it('an option that names others ("Both (A) and (B)") stays whole; without a full (A)-(D) run there are no options', () => {
+    const head = 'Subject: Physics\nTopic: Heat\nDifficulty: Easy\nType: MCQ\n\n';
+    const out = parseQuestionPdf(`${head}1. Which are scalars?\n(A) Mass\n(B) Speed\n(C) Velocity\n(D) Both (A) and (B)`);
+    expect(out.questions[0]).toMatchObject({ text: 'Which are scalars?', options: ['Mass', 'Speed', 'Velocity', 'Both (A) and (B)'] });
+    const partial = parseQuestionPdf(`${head}1. Only two?\n(A) one (B) two`);
+    expect(partial.questions[0]).toMatchObject({ text: 'Only two?\n(A) one (B) two', options: [] });
+  });
+
   it('a question missing from the answer key has no answer (reported per row by the caller)', () => {
     expect(parseQuestionPdf(MCQ.replace('Q2. (C)', '')).questions[1].answer).toBeNull();
   });

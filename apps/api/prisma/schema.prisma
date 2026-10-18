@@ -1600,6 +1600,7 @@ model Test {
   batchId         String
   startsAt        DateTime   @db.Timestamptz(3) // the date and time entered, in India
   durationMinutes Int
+  endsAt          DateTime   @db.Timestamptz(3) // startsAt + durationMinutes (a CHECK keeps it so), for filtering by phase
   totalMarks      Int
   status          TestStatus @default(SCHEDULED)
   cancelledAt     DateTime?  @db.Timestamptz(3)
@@ -1619,6 +1620,7 @@ model Test {
 
   @@unique([id, schoolId])
   @@index([schoolId, startsAt])
+  @@index([schoolId, endsAt])
   @@index([batchId, startsAt])
   @@index([facultyId])
 }

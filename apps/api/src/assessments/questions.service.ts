@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { ImportPreview } from '../academic/import-utils.js';
 import { SUBJECTS } from '../academic/academic-options.js';
 import { likeEscape } from '../common/like-escape.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { type Actor, activeFacultyId, actorName, isTeacher } from './actor.js';
 import {
@@ -135,20 +135,39 @@ export class QuestionsService {
     const source = h.source.replace(/\s+/g, ' ').trim().slice(0, 60);
     if (headerErrors.length) throw new BadRequestException(`The header block has problems: ${headerErrors.join('; ')}.`);
 
-    // Already in the bank (same subject and text), or twice in this file.
-    const texts = parsed.questions.map((q) => normalizeText(q.text)).filter(Boolean);
-    const existing = new Set(
-      (await this.prisma.question.findMany({ where: { schoolId: actor.schoolId, subject: subject!, text: { in: texts } }, select: { text: true } })).map((q) => q.text.toLowerCase()),
-    );
+    // Already in the bank (same subject and text, any letter case), or twice in this file.
+    const texts = parsed.questions.map((q) => normalizeText(q.text).toLowerCase()).filter(Boolean);
+    const check = (existing: Set<string>) => this.checkImport(parsed.questions, existing, { subject: subject!, topic, difficulty: difficulty!, type: type!, marks, negative, source });
+    if (dto.dryRun) {
+      const { rows, ready } = check(await bankTexts(this.prisma, actor.schoolId, subject!, texts));
+      return { applied: false, created: ready.length, updated: 0, skipped: rows.length - ready.length, rows };
+    }
+    const authorName = await actorName(this.prisma, actor);
+    return this.prisma.$transaction(async (tx) => {
+      // One import per school at a time, so the same file confirmed twice at once adds its questions once.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`question-import:${actor.schoolId}`}))`;
+      const { rows, ready } = check(await bankTexts(tx, actor.schoolId, subject!, texts));
+      if (ready.length) await tx.question.createMany({ data: ready.map((r) => ({ ...r, schoolId: actor.schoolId, facultyId, authorName, createdById: actor.userId })) });
+      return { applied: true, created: ready.length, updated: 0, skipped: rows.length - ready.length, rows };
+    });
+  }
+
+  /** Each question of an upload checked: its text, answer, and whether it's already in the bank or the file. */
+  private checkImport(
+    questions: ReturnType<typeof parseQuestionPdf>['questions'],
+    existing: Set<string>,
+    h: { subject: string; topic: string; difficulty: Difficulty; type: QuestionKind; marks: number; negative: number; source: string },
+  ) {
+    const { subject, topic, difficulty, type, marks, negative, source } = h;
     const seen = new Map<string, number>();
     const ready: Prepared[] = [];
-    const rows: ImportPreview['rows'] = parsed.questions.map((q) => {
+    const rows: ImportPreview['rows'] = questions.map((q) => {
       const text = normalizeText(q.text);
       const label = `Q${q.number}. ${text.length > 70 ? `${text.slice(0, 70)}…` : text || '(no text)'}`;
       const errors: string[] = [];
       if (!text) errors.push('The question has no text');
       else if (text.length > 4000) errors.push('The question is over 4000 characters');
-      const shaped = shapeAnswer(type!, q.options, q.answer);
+      const shaped = shapeAnswer(type, q.options, q.answer);
       if (typeof shaped === 'string') errors.push(q.answer === null && type !== 'SUBJECTIVE' ? `No answer for question ${q.number} in the ANSWER KEY` : shaped);
       if (type !== 'MCQ' && q.options.length) errors.push('Only MCQ questions have options (A)-(D)');
       const key = text.toLowerCase();
@@ -156,14 +175,10 @@ export class QuestionsService {
       else if (!errors.length && seen.has(key)) errors.push(`Same as question ${seen.get(key)} in this file`);
       if (errors.length || typeof shaped === 'string') return { row: q.number, label, action: 'error' as const, errors };
       seen.set(key, q.number);
-      ready.push({ subject: subject!, chapterId: null, chapterName: null, topic, difficulty: difficulty!, type: type!, text, ...shaped, marks, negativeMarks: negative, source });
+      ready.push({ subject, chapterId: null, chapterName: null, topic, difficulty, type, text, ...shaped, marks, negativeMarks: negative, source });
       return { row: q.number, label, action: 'create' as const, errors: [] };
     });
-    if (!dto.dryRun && ready.length) {
-      const authorName = await actorName(this.prisma, actor);
-      await this.prisma.question.createMany({ data: ready.map((r) => ({ ...r, schoolId: actor.schoolId, facultyId, authorName, createdById: actor.userId })) });
-    }
-    return { applied: !dto.dryRun, created: ready.length, updated: 0, skipped: rows.length - ready.length, rows };
+    return { rows, ready };
   }
 
   /** Checks the chapter (of this school and subject) and the answer for the type. */
@@ -209,6 +224,14 @@ function searchWhere(q: string | null | undefined): Prisma.QuestionWhereInput {
   if (!text) return {};
   const like = { contains: likeEscape(text), mode: 'insensitive' } as const;
   return { OR: [{ text: like }, { topic: like }, { chapterName: like }, { source: like }, { authorName: like }] };
+}
+
+/** The bank's question texts (lower case) among these, for one subject. */
+async function bankTexts(db: Prisma.TransactionClient | PrismaService, schoolId: string, subject: string, lowered: string[]) {
+  if (!lowered.length) return new Set<string>();
+  const rows = await db.$queryRaw<{ text: string }[]>`
+    SELECT DISTINCT lower("text") AS "text" FROM "Question" WHERE "schoolId" = ${schoolId} AND "subject" = ${subject} AND lower("text") IN (${Prisma.join(lowered)})`;
+  return new Set(rows.map((r) => r.text));
 }
 
 export function toQuestion(q: QuestionRow) {

@@ -19,6 +19,10 @@ describe('grading one answer', () => {
     const numerical = q({ type: 'NUMERICAL', correctAnswer: '9.81' });
     expect(gradeAnswer(numerical, { response: '9.810' }).outcome).toBe('CORRECT');
     expect(gradeAnswer(numerical, { response: '9.8' }).outcome).toBe('INCORRECT');
+    // To two decimals, not exactly: 3.144 against a key of 3.14 is right, 3.146 (3.15) is not.
+    const pi = q({ type: 'NUMERICAL', correctAnswer: '3.14' });
+    expect(gradeAnswer(pi, { response: '3.144' }).outcome).toBe('CORRECT');
+    expect(gradeAnswer(pi, { response: '3.146' }).outcome).toBe('INCORRECT');
     expect(() => gradeAnswer(numerical, { response: 'nine' })).toThrow('A numerical answer is a number');
   });
 

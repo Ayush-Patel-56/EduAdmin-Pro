@@ -85,16 +85,8 @@ export function parseQuestionPdf(text: string): { header: PdfHeader; questions: 
 
   const questions = blocks.map((b) => {
     const joined = b.lines.join('\n');
-    // Options can sit one per line or several on a line: "(A) x (B) y".
-    const first = joined.search(/\(\s*A\s*\)/);
-    const text = (first === -1 ? joined : joined.slice(0, first)).trim();
-    const options: string[] = [];
-    if (first !== -1) {
-      const parts = joined.slice(first).split(/\(\s*([A-D])\s*\)/);
-      // parts: ['', 'A', ' Celsius ', 'B', ' Kelvin ', ...]
-      for (let k = 1; k < parts.length; k += 2) options[parts[k].charCodeAt(0) - 65] = parts[k + 1].replace(/\s+/g, ' ').trim();
-    }
-    return { number: b.number, text, options: Array.from(options, (o) => o ?? ''), answer: answers.get(b.number) ?? null };
+    const found = splitOptions(joined);
+    return { number: b.number, text: (found ? joined.slice(0, found.start) : joined).trim(), options: found?.options ?? [], answer: answers.get(b.number) ?? null };
   });
   return {
     header: {
@@ -108,4 +100,29 @@ export function parseQuestionPdf(text: string): { header: PdfHeader; questions: 
     },
     questions,
   };
+}
+
+const MARKERS: Record<string, RegExp> = { A: /\(\s*A\s*\)/g, B: /\(\s*B\s*\)/g, C: /\(\s*C\s*\)/g, D: /\(\s*D\s*\)/g };
+const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * Finds the options in a question's text: the last "(A)" that is followed by
+ * "(B)", "(C)" and "(D)" in that order, each option running to the next
+ * letter. So "(A)"/"(B)" inside the question ("Is it (A) a noun or (B) a
+ * verb?") stay in its text, and an option such as "(D) Both (A) and (B)"
+ * stays whole. Options can sit one per line or several on a line. Null when
+ * there is no full A-D run (an MCQ is then reported as missing options).
+ */
+export function splitOptions(text: string): { start: number; options: string[] } | null {
+  const at = (letter: string) => [...text.matchAll(MARKERS[letter])].map((m) => ({ index: m.index, end: m.index + m[0].length }));
+  const [as, bs, cs, ds] = ['A', 'B', 'C', 'D'].map(at);
+  for (let k = as.length - 1; k >= 0; k--) {
+    const a = as[k];
+    const b = bs.find((m) => m.index >= a.end);
+    const c = b && cs.find((m) => m.index >= b.end);
+    const d = c && ds.find((m) => m.index >= c.end);
+    if (!b || !c || !d) continue;
+    return { start: a.index, options: [clean(text.slice(a.end, b.index)), clean(text.slice(b.end, c.index)), clean(text.slice(c.end, d.index)), clean(text.slice(d.end))] };
+  }
+  return null;
 }

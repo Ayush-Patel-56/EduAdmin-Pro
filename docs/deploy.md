@@ -251,6 +251,7 @@ New enums and new tables only (the question bank, tests, their papers and result
 - **Results.** One per student per test, present (with marks) or absent (with no marks or counts), held by a CHECK. Answers are stored per question with their outcome (correct, partial, incorrect, unattempted) and marks; an unattempted question earns nothing. Ranks and percentiles are worked out when read, so they never go stale.
 - **Kept as records.** A student, or a batch, with test results can't be deleted (set a leaving or end date instead); a test with results is cancelled, not deleted. Deleting a batch with only scheduled tests takes them along. Clear All Data removes results, tests and questions with the rest of the academic data.
 - Sets `lock_timeout = 10s` like the others; if it times out behind a long query on `Batch` or `Student`, mark it `--rolled-back` and deploy again.
+- **`20261019100000_test_ends_at`** stores when each test ends (`startsAt` + `durationMinutes`, held by a CHECK), so the tests lists filter Scheduled / Ongoing / Completed and page in the database instead of reading a capped set. Existing tests get it from their start and length in the same transaction.
 
 ## File storage (Cloudflare R2)
 
