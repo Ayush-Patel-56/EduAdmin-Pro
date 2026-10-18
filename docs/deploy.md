@@ -221,6 +221,7 @@ A new table only (teachers' daily class reports), wrapped in a transaction, so t
 - **On Time or Late.** A report is On Time only when it is first submitted on the day it is about, in India (IST). One submitted the next day or later, or for an earlier day, is Late; a day still to come is refused. The API works this out, and a CHECK constraint holds `late` to the same rule against `submittedAt`. Editing a report keeps its status (it was submitted when it was); moving it to another day makes it a report for that day, submitted at that moment.
 - **One per class.** A unique index allows one report per teacher, batch, subject (any letter case) and day, so a double submit is a 409 and the first report can be edited instead.
 - **Kept as records.** A batch with daily reports can't be deleted (set an end date instead; the batch delete confirmation says so). A report keeps its teacher's name if the faculty profile is deleted later. Clear All Data removes daily reports with the rest of the academic data.
+- **`20261019120000_daily_report_flags`** adds admin flags (who, when, an optional reason; a CHECK keeps them together) and `editedAt`, the teacher's last content change, so flagging doesn't show a report as Edited. Existing reports get `editedAt` from the rule used until now (saved again over a minute after first submission). New columns only, with `lock_timeout = 10s`; nothing to check first.
 
 ## Feedback (`20261018120000_feedback`)
 

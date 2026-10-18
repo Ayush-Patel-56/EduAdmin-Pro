@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 
 const blankToNull = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') || null : value;
@@ -14,7 +14,8 @@ const multilineOrNull = (arg: { value: unknown }) => {
 };
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-export const REPORT_STATUSES = ['ON_TIME', 'LATE'] as const;
+/** The admin list's tabs: On Time, Late, or flagged for follow-up (either). */
+export const REPORT_STATUSES = ['ON_TIME', 'LATE', 'FLAGGED'] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
 
 /**
@@ -77,6 +78,18 @@ export class AdminReportQuery {
 
   @Transform(blankToNull)
   @IsOptional()
-  @IsIn(REPORT_STATUSES, { message: 'Status must be On Time or Late' })
+  @IsIn(REPORT_STATUSES, { message: 'Status must be On Time, Late or Flagged' })
   status?: ReportStatus | null;
+}
+
+/** Flag a report for follow-up (with an optional reason), or clear the flag. */
+export class ReportFlagDto {
+  @IsBoolean({ message: 'Say whether to flag the report' })
+  flagged: boolean;
+
+  @Transform(blankToNull)
+  @IsOptional()
+  @IsString()
+  @MaxLength(500, { message: 'Keep the reason under 500 characters' })
+  reason?: string | null;
 }

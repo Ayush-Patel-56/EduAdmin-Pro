@@ -1,12 +1,12 @@
 import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AccessService } from '../academic/access.service.js';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
-import { AdminReportQuery, DailyReportDto } from './daily-reports.dto.js';
+import { AdminReportQuery, DailyReportDto, ReportFlagDto } from './daily-reports.dto.js';
 import { DailyReportsService } from './daily-reports.service.js';
 
 const Id = (name: string) => Param(name, ParseUUIDPipe);
 
-/** Daily Teacher Reports (PRD 4.8), read-only for admins. Every route checks the caller is an admin of :schoolId first. */
+/** Daily Teacher Reports (PRD 4.8): admins read, flag and delete reports. Every route checks the caller is an admin of :schoolId first. */
 @Controller('schools/:schoolId/daily-reports')
 @UseGuards(SessionGuard)
 export class AdminDailyReportsController {
@@ -19,6 +19,18 @@ export class AdminDailyReportsController {
   async list(@Auth() auth: AuthContext, @Id('schoolId') schoolId: string, @Query() query: AdminReportQuery) {
     await this.access.assertAdmin(auth.userId, schoolId);
     return this.reports.adminList(schoolId, query);
+  }
+
+  @Patch(':reportId/flag')
+  async flag(@Auth() auth: AuthContext, @Id('schoolId') schoolId: string, @Id('reportId') reportId: string, @Body() dto: ReportFlagDto) {
+    await this.access.assertAdmin(auth.userId, schoolId);
+    return this.reports.setFlag(schoolId, auth.userId, reportId, dto);
+  }
+
+  @Delete(':reportId')
+  async remove(@Auth() auth: AuthContext, @Id('schoolId') schoolId: string, @Id('reportId') reportId: string) {
+    await this.access.assertAdmin(auth.userId, schoolId);
+    return this.reports.adminRemove(schoolId, reportId);
   }
 }
 

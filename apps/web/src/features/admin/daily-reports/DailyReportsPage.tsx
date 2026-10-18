@@ -1,14 +1,18 @@
 import { useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Award, BookOpen, CalendarDays, ChevronDown, ClipboardList, Download, Loader2, RefreshCw, UsersRound, type LucideIcon } from 'lucide-react'
+import { Award, BookOpen, CalendarDays, ChevronDown, ClipboardList, Download, Flag, Loader2, Printer, RefreshCw, Trash2, UsersRound, type LucideIcon } from 'lucide-react'
+import { api } from '@/lib/api'
+import { Dialog } from '@/components/ui/Dialog'
+import { textareaClass } from '@/components/ui/formStyles'
 import { ExportDialog } from '@/components/ui/ExportDialog'
-import { ErrorBanner } from '@/components/ui/form'
+import { ConfirmDialog, ErrorBanner } from '@/components/ui/form'
 import { ALL } from '@/features/academic/filters'
 import { todayIst } from '@/lib/dates'
-import { classLine, dateTimeIst, longDay, STATUS_TABS, timeIst, useAdminReports, type DailyReport, type ReportStatus } from '@/features/daily-reports/api'
+import { useQueryClient } from '@tanstack/react-query'
+import { adminReportsPath, classLine, dateTimeIst, longDay, STATUS_TABS, timeIst, useAdminReports, type AdminDay, type ReportStatus } from '@/features/daily-reports/api'
 import { ProgressReportsLater, ReportTab, ReportTabBar, StatusPill } from '@/features/daily-reports/ui'
 import { useAdminContext } from '../adminContext'
-import { exportReportsCsv, exportReportsPdf } from './exportDailyReports'
+import { exportReportsCsv, exportReportsPdf, printReport } from './exportDailyReports'
 
 type Tab = 'daily' | 'progress'
 
@@ -86,7 +90,7 @@ function DailyTeacherReports() {
       <div className="mt-6 grid gap-4 md:grid-cols-3">
         <Kpi icon={ClipboardList} iconClass="bg-emerald-50 text-emerald-600" value={day?.kpis.submitted} label="Reports Submitted" sub={day ? `${day.kpis.late} late` : ' '} />
         <Kpi icon={UsersRound} iconClass="bg-sky-50 text-sky-600" value={day?.kpis.teachers} label="Teachers Reported" sub="for this date" />
-        <Kpi icon={BookOpen} iconClass="bg-amber-50 text-amber-600" value={day?.kpis.classes} label="Classes Logged" sub="total batches" />
+        <Kpi icon={BookOpen} iconClass="bg-amber-50 text-amber-600" value={day?.kpis.classes} label="Classes Logged" sub="each batch's subjects reported" />
       </div>
 
       <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -94,7 +98,7 @@ function DailyTeacherReports() {
           <div>
             <h2 className="text-base font-bold text-slate-900">{longDay(date)}</h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              {day ? `${day.items.length} report${day.items.length === 1 ? '' : 's'}${status ? ` ${status === 'LATE' ? 'late' : 'submitted on time'}` : ''} for this date` : 'Loading…'}
+              {day ? `${day.items.length} report${day.items.length === 1 ? '' : 's'}${status ? ` ${STATUS_WORDS[status]}` : ''} for this date` : 'Loading…'}
             </p>
           </div>
           <div role="tablist" aria-label="Report status" className="inline-flex self-start rounded-lg bg-slate-100 p-1 sm:self-auto">
@@ -108,6 +112,7 @@ function DailyTeacherReports() {
                 className={`rounded-md px-3.5 py-1.5 text-xs font-semibold transition ${status === t.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
               >
                 {t.label}
+                {t.key === 'FLAGGED' && day && day.kpis.flagged > 0 && <span className="ml-1.5 rounded-full bg-rose-100 px-1.5 text-[10px] font-bold text-rose-700">{day.kpis.flagged}</span>}
               </button>
             ))}
           </div>
@@ -117,7 +122,7 @@ function DailyTeacherReports() {
         ) : day.items.length === 0 ? (
           <div className="flex flex-col items-center px-6 py-16 text-center">
             <ClipboardList className="size-10 text-slate-300" strokeWidth={1.5} />
-            <p className="mt-3 text-sm font-semibold text-slate-600">{status ? `No ${status === 'LATE' ? 'late' : 'on-time'} reports for this date` : 'No reports for this date'}</p>
+            <p className="mt-3 text-sm font-semibold text-slate-600">{status ? `No reports ${STATUS_WORDS[status]} for this date` : 'No reports for this date'}</p>
             <p className="mt-1 text-xs text-slate-400">
               {status ? 'Try another tab or date.' : "Teachers haven't submitted their daily reports for this date yet."}
             </p>
@@ -125,7 +130,7 @@ function DailyTeacherReports() {
         ) : (
           <ul className="divide-y divide-slate-100">
             {day.items.map((r) => (
-              <ReportRow key={r.id} report={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />
+              <ReportRow key={r.id} schoolId={schoolId} school={dashboard?.school.name ?? 'School'} report={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />
             ))}
           </ul>
         )}
@@ -157,7 +162,28 @@ function Kpi({ icon: Icon, iconClass, value, label, sub }: { icon: LucideIcon; i
   )
 }
 
-function ReportRow({ report: r, open, onToggle }: { report: DailyReport; open: boolean; onToggle: () => void }) {
+const STATUS_WORDS: Record<ReportStatus, string> = { ON_TIME: 'submitted on time', LATE: 'late', FLAGGED: 'flagged' }
+
+type AdminReport = AdminDay['items'][number]
+
+function ReportRow({ schoolId, school, report: r, open, onToggle }: { schoolId: string; school: string; report: AdminReport; open: boolean; onToggle: () => void }) {
+  const client = useQueryClient()
+  const [dialog, setDialog] = useState<'flag' | 'delete' | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const refresh = () => client.invalidateQueries({ queryKey: [schoolId, 'daily-reports'] })
+  async function unflag() {
+    setBusy(true)
+    setError(null)
+    try {
+      await api(`${adminReportsPath(schoolId)}/${r.id}/flag`, { method: 'PATCH', body: JSON.stringify({ flagged: false }) })
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not clear the flag')
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <li>
       <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-center gap-3 px-5 py-3.5 text-left transition hover:bg-slate-50/70">
@@ -169,6 +195,11 @@ function ReportRow({ report: r, open, onToggle }: { report: DailyReport; open: b
             <span className="truncate text-sm font-bold text-slate-900">{r.teacher.name}</span>
             <StatusPill late={r.late} />
             {r.edited && <span className="text-[10px] font-semibold text-slate-400">Edited</span>}
+            {r.flag && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700" title={r.flag.reason ?? undefined}>
+                <Flag className="size-3" /> Flagged
+              </span>
+            )}
           </span>
           <span className="mt-0.5 block truncate text-xs text-slate-500">{classLine(r)}</span>
         </span>
@@ -182,10 +213,89 @@ function ReportRow({ report: r, open, onToggle }: { report: DailyReport; open: b
           <Detail label="Topics Covered">{r.topics}</Detail>
           {r.homework && <Detail label="Homework Given">{r.homework}</Detail>}
           {r.observations && <Detail label="Observations">{r.observations}</Detail>}
-          <p className="text-[11px] text-slate-400">{r.program.name} · submitted {dateTimeIst(r.submittedAt)}</p>
+          {r.flag && (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+              Flagged by {r.flag.by} on {dateTimeIst(r.flag.at)}
+              {r.flag.reason && <span className="block whitespace-pre-line [overflow-wrap:anywhere]">{r.flag.reason}</span>}
+            </p>
+          )}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[11px] text-slate-400">{r.program.name} · submitted {dateTimeIst(r.submittedAt)}</p>
+            <div className="flex flex-wrap gap-2">
+              {r.flag ? (
+                <button type="button" onClick={() => void unflag()} disabled={busy} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                  <Flag className="size-3.5" /> {busy ? 'Clearing…' : 'Clear Flag'}
+                </button>
+              ) : (
+                <button type="button" onClick={() => setDialog('flag')} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50">
+                  <Flag className="size-3.5" /> Flag
+                </button>
+              )}
+              <button type="button" onClick={() => void printReport(school, r)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                <Printer className="size-3.5" /> Print
+              </button>
+              <button type="button" onClick={() => setDialog('delete')} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-red-600 hover:bg-red-50">
+                <Trash2 className="size-3.5" /> Delete
+              </button>
+            </div>
+          </div>
+          <ErrorBanner message={error} />
         </div>
       )}
+      {dialog === 'flag' && <FlagDialog schoolId={schoolId} report={r} onDone={refresh} onClose={() => setDialog(null)} />}
+      {dialog === 'delete' && (
+        <ConfirmDialog
+          title="Delete this report?"
+          message={
+            <>
+              <p className="font-semibold text-slate-800">{r.teacher.name} · {classLine(r)} · {longDay(r.date)}</p>
+              <p className="mt-2">The report is removed for good, for the teacher too.</p>
+            </>
+          }
+          confirmLabel="Delete Report"
+          onConfirm={async () => {
+            await api(`${adminReportsPath(schoolId)}/${r.id}`, { method: 'DELETE' })
+            await refresh()
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </li>
+  )
+}
+
+/** Flag a report for follow-up, with an optional reason (only admins see flags). */
+function FlagDialog({ schoolId, report: r, onDone, onClose }: { schoolId: string; report: AdminReport; onDone: () => Promise<unknown>; onClose: () => void }) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  async function save() {
+    setBusy(true)
+    setError(null)
+    try {
+      await api(`${adminReportsPath(schoolId)}/${r.id}/flag`, { method: 'PATCH', body: JSON.stringify({ flagged: true, reason: reason.trim() || null }) })
+      await onDone()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not flag the report')
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog title="Flag report" description={`${r.teacher.name} · ${classLine(r)} · ${longDay(r.date)}`} onClose={onClose} widthClass="max-w-md">
+      <div className="space-y-3 px-6 py-5">
+        <label htmlFor="flag-reason" className="block text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Reason (optional)</label>
+        <textarea id="flag-reason" rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Topics too brief; discuss with the teacher" className={textareaClass()} />
+        <p className="text-[11px] text-slate-400">Flags are for follow-up and show only to admins.</p>
+        <ErrorBanner message={error} />
+      </div>
+      <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-4">
+        <button type="button" onClick={onClose} className="h-10 rounded-lg px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">Cancel</button>
+        <button type="button" onClick={() => void save()} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-lg bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60">
+          <Flag className="size-4" /> {busy ? 'Flagging…' : 'Flag Report'}
+        </button>
+      </div>
+    </Dialog>
   )
 }
 
