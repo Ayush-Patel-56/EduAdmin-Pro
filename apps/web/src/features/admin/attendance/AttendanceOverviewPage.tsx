@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, Download, FileSpreadsheet, FileText, Filter, Loader2, RefreshCw, Search, Star, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
-import { Dialog } from '@/components/ui/Dialog'
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, Download, Filter, Loader2, RefreshCw, Search, Star, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
+import { ExportDialog } from '@/components/ui/ExportDialog'
 import { ErrorBanner } from '@/components/ui/form'
 import { ALL } from '@/features/academic/filters'
 import { formatDay } from '@/features/portal/format'
@@ -101,6 +101,7 @@ export function AttendanceOverviewPage() {
 
       {exporting && o && (
         <ExportDialog
+          title="Export Attendance Detail"
           onClose={() => setExporting(false)}
           onExport={async (format) => {
             const school = dashboard?.school.name ?? 'school'
@@ -276,55 +277,5 @@ function StudentDetail({ overview: o }: { overview: Overview }) {
         </div>
       </div>
     </section>
-  )
-}
-
-function ExportDialog({ onClose, onExport }: { onClose: () => void; onExport: (format: 'pdf' | 'csv') => Promise<void> }) {
-  const [format, setFormat] = useState<'pdf' | 'csv'>('pdf')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  async function run() {
-    setBusy(true)
-    setError(null)
-    try {
-      await onExport(format)
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not export')
-      setBusy(false)
-    }
-  }
-  return (
-    <Dialog title="Export Attendance Detail" onClose={onClose} widthClass="max-w-md">
-      <div className="px-6 py-5">
-        <p className="mb-3 text-xs font-bold tracking-wider text-slate-700 uppercase">Export Format</p>
-        <div role="radiogroup" aria-label="Export format" className="grid grid-cols-2 gap-3">
-          {(
-            [
-              ['pdf', 'PDF', FileText],
-              ['csv', 'CSV', FileSpreadsheet],
-            ] as const
-          ).map(([key, text, Icon]) => (
-            <button
-              key={key}
-              type="button"
-              role="radio"
-              aria-checked={format === key}
-              onClick={() => setFormat(key)}
-              className={`flex flex-col items-center gap-2 rounded-xl border-2 py-5 text-sm font-semibold transition ${format === key ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}
-            >
-              <Icon className="size-5" /> {text}
-            </button>
-          ))}
-        </div>
-        {error && <div className="mt-4"><ErrorBanner message={error} /></div>}
-      </div>
-      <div className="flex justify-end gap-3 px-6 pb-6">
-        <button type="button" onClick={onClose} className="h-10 rounded-lg px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">Cancel</button>
-        <button type="button" onClick={() => void run()} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
-          <Download className="size-4" /> {busy ? 'Generating…' : `Generate & Export ${format.toUpperCase()}`}
-        </button>
-      </div>
-    </Dialog>
   )
 }

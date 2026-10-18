@@ -334,6 +334,7 @@ model School {
   meetings        Meeting[]
   agendaItems     MeetingAgendaItem[]
   calendarEvents  CalendarEvent[]
+  dailyReports    DailyReport[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -416,6 +417,7 @@ model Batch {
   occurrences    ClassOccurrence[]
   feeStructures  FeeStructure[]
   calendarEvents CalendarEvent[]
+  dailyReports   DailyReport[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -468,6 +470,7 @@ model Faculty {
   scheduleSlots      ScheduleSlot[]
   specialClasses     SpecialClass[]
   occurrences        ClassOccurrence[]
+  dailyReports       DailyReport[]
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -1370,5 +1373,35 @@ model CalendarEvent {
 
   @@index([schoolId, startDate])
   @@index([programId])
+  @@index([batchId])
+}
+
+// A teacher's daily class report (PRD 4.8 and 5.6): what was taught to one
+// batch on one day. It is On Time only when first submitted on that day in
+// India; one sent later, or for an earlier day, is Late (the HLD's next-day
+// rule). Reports are teaching records: a batch with reports can't be deleted
+// (end it instead), and a report keeps its teacher's name if their profile goes.
+model DailyReport {
+  id           String   @id @default(uuid())
+  schoolId     String
+  facultyId    String? // the reporting teacher; null once their profile is deleted
+  teacherName  String // as it was when submitted, so the record still names them
+  batchId      String
+  reportDate   DateTime @db.Date // the day taught
+  subject      String
+  chapter      String?
+  topics       String
+  homework     String?
+  observations String?
+  late         Boolean // submitted after reportDate (IST); checked by the database
+  submittedAt  DateTime @db.Timestamptz(3) // first submission; edits don't change it
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  faculty Faculty? @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  batch   Batch    @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
+
+  @@index([schoolId, reportDate])
+  @@index([facultyId, reportDate])
   @@index([batchId])
 }

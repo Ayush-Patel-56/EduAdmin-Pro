@@ -104,12 +104,13 @@ describe('event counts for the delete confirmations (#22)', () => {
     const findMany = vi.fn().mockResolvedValue([
       {
         id: 'b1', name: 'M1', program: null, classLevel: 11, capacity: 30, startDate: new Date('2026-04-01T00:00:00Z'), endDate: null, coordinator: null,
-        _count: { facultyBatches: 0, syllabusItems: 0, students: 4, materials: 0, assignments: 0, calendarEvents: 5 },
+        _count: { facultyBatches: 0, syllabusItems: 0, students: 4, materials: 0, assignments: 0, calendarEvents: 5, dailyReports: 3 },
       },
     ]);
     const batches = new BatchesService({ batch: { findMany }, assignment: { findMany: vi.fn().mockResolvedValue([]) } } as unknown as PrismaService);
     const [b] = await batches.list('s1');
-    expect(b).toMatchObject({ studentCount: 4, eventCount: 5, handedInCount: 0 });
+    expect(b).toMatchObject({ studentCount: 4, eventCount: 5, handedInCount: 0, reportCount: 3 });
     expect(findMany.mock.calls[0][0].include._count.select.calendarEvents).toBe(true);
+    expect(findMany.mock.calls[0][0].include._count.select.dailyReports).toBe(true);
   });
 });
