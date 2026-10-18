@@ -5,7 +5,7 @@ import type { Actor } from './actor.js';
 import type { TestDto } from './assessments.dto.js';
 import type { PaperQuestion } from './scoring.js';
 import { Prisma } from '../generated/prisma/client.js';
-import { phaseWhere, prepareResult, TestsService } from './tests.service.js';
+import { isForeignKeyViolation, phaseWhere, prepareResult, TestsService } from './tests.service.js';
 
 const scope = (over: Partial<TeacherScope> = {}): TeacherScope => ({ schoolId: 'school-1', facultyId: 'fac-1', batchIds: ['b1'], programIds: [], active: true, ...over });
 const teacher = (over: Partial<TeacherScope> = {}): Actor => ({ kind: 'TEACHER', schoolId: 'school-1', userId: 'u-t', scope: scope(over) });
@@ -382,6 +382,19 @@ describe('TestsService: results', () => {
     await expect(service.saveResults(admin, 't1', { results: [{ studentId: 's1', present: false }] } as never)).rejects.toEqual(
       new BadRequestException("Some students aren't in this test's batch. Refresh and try again."),
     );
+    // The same from the raw upsert, which reports a foreign-key failure as P2010 with Postgres code 23503.
+    tx.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(locked())
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('Raw query failed', { code: 'P2010', clientVersion: 'test', meta: { driverAdapterError: { cause: { originalCode: '23503', kind: 'ForeignKeyConstraintViolation' } } } }),
+      );
+    await expect(service.saveResults(admin, 't1', { results: [{ studentId: 's1', present: false }] } as never)).rejects.toEqual(
+      new BadRequestException("Some students aren't in this test's batch. Refresh and try again."),
+    );
+    // Another raw failure (not a foreign key) is not mistaken for one.
+    expect(isForeignKeyViolation(new Prisma.PrismaClientKnownRequestError('x', { code: 'P2010', clientVersion: 't', meta: { driverAdapterError: { cause: { originalCode: '23505' } } } }))).toBe(false);
     // Anything else still surfaces as it is.
     prisma.$transaction.mockRejectedValueOnce(new Error('connection lost'));
     await expect(service.saveResults(admin, 't1', { results: [] })).rejects.toThrow('connection lost');

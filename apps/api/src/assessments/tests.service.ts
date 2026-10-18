@@ -312,7 +312,7 @@ export class TestsService {
       }, TX);
     } catch (err) {
       // A student removed by another request mid-save (the locks make this rare).
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') throw new BadRequestException(STUDENTS_CHANGED);
+      if (isForeignKeyViolation(err)) throw new BadRequestException(STUDENTS_CHANGED);
       throw err;
     }
     // Built after the save commits, so the locks aren't held while the whole sheet is read.
@@ -498,6 +498,17 @@ export function prepareResult(r: ResultInput, paper: PaperQuestion[], totalMarks
   const counts = [r.correct, r.incorrect, r.unattempted];
   if (paper.length && counts.reduce<number>((n, c) => n + (c ?? 0), 0) > paper.length) throw new Error(`Correct, incorrect and unattempted add up to more than the paper's ${paper.length} questions`);
   return { present: true, marks: r.marks, correct: r.correct ?? null, incorrect: r.incorrect ?? null, unattempted: r.unattempted ?? null, remarks, answers: [] as GradedAnswer[] };
+}
+
+/**
+ * A foreign-key failure, from the query builder (P2003) or from raw SQL such
+ * as the results upsert (P2010 carrying Postgres code 23503).
+ */
+export function isForeignKeyViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code === 'P2003') return true;
+  const cause = (err.meta as { driverAdapterError?: { cause?: { originalCode?: string } } } | undefined)?.driverAdapterError?.cause;
+  return err.code === 'P2010' && cause?.originalCode === '23503';
 }
 
 type PreparedResult = ReturnType<typeof prepareResult> & { studentId: string };

@@ -169,5 +169,8 @@ describe('saving results in chunks', () => {
     expect(resultChunks(Array.from({ length: 300 }, () => student(90))).map((c) => c.length)).toEqual([133, 133, 34])
     expect(resultChunks([student(20_000), student(1)]).map((c) => c.length)).toEqual([1, 1])
     expect(resultChunks([])).toEqual([])
+    // Exactly 12,000 answers fit in one chunk; one more starts the next.
+    expect(resultChunks([student(6000), student(6000)]).map((c) => c.length)).toEqual([2])
+    expect(resultChunks([student(6000), student(6000), student(1)]).map((c) => c.length)).toEqual([2, 1])
   })
 })

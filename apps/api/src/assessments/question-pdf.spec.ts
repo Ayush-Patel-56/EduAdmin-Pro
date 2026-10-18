@@ -64,6 +64,23 @@ describe('question PDF text', () => {
     expect(ownLines.questions[0]).toEqual({ number: 1, text: 'Choose one', options: ['Both (B) and (C)', 'x', 'y', 'z'], answer: null });
   });
 
+  it('"Match the following": a list (A)-(D) on its own lines in the question, then the four options on one line', () => {
+    const out = parseQuestionPdf(
+      [
+        'Subject: Physics', 'Topic: Units', 'Difficulty: Easy', 'Type: MCQ', '',
+        '1. Match the quantity with its unit:', '(A) Force', '(B) Energy', '(C) Power', '(D) Pressure',
+        '(A) A-Pascal, B-Watt, C-Joule, D-Newton (B) A-Newton, B-Joule, C-Watt, D-Pascal (C) A-Joule, B-Newton, C-Pascal, D-Watt (D) A-Watt, B-Pascal, C-Newton, D-Joule',
+        'ANSWER KEY', '1. B',
+      ].join('\n'),
+    );
+    expect(out.questions[0]).toEqual({
+      number: 1,
+      text: 'Match the quantity with its unit:\n(A) Force\n(B) Energy\n(C) Power\n(D) Pressure',
+      options: ['A-Pascal, B-Watt, C-Joule, D-Newton', 'A-Newton, B-Joule, C-Watt, D-Pascal', 'A-Joule, B-Newton, C-Pascal, D-Watt', 'A-Watt, B-Pascal, C-Newton, D-Joule'],
+      answer: 'B',
+    });
+  });
+
   it('options (A) to (C) without a (D) are no options (the MCQ is then reported as missing one)', () => {
     const out = parseQuestionPdf('Subject: Physics\nTopic: Heat\nDifficulty: Easy\nType: MCQ\n\n1. Three only?\n(A) a\n(B) b\n(C) c');
     expect(out.questions[0]).toMatchObject({ options: [] });

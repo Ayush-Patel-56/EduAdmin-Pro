@@ -115,7 +115,10 @@ type Run = [Marker, Marker, Marker, Marker];
  * Finds the options in a question's text, each option running to the next
  * letter:
  *  1. When every option starts its own line, that run is the options (so any
- *     "(A)"/"(B)" inside the question or an option is just text).
+ *     "(A)"/"(B)" inside the question or an option is just text), unless
+ *     another full (A)-(D) run follows it: then the lines were a list in the
+ *     question ("Match the following: (A) Force / (B) Energy / …") and the
+ *     run after it is the options, read as in 2.
  *  2. Otherwise the last "(A)" followed by "(B)", "(C)" and "(D)" starts them,
  *     and each later letter is read two ways: its last marker that still
  *     leaves the rest in order, and its first. When both readings agree the
@@ -138,7 +141,10 @@ export function splitOptions(text: string): { start: number; options: string[] }
     const b = after(lines(bs), a)[0];
     const c = b && after(lines(cs), b)[0];
     const d = c && after(lines(ds), c)[0];
-    if (b && c && d) return { start: a.index, options: options([a, b, c, d]) };
+    if (!b || !c || !d) continue;
+    const runAfter = after(as, d).some((a2) => after(bs, a2).some((b2) => after(cs, b2).some((c2) => after(ds, c2).length > 0)));
+    if (!runAfter) return { start: a.index, options: options([a, b, c, d]) };
+    break;
   }
 
   // 2. Several on a line: the last (A) with a full run after it, then each letter read last-fit and first-fit.
