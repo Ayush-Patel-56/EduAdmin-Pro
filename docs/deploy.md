@@ -233,6 +233,14 @@ New enums and a new table only (feedback between management and faculty), wrappe
 - **`20261018130000_feedback_import_key`** keys each imported row by its cells as written (a hash, unique per school through a partial unique index), so the same sheet uploaded again (by another admin, on another day, or twice at once) never stores a row twice; any imported rows from before get a key of their own. It also records the id of the admin who last changed an entry's status, next to their name.
 - Both migrations set `lock_timeout = 10s`: if a long-running query holds `School` or `Faculty`, they fail cleanly (and roll back) instead of queueing requests; mark the failed one `--rolled-back` and deploy again.
 
+## PTM notes (`20261018150000_ptm_notes`)
+
+A new table only (parent-teacher meeting notes), wrapped in a transaction with `lock_timeout = 10s`, so there is nothing to check before deploying.
+
+- **Faculty only.** Teachers log meetings with the parents of students in their own batches, and read, correct or delete only the notes they logged. There is no admin screen; the notes are kept for the student's record (the 5-in-1 report).
+- **Checks.** Discussion notes are required, a meeting can't be logged for a day still to come (API), and a CHECK keeps the follow-up date on or after the meeting.
+- **Kept as records.** A note names its batch and teacher as they were, so it still reads right after either is deleted (the links become null). Deleting a student removes their notes, as it does their counseling sessions; Clear All Data removes them with the rest.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

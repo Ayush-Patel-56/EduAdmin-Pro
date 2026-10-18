@@ -22,6 +22,7 @@ import { MeetingsModule } from './meetings/meetings.module.js';
 import { CalendarModule } from './calendar/calendar.module.js';
 import { DailyReportsModule } from './daily-reports/daily-reports.module.js';
 import { FeedbackModule } from './feedback/feedback.module.js';
+import { PtmNotesModule } from './ptm-notes/ptm-notes.module.js';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { FeedbackModule } from './feedback/feedback.module.js';
     CalendarModule,
     DailyReportsModule,
     FeedbackModule,
+    PtmNotesModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
