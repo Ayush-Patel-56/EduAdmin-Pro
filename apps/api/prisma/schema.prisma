@@ -334,6 +334,7 @@ model School {
   meetings        Meeting[]
   agendaItems     MeetingAgendaItem[]
   calendarEvents  CalendarEvent[]
+  feedback        Feedback[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -468,6 +469,8 @@ model Faculty {
   scheduleSlots      ScheduleSlot[]
   specialClasses     SpecialClass[]
   occurrences        ClassOccurrence[]
+  feedbackSent       Feedback[]          @relation("FeedbackSender")
+  feedbackReceived   Feedback[]          @relation("FeedbackTarget")
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -1371,4 +1374,67 @@ model CalendarEvent {
   @@index([schoolId, startDate])
   @@index([programId])
   @@index([batchId])
+}
+
+enum FeedbackDirection {
+  TEACHER_TO_MANAGEMENT
+  MANAGEMENT_TO_TEACHER
+}
+
+enum FeedbackCategory {
+  ACADEMICS
+  DISCIPLINE
+  PUNCTUALITY
+  TEACHING_QUALITY
+  ADMINISTRATION
+  GENERAL
+}
+
+// Submitted -> Reviewed -> Actioned, or Dismissed (archived), set by admins.
+enum FeedbackStatus {
+  SUBMITTED
+  REVIEWED
+  ACTIONED
+  DISMISSED
+}
+
+enum FeedbackSource {
+  APP
+  IMPORT
+}
+
+// Feedback between management and faculty (PRD 4.12 and 5.13), both ways.
+// A teacher sends to management; an admin sends to one teacher or to all
+// faculty. Admins move every entry through the review workflow. Names are kept
+// as they were when sent, so an entry still reads right if a profile goes.
+model Feedback {
+  id              String            @id @default(uuid())
+  schoolId        String
+  direction       FeedbackDirection
+  senderName      String
+  senderFacultyId String? // a teacher sender's profile; null once it is deleted
+  createdById     String? // the signed-in user who sent or imported it
+  toAllFaculty    Boolean           @default(false) // Management -> Teacher, addressed to every teacher
+  targetFacultyId String? // Management -> Teacher, addressed to one teacher
+  targetName      String? // that teacher's name when it was sent
+  rating          Int // 1-5
+  content         String
+  subject         String?
+  category        FeedbackCategory  @default(GENERAL)
+  feedbackDate    DateTime          @db.Date // when it was given (an imported sheet can say an earlier day)
+  status          FeedbackStatus    @default(SUBMITTED)
+  statusChangedAt DateTime?         @db.Timestamptz(3)
+  statusChangedBy String? // the admin who last moved it
+  source          FeedbackSource    @default(APP)
+  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime          @updatedAt @db.Timestamptz(3)
+
+  school        School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  senderFaculty Faculty? @relation("FeedbackSender", fields: [senderFacultyId], references: [id], onDelete: SetNull)
+  targetFaculty Faculty? @relation("FeedbackTarget", fields: [targetFacultyId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, status])
+  @@index([senderFacultyId])
+  @@index([targetFacultyId])
 }

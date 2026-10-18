@@ -15,6 +15,7 @@ import {
 import { FeesController } from '../fees/fees.controller.js';
 import { MeetingsController } from '../meetings/meetings.controller.js';
 import { CalendarController } from '../calendar/calendar.controller.js';
+import { AdminFeedbackController, TeacherFeedbackController } from '../feedback/feedback.controller.js';
 import {
   AdminScheduleController,
   TeacherScheduleController,
@@ -62,6 +63,8 @@ describe.each([
   ['MeetingsController', (a: AccessService) => new MeetingsController(a, untouched() as never), 9],
   // The academic calendar is admin only.
   ['CalendarController', (a: AccessService) => new CalendarController(a, untouched() as never), 5],
+  // Feedback Management: reads, sending, imports and the review workflow are all admin only.
+  ['AdminFeedbackController', (a: AccessService) => new AdminFeedbackController(a, untouched() as never), 5],
 ])('%s: admin routes of /schools/:schoolId', (_name, build, minimum) => {
   const assertAdmin = vi.fn();
   const controller = build({ assertAdmin } as unknown as AccessService);
@@ -89,6 +92,7 @@ describe.each([
   ['TeacherProfileController', (a: AccessService) => new TeacherProfileController(a, untouched() as never)],
   ['TeacherScheduleController', (a: AccessService) => new TeacherScheduleController(a, untouched() as never)],
   ['TeacherAttendanceController', (a: AccessService) => new TeacherAttendanceController(a, untouched() as never)],
+  ['TeacherFeedbackController', (a: AccessService) => new TeacherFeedbackController(a, untouched() as never)],
 ])('%s: faculty routes', (_name, build) => {
   const teacherScope = vi.fn().mockRejectedValue(new ForbiddenException('Join a school'));
   const controller = build({ teacherScope } as unknown as AccessService);

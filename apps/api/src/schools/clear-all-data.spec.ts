@@ -71,6 +71,14 @@ describe('Clear All Data is one transaction', () => {
     expect(at('feeDue')).toBeLessThan(at('student'));
   });
 
+  it('clears feedback before the faculty profiles it names', async () => {
+    await schools.clearAllData(auth, 'school-1', 'Demo School');
+    const i = deleted.indexOf('feedback');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(deleteMany.mock.calls[i][0]).toEqual({ where: { schoolId: 'school-1' } });
+    expect(i).toBeLessThan(deleted.indexOf('faculty'));
+  });
+
   it('clears calendar events', async () => {
     await schools.clearAllData(auth, 'school-1', 'Demo School');
     const i = deleted.indexOf('calendarEvent');

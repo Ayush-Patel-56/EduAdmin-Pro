@@ -214,6 +214,15 @@ This finishes the conversion to `timestamptz` and adds the UTC session guard. Ev
   WHERE table_schema = 'public' AND data_type = 'timestamp without time zone' AND table_name <> '_prisma_migrations';
   ```
 
+## Feedback (`20261018120000_feedback`)
+
+New enums and a new table only (feedback between management and faculty), wrapped in a transaction, so there is nothing to check before deploying.
+
+- **Both ways.** Teachers send feedback to management; admins send to one teacher or to all faculty. CHECK constraints keep the rating at 1-5, the content non-blank, and the direction consistent: Teacher -> Management has no target, and Management -> Teacher goes to all faculty or to one named teacher.
+- **Review workflow.** Admins move every entry Submitted -> Reviewed -> Actioned, or Dismissed (archived), recording who and when; a CHECK ties that record to the status. Dismissed feedback no longer shows to teachers.
+- **Kept as records.** An entry keeps the sender's and the target teacher's names, so it still reads right if a faculty profile is deleted later. Clear All Data removes feedback with the rest of the school's data.
+- **Bulk upload.** A sheet's teacher sender or teacher target must match a faculty member (name, email or employee ID); a row already imported is skipped, so a sheet can be uploaded again safely.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.
