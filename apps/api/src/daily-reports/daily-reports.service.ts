@@ -9,7 +9,7 @@ import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import type { AdminReportQuery, DailyReportDto } from './daily-reports.dto.js';
+import type { AdminReportQuery, DailyReportDto, ReportFlagDto } from './daily-reports.dto.js';
 
 /** How many of a teacher's own reports "Your Recent Submissions" lists. */
 export const RECENT_LIMIT = 50;
@@ -75,17 +75,42 @@ export class DailyReportsService {
     });
     // The KPIs count the whole day (for the program/batch filter); the status tab only narrows the list.
     const late = rows.filter((r) => r.late).length;
-    const items = query.status ? rows.filter((r) => r.late === (query.status === 'LATE')) : rows;
+    const items = rows.filter((r) => (query.status === 'FLAGGED' ? r.flaggedAt !== null : query.status ? r.late === (query.status === 'LATE') : true));
     return {
       date: query.date,
       kpis: {
         submitted: rows.length,
         late,
         teachers: new Set(rows.map((r) => r.facultyId ?? `name:${r.teacherName}`)).size,
-        classes: new Set(rows.map((r) => r.batchId)).size,
+        // A class is a batch's subject for the day (as for pending reports): two subjects in one batch are two classes.
+        classes: new Set(rows.map((r) => `${r.batchId}|${r.subject.toLowerCase()}`)).size,
+        flagged: rows.filter((r) => r.flaggedAt !== null).length,
       },
-      items: items.map(toReport),
+      items: items.map((r) => ({
+        ...toReport(r),
+        flag: r.flaggedAt ? { at: r.flaggedAt.toISOString(), by: r.flaggedBy!, reason: r.flagReason } : null,
+      })),
     };
+  }
+
+  /** Flags a report for follow-up (who, when, why), or clears the flag. The report itself doesn't change. */
+  async setFlag(schoolId: string, userId: string, id: string, dto: ReportFlagDto) {
+    const admin = dto.flagged ? await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { fullName: true } }) : null;
+    const { count } = await this.prisma.dailyReport.updateMany({
+      where: { id, schoolId },
+      data: admin
+        ? { flaggedAt: new Date(), flaggedBy: admin.fullName, flaggedById: userId, flagReason: dto.reason ?? null }
+        : { flaggedAt: null, flaggedBy: null, flaggedById: null, flagReason: null },
+    });
+    if (!count) throw new NotFoundException('Report not found');
+    return { id, flagged: dto.flagged };
+  }
+
+  /** Admins may delete any report of their school. */
+  async adminRemove(schoolId: string, id: string) {
+    const { count } = await this.prisma.dailyReport.deleteMany({ where: { id, schoolId } });
+    if (!count) throw new NotFoundException('Report not found');
+    return { ok: true };
   }
 
   // Faculty
@@ -130,9 +155,9 @@ export class DailyReportsService {
     };
   }
 
-  /** Your Recent Submissions: the teacher's own reports, newest day first. Kept readable after they leave. */
+  /** Your Recent Submissions: the teacher's own reports, newest day first. An inactive teacher has no access (as in the other teacher pages). */
   async teacherList(scope: TeacherScope) {
-    if (!scope.facultyId) return [];
+    if (!scope.active || !scope.facultyId) return [];
     const rows = await this.prisma.dailyReport.findMany({
       where: { schoolId: scope.schoolId, facultyId: scope.facultyId },
       include,
@@ -151,7 +176,7 @@ export class DailyReportsService {
       () =>
         this.prisma.$transaction(async (tx) => {
           // Shared: a batch being deleted holds it FOR UPDATE, so this waits and then sees it gone.
-          await lockBatch(tx, scope.schoolId, dto.batchId);
+          withinBatch(date, await lockBatch(tx, scope.schoolId, dto.batchId));
           const faculty = await tx.faculty.findUniqueOrThrow({ where: { id: facultyId }, select: { name: true } });
           const row = await tx.dailyReport.create({
             data: {
@@ -185,14 +210,20 @@ export class DailyReportsService {
     const current = await this.own(scope, facultyId, id);
     const moved = current.reportDate.getTime() !== date.getTime();
     const submittedAt = moved ? now : current.submittedAt;
+    // A move is a new submission for that day; otherwise the teacher changed the content.
+    const editedAt = moved ? null : now;
+    // The batch's dates bound a report's day only when the day or the batch changes, so a
+    // typo can always be fixed (even after an admin moved the batch's start or end).
+    const samePlace = !moved && dto.batchId === current.batchId;
     return duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
-          await lockBatch(tx, scope.schoolId, dto.batchId);
+          const batch = await lockBatch(tx, scope.schoolId, dto.batchId);
+          if (!samePlace) withinBatch(date, batch);
           // Scoped in the write, so a report deleted meanwhile is a 404, not a 500.
           const { count } = await tx.dailyReport.updateMany({
             where: { id, schoolId: scope.schoolId, facultyId },
-            data: { batchId: dto.batchId, reportDate: date, ...fields(dto), submittedAt, late: isLate(date, submittedAt) },
+            data: { batchId: dto.batchId, reportDate: date, ...fields(dto), submittedAt, editedAt, late: isLate(date, submittedAt) },
           });
           if (!count) throw new NotFoundException('Report not found');
           return { id, late: isLate(date, submittedAt) };
@@ -240,9 +271,18 @@ function reportDay(value: string, now: Date): Date {
 }
 
 async function lockBatch(tx: Prisma.TransactionClient, schoolId: string, batchId: string) {
-  const rows = await tx.$queryRaw<unknown[]>`
-    SELECT 1 FROM "Batch" WHERE "id" = ${batchId} AND "schoolId" = ${schoolId} FOR SHARE`;
-  if (!rows.length) throw new BadRequestException('Select one of your batches');
+  const [row] = await tx.$queryRaw<{ startDate: Date; endDate: Date | null }[]>`
+    SELECT "startDate", "endDate" FROM "Batch" WHERE "id" = ${batchId} AND "schoolId" = ${schoolId} FOR SHARE`;
+  if (!row) throw new BadRequestException('Select one of your batches');
+  return row;
+}
+
+const dayLabel = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
+
+/** A report is for a day the batch ran: from its start date, up to its end date if it has one. */
+function withinBatch(date: Date, batch: { startDate: Date; endDate: Date | null }) {
+  if (date < batch.startDate) throw new BadRequestException(`This batch started on ${dayLabel.format(batch.startDate)}; pick a day from then`);
+  if (batch.endDate && date > batch.endDate) throw new BadRequestException(`This batch ended on ${dayLabel.format(batch.endDate)}; pick a day up to then`);
 }
 
 function fields(dto: DailyReportDto) {
@@ -269,6 +309,6 @@ function toReport(r: ReportRow) {
     observations: r.observations,
     late: r.late,
     submittedAt: r.submittedAt.toISOString(),
-    edited: r.updatedAt.getTime() - r.submittedAt.getTime() > EDIT_GRACE_MS,
+    edited: !!r.editedAt && r.editedAt.getTime() - r.submittedAt.getTime() > EDIT_GRACE_MS,
   };
 }

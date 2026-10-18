@@ -4,7 +4,7 @@ import { validate } from 'class-validator';
 import { Prisma } from '../generated/prisma/client.js';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import { DailyReportDto } from './daily-reports.dto.js';
+import { DailyReportDto, ReportFlagDto } from './daily-reports.dto.js';
 import { DailyReportsService, isLate, pendingReports } from './daily-reports.service.js';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -34,9 +34,14 @@ const row = (over: Record<string, unknown> = {}) => ({
   observations: null,
   late: false,
   submittedAt: new Date('2026-10-18T04:45:00Z'),
+  editedAt: null,
+  flaggedAt: null,
+  flaggedBy: null,
+  flagReason: null,
   updatedAt: new Date('2026-10-18T04:45:00Z'),
   ...over,
 });
+const sql = (call: unknown[]) => (call[0] as string[]).join('?');
 const dup = () =>
   new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 't', meta: { target: ['DailyReport_one_per_class_key'] } });
 
@@ -56,7 +61,9 @@ function build() {
     batch: { findMany: vi.fn().mockResolvedValue([{ id: 'b1', name: 'Batch 1A', program: { name: 'JEE' } }]) },
     scheduleSlot: { findMany: vi.fn().mockResolvedValue([{ subject: 'physics' }, { subject: 'Chemistry' }]) },
     specialClass: { findMany: vi.fn().mockResolvedValue([{ subject: 'Doubt Solving' }]) },
-    $queryRaw: vi.fn().mockResolvedValue([{ '?column?': 1 }]),
+    // The locked batch: started 1 Apr 2026, no end date.
+    $queryRaw: vi.fn().mockResolvedValue([{ startDate: d('2026-04-01'), endDate: null }]),
+    user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ fullName: 'Principal Mehta' }) },
     $transaction: vi.fn(),
   };
   prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => unknown) => run(prisma));
@@ -91,7 +98,7 @@ describe('DailyReportsService: faculty', () => {
     const { service, prisma } = build();
     await expect(service.submit(scope(), dto({ homework: 'Exercise 3.2' }))).resolves.toEqual({ id: 'r1', late: false });
     const [sql, ...values] = prisma.$queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
-    expect(sql.join('?')).toMatch(/FROM "Batch" WHERE "id" = \? AND "schoolId" = \? FOR SHARE/);
+    expect(sql.join('?')).toMatch(/SELECT "startDate", "endDate" FROM "Batch" WHERE "id" = \? AND "schoolId" = \? FOR SHARE/);
     expect(values).toEqual(['b1', 'school-1']);
     expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.dailyReport.create.mock.invocationCallOrder[0]);
     expect(prisma.dailyReport.create.mock.calls[0][0].data).toEqual({
@@ -117,6 +124,16 @@ describe('DailyReportsService: faculty', () => {
     await expect(service.submit(scope(), dto({ date: '2026-10-19' }))).rejects.toThrow("You can't report a day that hasn't happened yet");
     await expect(service.submit(scope(), dto({ date: '2026-02-30' }))).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.dailyReport.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('a report is for a day its batch ran: not before it started (2020-01-01), nor after it ended; the same when an edit moves it', async () => {
+    const { service, prisma } = build();
+    await expect(service.submit(scope(), dto({ date: '2020-01-01' }))).rejects.toEqual(new BadRequestException('This batch started on 1 Apr 2026; pick a day from then'));
+    await expect(service.submit(scope(), dto({ date: '2026-04-01' }))).resolves.toEqual({ id: 'r1', late: false });
+    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: d('2026-04-01'), endDate: d('2026-09-30') }]);
+    await expect(service.submit(scope(), dto({ date: '2026-10-01' }))).rejects.toThrow('This batch ended on 30 Sept 2026; pick a day up to then');
+    await expect(service.update(scope(), 'r1', dto({ date: '2026-03-31' }))).rejects.toThrow('This batch started on 1 Apr 2026');
+    expect(prisma.dailyReport.updateMany).not.toHaveBeenCalled();
   });
 
   it('only for a batch assigned to the teacher, and only while their profile is active', async () => {
@@ -146,13 +163,52 @@ describe('DailyReportsService: faculty', () => {
     const call = prisma.dailyReport.updateMany.mock.calls[0][0];
     expect(call.where).toEqual({ id: 'r1', schoolId: 'school-1', facultyId: 'fac-1' });
     expect(call.data).toMatchObject({ reportDate: d('2026-10-18'), submittedAt: new Date('2026-10-18T04:45:00Z'), late: false, topics: 'Projectile motion and range' });
+    // The content changed now, which is what "Edited" shows (an admin's flag doesn't count).
+    expect(call.data.editedAt).toEqual(new Date('2026-10-20T06:00:00Z'));
+  });
+
+  it('after an admin moves the batch’s dates, a text-only edit of a report outside them saves; moving its day or batch is still bounded', async () => {
+    const { service, prisma } = build();
+    // The report is for 18 Oct; Batch 1A now ended on 16 Oct.
+    prisma.$queryRaw.mockResolvedValue([{ startDate: d('2026-04-01'), endDate: d('2026-10-16') }]);
+    await expect(service.update(scope(), 'r1', dto({ topics: 'Typo fixed' }))).resolves.toEqual({ id: 'r1', late: false });
+    // Its batch is still locked first (a delete waits), only the date check is skipped.
+    expect(sql(prisma.$queryRaw.mock.calls[0])).toContain('FOR SHARE');
+    await expect(service.update(scope(), 'r1', dto({ date: '2026-10-17' }))).rejects.toThrow('This batch ended on 16 Oct 2026; pick a day up to then');
+    // Moved to another batch whose dates exclude the day.
+    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: d('2026-10-19'), endDate: null }]);
+    await expect(service.update(scope(), 'r1', dto({ batchId: 'b2' }))).rejects.toThrow('This batch started on 19 Oct 2026; pick a day from then');
+    // The start moved later (11 Oct), the report is from 10 Oct: a text-only edit still saves.
+    prisma.dailyReport.findFirst.mockResolvedValueOnce({ batchId: 'b1', reportDate: d('2026-10-10'), submittedAt: new Date('2026-10-10T05:00:00Z') });
+    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: d('2026-10-11'), endDate: null }]);
+    await expect(service.update(scope(), 'r1', dto({ date: '2026-10-10', topics: 'Typo fixed' }))).resolves.toMatchObject({ id: 'r1' });
+    expect(prisma.dailyReport.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('the batch’s end day itself is allowed; the day after is not', async () => {
+    const { service, prisma } = build();
+    prisma.$queryRaw.mockResolvedValue([{ startDate: d('2026-04-01'), endDate: d('2026-10-16') }]);
+    await expect(service.submit(scope(), dto({ date: '2026-10-16' }))).resolves.toMatchObject({ id: 'r1' });
+    await expect(service.submit(scope(), dto({ date: '2026-10-17' }))).rejects.toThrow('This batch ended on 16 Oct 2026');
+  });
+
+  it('an inactive teacher has no access to their reports (the list is empty)', async () => {
+    const { service, prisma } = build();
+    await expect(service.teacherList(scope({ active: false }))).resolves.toEqual([]);
+    expect(prisma.dailyReport.findMany).not.toHaveBeenCalled();
+  });
+
+  it('an edit can only move a report to a batch still assigned to the teacher', async () => {
+    const { service, prisma } = build();
+    await expect(service.update(scope(), 'r1', dto({ batchId: 'b-other' }))).rejects.toEqual(new ForbiddenException("You aren't assigned to that batch"));
+    expect(prisma.dailyReport.updateMany).not.toHaveBeenCalled();
   });
 
   it('moving a report to another day makes it a report for that day, submitted now', async () => {
     const { service, prisma } = build();
     vi.setSystemTime(new Date('2026-10-20T06:00:00Z'));
     await expect(service.update(scope(), 'r1', dto({ date: '2026-10-19' }))).resolves.toEqual({ id: 'r1', late: true });
-    expect(prisma.dailyReport.updateMany.mock.calls[0][0].data).toMatchObject({ reportDate: d('2026-10-19'), submittedAt: new Date('2026-10-20T06:00:00Z'), late: true });
+    expect(prisma.dailyReport.updateMany.mock.calls[0][0].data).toMatchObject({ reportDate: d('2026-10-19'), submittedAt: new Date('2026-10-20T06:00:00Z'), editedAt: null, late: true });
     await expect(service.update(scope(), 'r1', dto({ date: '2026-10-20' }))).resolves.toEqual({ id: 'r1', late: false });
   });
 
@@ -222,13 +278,19 @@ describe('DailyReportsService: admin', () => {
     prisma.dailyReport.findMany.mockResolvedValue([
       row(),
       row({ id: 'r2', late: true, batchId: 'b2', batch: { id: 'b2', name: 'Batch 2A', program: { id: 'p1', name: 'JEE' } } }),
-      row({ id: 'r3', subject: 'Chemistry', updatedAt: new Date('2026-10-18T09:00:00Z') }),
-      row({ id: 'r4', facultyId: null, teacherName: 'Former Teacher' }),
+      row({ id: 'r3', subject: 'Chemistry', editedAt: new Date('2026-10-18T09:00:00Z'), updatedAt: new Date('2026-10-18T09:00:00Z') }),
+      row({ id: 'r4', facultyId: null, teacherName: 'Former Teacher', subject: 'physics', flaggedAt: new Date('2026-10-18T10:00:00Z'), flaggedBy: 'Principal Mehta', flagReason: 'Topics too brief', updatedAt: new Date('2026-10-18T10:00:00Z') }),
     ]);
     const all = await service.adminList('school-1', { date: '2026-10-18' });
-    expect(all.kpis).toEqual({ submitted: 4, late: 1, teachers: 2, classes: 2 });
+    // Classes: Batch 1A Physics (r1, r4 in any case), Batch 2A Physics, Batch 1A Chemistry.
+    expect(all.kpis).toEqual({ submitted: 4, late: 1, teachers: 2, classes: 3, flagged: 1 });
     expect(all.items.map((i) => i.id)).toEqual(['r1', 'r2', 'r3', 'r4']);
     expect(all.items[2].edited).toBe(true);
+    // Flagging changed r4's updatedAt, but it isn't "edited".
+    expect(all.items[3]).toMatchObject({ edited: false, flag: { at: '2026-10-18T10:00:00.000Z', by: 'Principal Mehta', reason: 'Topics too brief' } });
+    expect(all.items[0].flag).toBeNull();
+    const flagged = await service.adminList('school-1', { date: '2026-10-18', status: 'FLAGGED' });
+    expect(flagged.items.map((i) => i.id)).toEqual(['r4']);
     expect(prisma.dailyReport.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', reportDate: d('2026-10-18') });
     const late = await service.adminList('school-1', { date: '2026-10-18', status: 'LATE' });
     expect(late.items.map((i) => i.id)).toEqual(['r2']);
@@ -244,6 +306,38 @@ describe('DailyReportsService: admin', () => {
     expect(prisma.dailyReport.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', reportDate: d('2026-10-18'), batch: { programId: 'p1' } });
     expect(prisma.dailyReport.findMany.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', reportDate: d('2026-10-18'), batchId: 'b2' });
     await expect(service.adminList('school-1', { date: '2026-13-01' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('DailyReportsService: admin flags and deletes', () => {
+  it('flags a report with who, when and why, and clears it; scoped to the school', async () => {
+    const { service, prisma } = build();
+    await expect(service.setFlag('school-1', 'u-admin', 'r1', { flagged: true, reason: 'Topics too brief' })).resolves.toEqual({ id: 'r1', flagged: true });
+    expect(prisma.dailyReport.updateMany.mock.calls[0][0]).toEqual({
+      where: { id: 'r1', schoolId: 'school-1' },
+      data: { flaggedAt: NOW, flaggedBy: 'Principal Mehta', flaggedById: 'u-admin', flagReason: 'Topics too brief' },
+    });
+    await service.setFlag('school-1', 'u-admin', 'r1', { flagged: false });
+    expect(prisma.dailyReport.updateMany.mock.calls[1][0].data).toEqual({ flaggedAt: null, flaggedBy: null, flaggedById: null, flagReason: null });
+    // The flag never touches the report's content or its edited time.
+    expect(prisma.dailyReport.updateMany.mock.calls[0][0].data).not.toHaveProperty('editedAt');
+    prisma.dailyReport.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(service.setFlag('school-1', 'u-admin', 'r-x', { flagged: true })).rejects.toEqual(new NotFoundException('Report not found'));
+  });
+
+  it('admins delete any report of their school', async () => {
+    const { service, prisma } = build();
+    await expect(service.adminRemove('school-1', 'r1')).resolves.toEqual({ ok: true });
+    expect(prisma.dailyReport.deleteMany).toHaveBeenCalledWith({ where: { id: 'r1', schoolId: 'school-1' } });
+    prisma.dailyReport.deleteMany.mockResolvedValueOnce({ count: 0 });
+    await expect(service.adminRemove('school-1', 'r-other-school')).rejects.toThrow('Report not found');
+  });
+
+  it('a flag reason is optional, at most 500 characters', async () => {
+    const msgs = async (plain: object) => (await validate(plainToInstance(ReportFlagDto, plain))).map((e) => Object.values(e.constraints ?? {})[0]);
+    expect(await msgs({ flagged: true })).toEqual([]);
+    expect(await msgs({ flagged: true, reason: 'x'.repeat(501) })).toEqual(['Keep the reason under 500 characters']);
+    expect(await msgs({})).toEqual(['Say whether to flag the report']);
   });
 });
 
@@ -264,7 +358,7 @@ describe('DailyReportDto', () => {
   });
 
   it('keeps line breaks in topics and turns blank optional fields into null', () => {
-    const out = plainToInstance(DailyReportDto, { ...dto(), topics: '  Projectile  motion\n\n\n\nRange  ', homework: '   ', chapter: '' });
+    const out = plainToInstance(DailyReportDto, { date: '2026-10-18', batchId: 'b1', subject: 'Physics', topics: '  Projectile  motion\n\n\n\nRange  ', homework: '   ', chapter: '' });
     expect(out.topics).toBe('Projectile motion\n\nRange');
     expect(out.homework).toBeNull();
     expect(out.chapter).toBeNull();

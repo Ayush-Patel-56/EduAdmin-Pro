@@ -1399,20 +1399,26 @@ model CalendarEvent {
 // rule). Reports are teaching records: a batch with reports can't be deleted
 // (end it instead), and a report keeps its teacher's name if their profile goes.
 model DailyReport {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   schoolId     String
   facultyId    String? // the reporting teacher; null once their profile is deleted
   teacherName  String // as it was when submitted, so the record still names them
   batchId      String
-  reportDate   DateTime @db.Date // the day taught
+  reportDate   DateTime  @db.Date // the day taught
   subject      String
   chapter      String?
   topics       String
   homework     String?
   observations String?
   late         Boolean // submitted after reportDate (IST); checked by the database
-  submittedAt  DateTime @db.Timestamptz(3) // first submission; edits don't change it
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+  submittedAt  DateTime  @db.Timestamptz(3) // first submission; edits don't change it
+  editedAt     DateTime? @db.Timestamptz(3) // the teacher's last change to the content (not an admin flag)
+  // Flagged by an admin for follow-up (PRD 4.8, HLD 9.5), with who, when and why; a CHECK keeps them together.
+  flaggedAt    DateTime? @db.Timestamptz(3)
+  flaggedBy    String?
+  flaggedById  String?
+  flagReason   String?
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
 
   school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   // Tied to the report's school; deleting the profile nulls only facultyId (ON DELETE SET NULL ("facultyId")).

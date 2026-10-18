@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
-export type ReportStatus = 'ON_TIME' | 'LATE'
+export type ReportStatus = 'ON_TIME' | 'LATE' | 'FLAGGED'
 
 export type DailyReport = {
   id: string
@@ -21,16 +21,20 @@ export type DailyReport = {
   edited: boolean
 }
 
+/** An admin's flag on a report, for follow-up (admins only). */
+export type ReportFlag = { at: string; by: string; reason: string | null }
+
 export type AdminDay = {
   date: string
-  kpis: { submitted: number; late: number; teachers: number; classes: number }
-  items: DailyReport[]
+  /** Classes: each batch's subjects reported for the day. */
+  kpis: { submitted: number; late: number; teachers: number; classes: number; flagged: number }
+  items: (DailyReport & { flag: ReportFlag | null })[]
 }
 
 export type ReportOptions = {
   /** Today in India, YYYY-MM-DD: the form's default date. */
   today: string
-  /** false once the teacher's profile is inactive: they can still read their reports. */
+  /** false once the teacher's profile is inactive: no access (no form, no list). */
   active: boolean
   batches: { id: string; name: string; program: string }[]
   subjects: string[]
@@ -50,6 +54,7 @@ export const STATUS_TABS: { key: ReportStatus | ''; label: string }[] = [
   { key: '', label: 'All' },
   { key: 'ON_TIME', label: 'Submitted' },
   { key: 'LATE', label: 'Late' },
+  { key: 'FLAGGED', label: 'Flagged' },
 ]
 
 export const adminReportsPath = (schoolId: string) => `/schools/${schoolId}/daily-reports`
