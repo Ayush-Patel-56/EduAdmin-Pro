@@ -111,7 +111,31 @@ describe('PtmNotesService', () => {
     await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-04-02' }))).resolves.toEqual({ id: 'n1' });
     // With no batches left, the day the school was set up is the floor.
     prisma.batch.aggregate.mockResolvedValueOnce({ _min: { startDate: null } });
+    prisma.ptmNote.findFirst.mockResolvedValueOnce({ ...orphan, meetingDate: d('2026-07-10') });
     await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-05-01' }))).rejects.toThrow("this school's records start (1 Jun 2026)");
+  });
+
+  it('the school floor: the day the school was set up, in India, when that is before its first batch starts (#42)', async () => {
+    const { service, prisma } = build();
+    prisma.ptmNote.findFirst.mockResolvedValue({ studentId: 'st-1', batchId: null, meetingDate: d('2026-05-10'), batch: null });
+    // Set up at 20:00 UTC on 28 Feb, which is 1 Mar in India; the first batch starts 1 Apr.
+    prisma.school.findUniqueOrThrow.mockResolvedValue({ createdAt: new Date('2026-02-28T20:00:00Z') });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-03-01' }))).resolves.toEqual({ id: 'n1' });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-02-28' }))).rejects.toEqual(
+      new BadRequestException("The meeting can't be before this school's records start (1 Mar 2026)"),
+    );
+  });
+
+  it('when every early batch is gone and the records start after the note, it can still move later, never earlier (#42)', async () => {
+    const { service, prisma } = build();
+    // A school set up today whose only batch (start 1 Apr) was deleted; the note is from 1 May.
+    prisma.school.findUniqueOrThrow.mockResolvedValue({ createdAt: NOW });
+    prisma.batch.aggregate.mockResolvedValue({ _min: { startDate: null } });
+    prisma.ptmNote.findFirst.mockResolvedValue({ studentId: 'st-1', batchId: null, meetingDate: d('2026-05-01'), batch: null });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-05-02' }))).resolves.toEqual({ id: 'n1' });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-04-30' }))).rejects.toEqual(
+      new BadRequestException("The meeting can't be before its current date (1 May 2026)"),
+    );
   });
 
   it('after a batch’s start moves later, a text-only edit of an older note saves; changing its day, or re-pointing it, is still bounded', async () => {

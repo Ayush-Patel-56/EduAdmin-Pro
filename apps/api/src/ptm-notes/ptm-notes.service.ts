@@ -108,7 +108,7 @@ export class PtmNotesService {
         ? null
         : current.batch
           ? { day: current.batch.startDate, reason: 'the batch started' }
-          : await this.schoolFloor(scope.schoolId);
+          : earlier(await this.schoolFloor(scope.schoolId), { day: current.meetingDate, reason: 'its current date' });
     const dates = meetingDates(dto, floor);
     const { count } = await studentGone(() =>
       this.prisma.ptmNote.updateMany({
@@ -158,6 +158,16 @@ export class PtmNotesService {
 function requireTeacher(scope: TeacherScope): string {
   if (!scope.active || !scope.facultyId) throw new ForbiddenException('Only active faculty can log parent meetings');
   return scope.facultyId;
+}
+
+/**
+ * The earlier of two floors. A note whose batch was deleted is bounded by when
+ * the school's records start, but never above its own day: if every early
+ * batch is gone, the records can start after the note, and it can still move
+ * later (#42).
+ */
+function earlier(a: { day: Date; reason: string }, b: { day: Date; reason: string }) {
+  return b.day < a.day ? b : a;
 }
 
 const dayLabel = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
