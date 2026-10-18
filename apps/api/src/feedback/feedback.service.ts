@@ -202,10 +202,14 @@ export class FeedbackService {
    * as Send requires. A blank target, or "All Faculty" / "Staff", addresses
    * everyone.
    *
-   * Each row is keyed by its cells as written (a blank sender or date stays
-   * blank, rather than becoming the importing admin or today), and the key is
+   * Each row is keyed by its cells as written, with a teacher sender or
+   * target by the faculty member it resolves to (so "t1@x.test" and "Ravi
+   * Kumar" for the same teacher are one row); a blank sender or date stays
+   * blank, rather than becoming the importing admin or today. The key is
    * unique per school in the database, so the same sheet uploaded again (by
-   * another admin, on another day, or twice at once) never stores a row twice.
+   * another admin, on another day, or twice at once) never stores a row
+   * twice. Rows imported before the faculty-id key are matched by their old
+   * key too. A large sheet comes in chunks (`firstRow`, `priorKeys`).
    */
   async import(schoolId: string, userId: string, dto: FeedbackImportDto): Promise<ImportPreview> {
     const [importer, faculty] = await Promise.all([
@@ -218,8 +222,9 @@ export class FeedbackService {
       const byId = faculty.filter((f) => f.email?.toLowerCase() === key || f.employeeId?.toLowerCase() === key);
       return byId.length ? byId : faculty.filter((f) => f.name.trim().toLowerCase() === key);
     };
-    type Ready = Prisma.FeedbackCreateManyInput & { importKey: string };
+    type Ready = Prisma.FeedbackCreateManyInput & { importKey: string; legacyKey: string };
     const ready: (Ready | null)[] = [];
+    const firstRowNumber = dto.firstRow ?? 2;
     const rows: ImportPreview['rows'] = dto.rows.map((raw, i) => {
       const errors: string[] = [];
       const direction = parseDirection(raw.type);
@@ -261,10 +266,10 @@ export class FeedbackService {
       }
       const label = direction
         ? `${DIRECTION_LABELS[direction]}: ${sender || '?'}${direction === 'MANAGEMENT_TO_TEACHER' ? ` to ${target.toAllFaculty ? 'All Faculty' : (target.targetName ?? raw.target ?? '?')}` : ''}`
-        : (raw.content?.slice(0, 40) ?? `Row ${i + 2}`);
+        : (raw.content?.slice(0, 40) ?? `Row ${firstRowNumber + i}`);
       if (errors.length || !direction || !category) {
         ready.push(null);
-        return { row: i + 2, label, action: 'error' as const, errors };
+        return { row: firstRowNumber + i, label, action: 'error' as const, errors };
       }
       ready.push({
         schoolId,
@@ -279,31 +284,32 @@ export class FeedbackService {
         category,
         feedbackDate: date,
         source: 'IMPORT' as const,
-        importKey: importKeyOf(raw, direction, givenDate),
+        importKey: importKeyOf(raw, direction, givenDate, { senderFacultyId, ...target }),
+        legacyKey: legacyImportKeyOf(raw, direction, givenDate),
       });
-      return { row: i + 2, label, action: 'create' as const, errors: [] };
+      return { row: firstRowNumber + i, label, action: 'create' as const, errors: [] };
     });
 
     const skip = (i: number, error: string) => {
       rows[i] = { ...rows[i], action: 'error', errors: [error] };
       ready[i] = null;
     };
-    // Twice in this file: the first one counts.
-    const firstRow = new Map<string, number>();
+    // Twice in this file (this chunk or an earlier one): the first one counts.
+    const firstRow = new Map<string, number>((dto.priorKeys ?? []).map((p) => [p.key, p.row]));
     ready.forEach((r, i) => {
       if (!r) return;
       const first = firstRow.get(r.importKey);
       if (first === undefined) firstRow.set(r.importKey, rows[i].row);
       else skip(i, `Appears twice in this file (same as row ${first})`);
     });
-    // Uploaded before.
-    const keys = ready.flatMap((r) => (r ? [r.importKey] : []));
+    // Uploaded before (by its key, or the key it had before teachers were keyed by id).
+    const keys = ready.flatMap((r) => (r ? [r.importKey, r.legacyKey] : []));
     const existing = keys.length
       ? new Set((await this.prisma.feedback.findMany({ where: { schoolId, importKey: { in: keys } }, select: { importKey: true } })).map((r) => r.importKey))
       : new Set<string | null>();
-    ready.forEach((r, i) => r && existing.has(r.importKey) && skip(i, 'Already imported (an earlier upload has this row)'));
+    ready.forEach((r, i) => r && (existing.has(r.importKey) || existing.has(r.legacyKey)) && skip(i, 'Already imported (an earlier upload has this row)'));
 
-    const toCreate = ready.flatMap((r) => (r ? [r] : []));
+    const toCreate = ready.flatMap((r) => (r ? [withoutLegacy(r)] : []));
     if (!dto.dryRun && toCreate.length) {
       const inserted = await withTeacherGone(() =>
         this.prisma.$transaction(
@@ -335,19 +341,38 @@ export class FeedbackService {
       ready.forEach((r, i) => r && !stored.has(r.importKey) && skip(i, 'Already imported (by an upload that finished at the same time)'));
     }
     const created = ready.filter(Boolean).length;
+    // Each new row's key, for the next chunk of the same file.
+    ready.forEach((r, i) => r && (rows[i] = { ...rows[i], key: r.importKey }));
     return { applied: !dto.dryRun, created, updated: 0, skipped: rows.length - created, rows };
   }
 }
 
+const withoutLegacy = <T extends { legacyKey: string }>({ legacyKey: _legacy, ...row }: T) => row;
+
+const cell = (v: string | undefined) => (v ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+const hash = (parts: string[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+
 /**
- * A row's identity: its cells as written (trimmed, spacing and letter case
- * ignored, a date in either accepted format read as the same day), blanks
- * kept blank. Hashed, so a long comment still fits a unique index.
+ * A row's identity: its direction and cells (trimmed, spacing and letter case
+ * ignored, a date in either accepted format read as the same day), with a
+ * teacher sender or target as the faculty member it resolved to, however the
+ * sheet wrote them; "All Faculty" / "Staff" / blank are one target. Other
+ * blanks stay blank. Hashed, so a long comment still fits a unique index.
  */
-export function importKeyOf(raw: FeedbackImportRow, direction: FeedbackDirection, date: Date | null): string {
-  const cell = (v: string | undefined) => (v ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const parts = [direction, cell(raw.sender), cell(raw.target), cell(raw.rating), cell(raw.content), cell(raw.subject), cell(raw.category), date ? toIsoDate(date) : ''];
-  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+export function importKeyOf(
+  raw: FeedbackImportRow,
+  direction: FeedbackDirection,
+  date: Date | null,
+  who: { senderFacultyId: string | null; toAllFaculty: boolean; targetFacultyId: string | null },
+): string {
+  const sender = direction === 'TEACHER_TO_MANAGEMENT' ? `faculty:${who.senderFacultyId}` : cell(raw.sender);
+  const target = direction === 'MANAGEMENT_TO_TEACHER' ? (who.toAllFaculty ? 'all-faculty' : `faculty:${who.targetFacultyId}`) : cell(raw.target);
+  return hash(['v2', direction, sender, target, cell(raw.rating), cell(raw.content), cell(raw.subject), cell(raw.category), date ? toIsoDate(date)! : '']);
+}
+
+/** The key rows were imported under before teachers were keyed by id: every cell as written. */
+export function legacyImportKeyOf(raw: FeedbackImportRow, direction: FeedbackDirection, date: Date | null): string {
+  return hash([direction, cell(raw.sender), cell(raw.target), cell(raw.rating), cell(raw.content), cell(raw.subject), cell(raw.category), date ? toIsoDate(date)! : '']);
 }
 
 /** A teacher profile deleted between the check and the insert (foreign key) is a 400, not a 500. */

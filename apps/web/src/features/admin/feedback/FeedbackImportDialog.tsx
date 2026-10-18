@@ -6,7 +6,7 @@ import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
 import type { ImportPreview } from '@/features/academic/api'
 import { ImportPreviewTable } from '@/features/academic/ImportPreviewTable'
-import { feedbackPath } from '@/features/feedback/api'
+import { feedbackPath, importInChunks } from '@/features/feedback/api'
 import { FEEDBACK_COLUMNS, HEADERS, sampleRows } from '@/features/feedback/sheet'
 
 const RULES: [string, boolean, string][] = [
@@ -17,7 +17,7 @@ const RULES: [string, boolean, string][] = [
   ['Subject', false, 'What it is about'],
   ['Target', false, 'For management’s feedback: one teacher (name, email or employee ID), or blank / All Faculty for everyone'],
   ['Category', false, 'Academics, Discipline, Punctuality, Teaching Quality, Administration or General (blank is General)'],
-  ['Date', false, 'YYYY-MM-DD or DD-MM-YYYY; blank is today; not in the future'],
+  ['Date', false, 'YYYY-MM-DD or DD-MM-YYYY; blank is today; not in the future. Give a date to import the same comment again later (an identical row with no date counts as already imported).'],
 ]
 
 type Props = { schoolId: string; onImported: () => Promise<unknown>; onClose: () => void }
@@ -31,8 +31,9 @@ export function FeedbackImportDialog({ schoolId, onImported, onClose }: Props) {
   const [busy, setBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Large sheets go in chunks, so a full one never exceeds the request size limit.
   const send = (rows: Record<string, string>[], dryRun: boolean) =>
-    api<ImportPreview>(`${feedbackPath(schoolId)}/import`, { method: 'POST', body: JSON.stringify({ rows, dryRun }) })
+    importInChunks((chunk) => api<ImportPreview>(`${feedbackPath(schoolId)}/import`, { method: 'POST', body: JSON.stringify(chunk) }), rows, dryRun)
 
   async function choose(next: File | undefined) {
     if (!next) return

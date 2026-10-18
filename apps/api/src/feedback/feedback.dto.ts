@@ -96,6 +96,18 @@ export class FeedbackImportRow {
   @IsOptional() @IsString() @MaxLength(20) date?: string;
 }
 
+/** A row of the same file sent in an earlier chunk: its key and sheet row. */
+export class PriorImportKey {
+  @Matches(/^[0-9a-f]{64}$/) key: string;
+  @IsInt() @Min(2) row: number;
+}
+
+/**
+ * A feedback sheet, or one chunk of it: the browser sends a large sheet in
+ * chunks (each well under the body limit), with the sheet row of the first
+ * one, and the keys of the rows already sent so a repeat across chunks is
+ * still "appears twice in this file".
+ */
 export class FeedbackImportDto {
   @IsArray()
   @ArrayMaxSize(MAX_FEEDBACK_IMPORT_ROWS, { message: `Import at most ${MAX_FEEDBACK_IMPORT_ROWS} rows at a time` })
@@ -105,4 +117,14 @@ export class FeedbackImportDto {
 
   @IsBoolean()
   dryRun: boolean;
+
+  /** The sheet row of rows[0] (the header is row 1). */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(2) firstRow?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_FEEDBACK_IMPORT_ROWS)
+  @ValidateNested({ each: true })
+  @Type(() => PriorImportKey)
+  priorKeys?: PriorImportKey[];
 }

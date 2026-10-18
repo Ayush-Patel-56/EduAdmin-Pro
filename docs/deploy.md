@@ -232,6 +232,14 @@ New enums and a new table only (feedback between management and faculty), wrappe
 - **Bulk upload.** A sheet's teacher sender must match a faculty member, and a teacher target an active one (name, email or employee ID).
 - **`20261018130000_feedback_import_key`** keys each imported row by its cells as written (a hash, unique per school through a partial unique index), so the same sheet uploaded again (by another admin, on another day, or twice at once) never stores a row twice; any imported rows from before get a key of their own. It also records the id of the admin who last changed an entry's status, next to their name.
 - Both migrations set `lock_timeout = 10s`: if a long-running query holds `School` or `Faculty`, they fail cleanly (and roll back) instead of queueing requests; mark the failed one `--rolled-back` and deploy again.
+- **`20261019130000_feedback_school_keys`** ties feedback's sender and target faculty links, and a daily report's faculty link, to the row's school (composite keys) with `ON DELETE SET NULL ("…FacultyId")`, so deleting a profile still nulls only that link. Needs PostgreSQL 15+ (Neon runs 18). Rows are only written through the API, which never crosses schools; to check first (both must be 0):
+
+  ```sql
+  SELECT (SELECT count(*) FROM "Feedback" x WHERE (x."senderFacultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f.id = x."senderFacultyId" AND f."schoolId" = x."schoolId"))
+            OR (x."targetFacultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f.id = x."targetFacultyId" AND f."schoolId" = x."schoolId"))) AS feedback,
+         (SELECT count(*) FROM "DailyReport" x WHERE x."facultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f.id = x."facultyId" AND f."schoolId" = x."schoolId")) AS daily_reports;
+  ```
+- **Import keys.** Imported rows are now keyed with a teacher sender or target by faculty id (so the same teacher written differently is one row); rows imported earlier keep their old key, and an upload checks both, so nothing already imported comes in again. Large sheets are sent in chunks of 200 rows.
 
 ## PTM notes (`20261018150000_ptm_notes`)
 

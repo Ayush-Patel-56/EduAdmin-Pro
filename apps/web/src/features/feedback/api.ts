@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { todayIst } from '@/lib/dates'
+import type { ImportPreview } from '@/features/academic/api'
 
 export type FeedbackDirection = 'TEACHER_TO_MANAGEMENT' | 'MANAGEMENT_TO_TEACHER'
 export type FeedbackCategory = 'ACADEMICS' | 'DISCIPLINE' | 'PUNCTUALITY' | 'TEACHING_QUALITY' | 'ADMINISTRATION' | 'GENERAL'
@@ -111,4 +112,36 @@ export function dayLabel(isoDate: string, today = todayIst()): string {
   yesterday.setUTCDate(yesterday.getUTCDate() - 1)
   if (isoDate === yesterday.toISOString().slice(0, 10)) return 'Yesterday'
   return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${isoDate}T00:00:00Z`))
+}
+
+/** Rows per request when importing a sheet: well under the API's body limit even with 2000-character comments. */
+export const IMPORT_CHUNK = 200
+
+type ImportChunk = { rows: Record<string, string>[]; dryRun: boolean; firstRow: number; priorKeys: { key: string; row: number }[] }
+
+/**
+ * Sends a sheet in chunks, one after another, and joins the answers into one
+ * preview. Each chunk says which sheet row it starts at and carries the keys
+ * of the rows before it, so row numbers and "appears twice in this file" are
+ * exactly as for one request. If a chunk fails while applying, the error says
+ * how many rows were already imported (uploading the sheet again skips them).
+ */
+export async function importInChunks(send: (chunk: ImportChunk) => Promise<ImportPreview>, records: Record<string, string>[], dryRun: boolean, size = IMPORT_CHUNK): Promise<ImportPreview> {
+  const out: ImportPreview = { applied: !dryRun, created: 0, updated: 0, skipped: 0, rows: [] }
+  const priorKeys: { key: string; row: number }[] = []
+  for (let start = 0; start < records.length; start += size) {
+    let part: ImportPreview
+    try {
+      part = await send({ rows: records.slice(start, start + size), dryRun, firstRow: start + 2, priorKeys })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload failed'
+      throw new Error(!dryRun && out.created ? `${message} (${out.created} row${out.created === 1 ? ' was' : 's were'} imported before this; uploading the sheet again skips them.)` : message)
+    }
+    out.created += part.created
+    out.updated += part.updated
+    out.skipped += part.skipped
+    out.rows.push(...part.rows)
+    for (const r of part.rows) if (r.key) priorKeys.push({ key: r.key, row: r.row })
+  }
+  return out
 }
