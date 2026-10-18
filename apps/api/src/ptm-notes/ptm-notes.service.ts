@@ -45,9 +45,9 @@ export class PtmNotesService {
     };
   }
 
-  /** The teacher's own notes, newest meeting first; still readable after they leave. */
+  /** The teacher's own notes, newest meeting first. An inactive teacher has no access (as in the other teacher pages). */
   async list(scope: TeacherScope, query: PtmNoteQuery) {
-    if (!scope.facultyId) return { total: 0, items: [] };
+    if (!scope.active || !scope.facultyId) return { total: 0, items: [] };
     const where: Prisma.PtmNoteWhereInput = { schoolId: scope.schoolId, facultyId: scope.facultyId, ...searchWhere(query.q) };
     const [total, rows] = await Promise.all([
       this.prisma.ptmNote.count({ where }),
@@ -58,11 +58,12 @@ export class PtmNotesService {
 
   async create(scope: TeacherScope, dto: PtmNoteDto) {
     const facultyId = requireTeacher(scope);
-    const dates = meetingDates(dto);
+    if (!dto.batchId) throw new BadRequestException('Select a batch');
     const [batch, faculty] = await Promise.all([
       this.requireStudentInBatch(scope, dto.batchId, dto.studentId),
       this.prisma.faculty.findUniqueOrThrow({ where: { id: facultyId }, select: { name: true } }),
     ]);
+    const dates = meetingDates(dto, batch.startDate);
     const row = await studentGone(() =>
       this.prisma.ptmNote.create({
         data: {
@@ -83,19 +84,22 @@ export class PtmNotesService {
 
   /**
    * Corrects a note. Keeping its student and batch is always allowed (the
-   * student may have moved on since); choosing another is checked like a new
-   * note. Scoped in the write, so a note deleted meanwhile is a 404.
+   * student may have moved on, or the batch been deleted, since): leave the
+   * batch out, or send the one it has. Choosing another student or batch is
+   * checked like a new note. Scoped in the write, so a note deleted meanwhile
+   * is a 404.
    */
   async update(scope: TeacherScope, id: string, dto: PtmNoteDto) {
     const facultyId = requireTeacher(scope);
-    const dates = meetingDates(dto);
     const current = await this.prisma.ptmNote.findFirst({
       where: { id, schoolId: scope.schoolId, facultyId },
-      select: { studentId: true, batchId: true },
+      select: { studentId: true, batchId: true, batch: { select: { startDate: true } } },
     });
     if (!current) throw new NotFoundException('Meeting note not found');
-    const same = current.studentId === dto.studentId && current.batchId === dto.batchId;
-    const batch = same ? null : await this.requireStudentInBatch(scope, dto.batchId, dto.studentId);
+    const keep = current.studentId === dto.studentId && (!dto.batchId || dto.batchId === current.batchId);
+    if (!keep && !dto.batchId) throw new BadRequestException('Select a batch');
+    const batch = keep ? null : await this.requireStudentInBatch(scope, dto.batchId!, dto.studentId);
+    const dates = meetingDates(dto, batch ? batch.startDate : (current.batch?.startDate ?? null));
     const { count } = await studentGone(() =>
       this.prisma.ptmNote.updateMany({
         where: { id, schoolId: scope.schoolId, facultyId },
@@ -117,7 +121,7 @@ export class PtmNotesService {
   private async requireStudentInBatch(scope: TeacherScope, batchId: string, studentId: string) {
     if (!scope.batchIds.includes(batchId)) throw new ForbiddenException("You aren't assigned to that batch");
     const [batch, student] = await Promise.all([
-      this.prisma.batch.findFirst({ where: { id: batchId, schoolId: scope.schoolId }, select: { id: true, name: true } }),
+      this.prisma.batch.findFirst({ where: { id: batchId, schoolId: scope.schoolId }, select: { id: true, name: true, startDate: true } }),
       this.prisma.student.findFirst({ where: { id: studentId, schoolId: scope.schoolId, batchId }, select: { id: true } }),
     ]);
     if (!batch) throw new BadRequestException('Select one of your batches');
@@ -131,10 +135,17 @@ function requireTeacher(scope: TeacherScope): string {
   return scope.facultyId;
 }
 
-/** A meeting that has happened (up to today, India), and a follow-up on or after it. */
-function meetingDates(dto: PtmNoteDto) {
+const dayLabel = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
+
+/**
+ * A meeting that has happened (up to today, India) since its batch started,
+ * and a follow-up on or after it. A note whose batch was deleted keeps only
+ * the first bound.
+ */
+function meetingDates(dto: PtmNoteDto, batchStart: Date | null) {
   const meetingDate = parseDate(dto.date, 'Meeting date');
   if (meetingDate > istToday()) throw new BadRequestException("You can't log a meeting that hasn't happened yet");
+  if (batchStart && meetingDate < batchStart) throw new BadRequestException(`The meeting can't be before the batch started (${dayLabel.format(batchStart)})`);
   const followUpDate = dto.followUpDate ? parseDate(dto.followUpDate, 'Follow-up date') : null;
   if (followUpDate && followUpDate < meetingDate) throw new BadRequestException("The follow-up can't be before the meeting");
   return { meetingDate, followUpDate };

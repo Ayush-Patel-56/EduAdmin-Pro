@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Download, FileSpreadsheet, FileText, Loader2, Pencil, Plus, RefreshCw, Trash2, Upload, UserRound } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Dialog } from '@/components/ui/Dialog'
 import { ConfirmDialog, ErrorBanner } from '@/components/ui/form'
+import { removalLines } from '@/features/students/api'
 import { ALL } from '@/features/academic/filters'
 import {
   STUDENT_STATUS_LABELS,
@@ -277,7 +279,7 @@ export function StudentsPage() {
       {deleting && (
         <ConfirmDialog
           title={`Remove ${deleting.fullName}?`}
-          message={<p>The student, their parents/guardians and batch history are deleted. This can’t be undone; to keep the record, set the status to Inactive, Transferred or Completed instead. A student with recorded attendance can’t be deleted.</p>}
+          message={<RemovalMessage schoolId={schoolId} studentId={deleting.id} />}
           confirmLabel="Remove Student"
           onConfirm={async () => {
             await api(`/schools/${schoolId}/students/${deleting.id}`, { method: 'DELETE' })
@@ -288,6 +290,26 @@ export function StudentsPage() {
         />
       )}
     </>
+  )
+}
+
+/** The delete confirmation, naming the faculty records that go with the student. */
+function RemovalMessage({ schoolId, studentId }: { schoolId: string; studentId: string }) {
+  const removal = useQuery({
+    queryKey: [schoolId, 'student-removal', studentId],
+    queryFn: () => api<{ ptmNotes: number; counselingSessions: number }>(`/schools/${schoolId}/students/${studentId}/removal`),
+  })
+  const gone = removal.data ? removalLines(removal.data) : []
+  return (
+    <div className="space-y-2">
+      <p>The student, their parents/guardians and batch history are deleted. This can’t be undone; to keep the record, set the status to Inactive, Transferred or Completed instead. A student with recorded attendance, fees or test results can’t be deleted.</p>
+      {removal.isLoading && <p className="text-xs text-slate-400">Checking their records…</p>}
+      {gone.length > 0 && (
+        <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Also deleted: {gone.join(' and ')} written by faculty about this student.
+        </p>
+      )}
+    </div>
   )
 }
 

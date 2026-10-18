@@ -77,9 +77,13 @@ export const ptmFormOf = (n: PtmNote): PtmForm => ({
   followUpDate: n.followUpDate ?? '',
 })
 
-/** The form as the API takes it: blank optional fields are left out. */
+/**
+ * The form as the API takes it: blank optional fields are left out. A note
+ * being corrected whose batch was deleted sends no batch, so it keeps the
+ * batch it was logged under.
+ */
 export const toPtmPayload = (f: PtmForm) => ({
-  batchId: f.batchId,
+  batchId: f.batchId || null,
   date: f.date,
   studentId: f.studentId,
   parentName: f.parentName.trim() || null,
@@ -89,9 +93,13 @@ export const toPtmPayload = (f: PtmForm) => ({
   followUpDate: f.followUpDate || null,
 })
 
-/** What the form can say before sending: the server decides, this only warns early. */
-export function ptmProblem(f: PtmForm, today: string): string | null {
-  if (!f.batchId) return 'Select a batch'
+/**
+ * What the form can say before sending: the server decides, this only warns
+ * early. `kept` is the note being corrected: with its own student, the batch
+ * can stay as recorded (it may have been deleted since).
+ */
+export function ptmProblem(f: PtmForm, today: string, kept?: { studentId: string }): string | null {
+  if (!f.batchId && !(kept && f.studentId === kept.studentId)) return 'Select a batch'
   if (!f.date) return 'Pick the meeting date'
   if (f.date > today) return "You can't log a meeting that hasn't happened yet"
   if (!f.studentId) return 'Select a student'

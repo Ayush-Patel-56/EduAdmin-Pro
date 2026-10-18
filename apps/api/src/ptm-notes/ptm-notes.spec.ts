@@ -18,14 +18,14 @@ function build() {
     ptmNote: {
       count: vi.fn().mockResolvedValue(0),
       findMany: vi.fn().mockResolvedValue([]),
-      findFirst: vi.fn().mockResolvedValue({ studentId: 'st-1', batchId: 'b1' }),
+      findFirst: vi.fn().mockResolvedValue({ studentId: 'st-1', batchId: 'b1', batch: { startDate: d('2026-04-01') } }),
       create: vi.fn().mockResolvedValue({ id: 'n1' }),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     batch: {
       findMany: vi.fn().mockResolvedValue([{ id: 'b1', name: 'Batch 1A', program: { name: 'JEE' }, students: [{ id: 'st-1', fullName: 'Ayush Rajeshkumar Patel', rollNumber: null }] }]),
-      findFirst: vi.fn().mockResolvedValue({ id: 'b1', name: 'Batch 1A' }),
+      findFirst: vi.fn().mockResolvedValue({ id: 'b1', name: 'Batch 1A', startDate: d('2026-04-01') }),
     },
     student: { findFirst: vi.fn().mockResolvedValue({ id: 'st-1' }) },
     faculty: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }) },
@@ -79,7 +79,27 @@ describe('PtmNotesService', () => {
     await expect(service.create(scope(), dto({ date: '2026-10-19' }))).rejects.toThrow("You can't log a meeting that hasn't happened yet");
     await expect(service.create(scope(), dto({ date: '2026-10-10', followUpDate: '2026-10-09' }))).rejects.toThrow("The follow-up can't be before the meeting");
     await expect(service.create(scope(), dto({ date: '2026-02-30' }))).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.create(scope(), dto({ batchId: null }))).rejects.toEqual(new BadRequestException('Select a batch'));
     expect(prisma.ptmNote.create).not.toHaveBeenCalled();
+  });
+
+  it('a meeting is on or after the day its batch started (1900-01-01 is refused)', async () => {
+    const { service, prisma } = build();
+    await expect(service.create(scope(), dto({ date: '1900-01-01' }))).rejects.toEqual(new BadRequestException("The meeting can't be before the batch started (1 Apr 2026)"));
+    await expect(service.create(scope(), dto({ date: '2026-03-31' }))).rejects.toThrow('before the batch started');
+    await expect(service.create(scope(), dto({ date: '2026-04-01' }))).resolves.toEqual({ id: 'n1' });
+    // Correcting a note checks its own batch's start; a note whose batch was deleted has no batch bound.
+    await expect(service.update(scope(), 'n1', dto({ date: '2026-03-01' }))).rejects.toThrow('before the batch started');
+    prisma.ptmNote.findFirst.mockResolvedValueOnce({ studentId: 'st-1', batchId: null, batch: null });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-03-01' }))).resolves.toEqual({ id: 'n1' });
+  });
+
+  it('at 01:00 in India a meeting dated today (India) is logged, though the UTC day is still yesterday', async () => {
+    const { service, prisma } = build();
+    vi.setSystemTime(new Date('2026-10-18T19:30:00Z')); // 01:00 IST on the 19th
+    await expect(service.create(scope(), dto({ date: '2026-10-19' }))).resolves.toEqual({ id: 'n1' });
+    expect(prisma.ptmNote.create.mock.calls[0][0].data.meetingDate).toEqual(d('2026-10-19'));
+    await expect(service.create(scope(), dto({ date: '2026-10-20' }))).rejects.toThrow("You can't log a meeting that hasn't happened yet");
   });
 
   it('a student removed at the same moment is a 400, not a foreign-key 500', async () => {
@@ -131,8 +151,11 @@ describe('PtmNotesService', () => {
     expect(args.where.OR).toContainEqual({ discussion: { contains: '50\\%', mode: 'insensitive' } });
     expect(args.orderBy).toEqual([{ meetingDate: 'desc' }, { createdAt: 'desc' }]);
     expect(args.take).toBe(PTM_LIST_LIMIT);
-    // Without a faculty profile there is nothing to list.
+    // Without a faculty profile, or with an inactive one, there is nothing to list.
     await expect(service.list(scope({ facultyId: null }), {})).resolves.toEqual({ total: 0, items: [] });
+    prisma.ptmNote.findMany.mockClear();
+    await expect(service.list(scope({ active: false }), {})).resolves.toEqual({ total: 0, items: [] });
+    expect(prisma.ptmNote.findMany).not.toHaveBeenCalled();
   });
 
   it('editing keeps the student and batch without re-checking (the student may have moved on); another one is checked', async () => {
@@ -147,6 +170,22 @@ describe('PtmNotesService', () => {
     prisma.batch.findFirst.mockResolvedValueOnce({ id: 'b2', name: 'Batch 2A' });
     await service.update(scope(), 'n1', dto({ studentId: 'st-2', batchId: 'b2' }));
     expect(prisma.ptmNote.updateMany.mock.calls[1][0].data).toMatchObject({ studentId: 'st-2', batchId: 'b2', batchName: 'Batch 2A' });
+  });
+
+  it('a note whose batch was deleted is corrected with no batch sent, keeping its recorded batch name', async () => {
+    const { service, prisma } = build();
+    prisma.ptmNote.findFirst.mockResolvedValue({ studentId: 'st-1', batchId: null, batch: null });
+    await expect(service.update(scope(), 'n1', dto({ batchId: '', discussion: 'Corrected' }))).resolves.toEqual({ id: 'n1' });
+    const data = prisma.ptmNote.updateMany.mock.calls[0][0].data;
+    expect(data).not.toHaveProperty('batchId');
+    expect(data).not.toHaveProperty('batchName');
+    expect(data.discussion).toBe('Corrected');
+    expect(prisma.batch.findFirst).not.toHaveBeenCalled();
+    // Changing the student needs a batch to check them against.
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, studentId: 'st-2' }))).rejects.toEqual(new BadRequestException('Select a batch'));
+    // Picking a current batch is an explicit re-point, checked like a new note.
+    await service.update(scope(), 'n1', dto({ batchId: 'b1' }));
+    expect(prisma.ptmNote.updateMany.mock.calls[1][0].data).toMatchObject({ batchId: 'b1', batchName: 'Batch 1A' });
   });
 
   it("another teacher's note, or one deleted meanwhile, is a 404; writes are scoped to the teacher", async () => {
@@ -168,14 +207,22 @@ describe('PtmNoteDto', () => {
   const errors = async (plain: object) =>
     Object.fromEntries((await validate(plainToInstance(PtmNoteDto, plain))).map((e) => [e.property, Object.values(e.constraints ?? {})[0]]));
 
-  it('needs a batch, date, student, attendance and discussion notes, with clear messages', async () => {
-    expect(await errors({ batchId: '', date: '', studentId: 'x', discussion: '   ' })).toEqual({
+  it('needs a date, student, attendance and discussion notes, with clear messages (the batch is checked by the service)', async () => {
+    expect(await errors({ batchId: 'not-a-uuid', date: '', studentId: 'x', discussion: '   ' })).toEqual({
       batchId: 'Select a batch',
       date: 'Pick the meeting date',
       studentId: 'Select a student',
       parentAttended: 'Say whether the parent attended',
       discussion: 'Write the discussion notes',
     });
+  });
+
+  it('discussion notes and action items are at most 4000 characters', async () => {
+    const base = { batchId: '6f2c1d1e-0000-4000-8000-000000000001', date: '2026-10-18', studentId: '6f2c1d1e-0000-4000-8000-000000000002', parentAttended: true };
+    expect(await errors({ ...base, discussion: 'x'.repeat(4000) })).toEqual({});
+    expect(await errors({ ...base, discussion: 'x'.repeat(4001) })).toEqual({ discussion: 'Keep the discussion notes under 4000 characters' });
+    expect(await errors({ ...base, discussion: 'ok', actionItems: 'y'.repeat(4001) })).toEqual({ actionItems: 'Keep the action items under 4000 characters' });
+    expect(await errors({ ...base, batchId: '', discussion: 'ok' })).toEqual({});
   });
 
   it('keeps line breaks in notes and turns blank optional fields into null', () => {

@@ -347,3 +347,19 @@ describe('student helpers', () => {
     expect(tx.studentEnrollment.create).not.toHaveBeenCalled();
   });
 });
+
+describe('StudentsService: what a delete also removes', () => {
+  it("counts the faculty's PTM notes and counseling sessions about the student, in this school", async () => {
+    const ptm = vi.fn().mockResolvedValue(5);
+    const counseling = vi.fn().mockResolvedValue(2);
+    const findFirst = vi.fn().mockResolvedValue({ id: 'st-1' });
+    const prisma = { student: { findFirst }, ptmNote: { count: ptm }, counselingSession: { count: counseling } } as unknown as PrismaService;
+    const service = new StudentsService(prisma, {} as FilesService);
+    await expect(service.removal('school-1', 'st-1')).resolves.toEqual({ ptmNotes: 5, counselingSessions: 2 });
+    expect(findFirst.mock.calls[0][0].where).toEqual({ id: 'st-1', schoolId: 'school-1' });
+    expect(ptm.mock.calls[0][0]).toEqual({ where: { schoolId: 'school-1', studentId: 'st-1' } });
+    expect(counseling.mock.calls[0][0]).toEqual({ where: { schoolId: 'school-1', studentId: 'st-1' } });
+    findFirst.mockResolvedValueOnce(null);
+    await expect(service.removal('school-1', 'st-x')).rejects.toThrow('Student not found');
+  });
+});
