@@ -18,6 +18,7 @@ describe('SchoolsService.teacherDashboard: assignments to grade', () => {
       faculty: { findUnique: vi.fn().mockResolvedValue({ id: 'f1', status, batchAssignments: [{ batchId: 'b1' }, { batchId: 'b2' }] }) },
       assignmentSubmission: { count: vi.fn().mockResolvedValue(4) },
       dailyReport: { findMany: vi.fn().mockResolvedValue([]) },
+      feedback: { findMany: vi.fn().mockResolvedValue([{ id: 'fb1', content: 'Great doubt sessions', createdAt: new Date('2026-10-18T05:00:00Z') }]) },
     };
     const schedule = { classesOn: vi.fn().mockResolvedValue([]) };
     const service = new SchoolsService(prisma as unknown as PrismaService, {} as AccessService, {} as FilesService, schedule as unknown as ScheduleService);
@@ -64,6 +65,7 @@ describe('SchoolsService.teacherDashboard: pending daily reports', () => {
         faculty: { findUnique: vi.fn().mockResolvedValue({ id: 'f1', status: 'ACTIVE', batchAssignments: [{ batchId: 'b1' }, { batchId: 'b2' }] }) },
         assignmentSubmission: { count: vi.fn().mockResolvedValue(0) },
         dailyReport: { findMany },
+        feedback: { findMany: vi.fn().mockResolvedValue([]) },
       };
       // Physics twice in b1 (reported, any letter case), Chemistry in b1 and Physics in b2 (not reported).
       const schedule = { classesOn: vi.fn().mockResolvedValue([cls('b1', 'Physics'), cls('b1', 'Physics'), cls('b1', 'Chemistry'), cls('b2', 'Physics')]) };
@@ -74,5 +76,44 @@ describe('SchoolsService.teacherDashboard: pending daily reports', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('SchoolsService.teacherDashboard: feedback from admin', () => {
+  const build = (status: 'ACTIVE' | 'INACTIVE') => {
+    const prisma = {
+      user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ accountType: 'TEACHER' }) },
+      schoolMembership: {
+        findFirst: vi.fn().mockResolvedValue({
+          school: { id: 's1', name: 'S', board: 'CBSE', classes: [], mouStartDate: null, mouEndDate: null, programs: [], announcements: [] },
+        }),
+      },
+      faculty: { findUnique: vi.fn().mockResolvedValue({ id: 'f1', status, batchAssignments: [] }) },
+      assignmentSubmission: { count: vi.fn() },
+      feedback: { findMany: vi.fn().mockResolvedValue([{ id: 'fb1', content: 'Great doubt sessions', createdAt: new Date('2026-10-18T05:00:00Z') }]) },
+    };
+    const service = new SchoolsService(prisma as unknown as PrismaService, {} as AccessService, {} as FilesService, { classesOn: vi.fn() } as unknown as ScheduleService);
+    return { prisma, service };
+  };
+
+  it('shows the latest feedback sent to them or to all faculty, not dismissed ones', async () => {
+    const { prisma, service } = build('ACTIVE');
+    const out = await service.teacherDashboard({ userId: 'u1' } as never);
+    expect(out.adminFeedback).toEqual([{ id: 'fb1', message: 'Great doubt sessions', createdAt: '2026-10-18T05:00:00.000Z' }]);
+    const args = prisma.feedback.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({
+      schoolId: 's1',
+      direction: 'MANAGEMENT_TO_TEACHER',
+      status: { not: 'DISMISSED' },
+      OR: [{ toAllFaculty: true }, { targetFacultyId: 'f1' }],
+    });
+    expect(args.take).toBe(3);
+  });
+
+  it('an inactive teacher sees none', async () => {
+    const { prisma, service } = build('INACTIVE');
+    const out = await service.teacherDashboard({ userId: 'u1' } as never);
+    expect(out.adminFeedback).toEqual([]);
+    expect(prisma.feedback.findMany).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,7 @@ import { normalizeIndianMobile } from '../common/validators.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
 import { unlinkProgramChapters } from '../curriculum/unlink-program-chapters.js';
 import { pendingReports } from '../daily-reports/daily-reports.service.js';
+import { receivedBy } from '../feedback/feedback.service.js';
 import { FilesService } from '../storage/files.service.js';
 import { ScheduleService } from '../schedule/schedule.service.js';
 import type { CreateSchoolDto } from './schools.dto.js';
@@ -190,7 +191,7 @@ export class SchoolsService {
         })
       : null;
     const batchIds = faculty && faculty.status !== 'INACTIVE' ? faculty.batchAssignments.map((b) => b.batchId) : [];
-    const [assignmentsToGrade, today, reportedToday] = await Promise.all([
+    const [assignmentsToGrade, today, reportedToday, adminFeedback] = await Promise.all([
       batchIds.length
         ? this.prisma.assignmentSubmission.count({
             where: { schoolId: school!.id, status: { in: ['SUBMITTED', 'LATE'] }, assignment: { batchId: { in: batchIds } } },
@@ -205,6 +206,15 @@ export class SchoolsService {
         ? this.prisma.dailyReport.findMany({
             where: { schoolId: school.id, facultyId: faculty.id, reportDate: istToday() },
             select: { batchId: true, subject: true },
+          })
+        : [],
+      // The latest feedback from management to them (or to all faculty), while they're active.
+      school && faculty && faculty.status !== 'INACTIVE'
+        ? this.prisma.feedback.findMany({
+            where: receivedBy(school.id, faculty.id),
+            orderBy: { createdAt: 'desc' },
+            take: 3,
+            select: { id: true, content: true, createdAt: true },
           })
         : [],
     ]);
@@ -222,7 +232,7 @@ export class SchoolsService {
         : null,
       programs: school?.programs ?? [],
       announcements: school?.announcements ?? [],
-      // Upcoming tests and admin feedback are filled in as those modules are built.
+      // Upcoming tests are filled in when that module is built.
       stats: {
         todayClasses: today.length,
         pendingDailyReports: pendingReports(today, reportedToday),
@@ -238,7 +248,7 @@ export class SchoolsService {
         batch: c.batch.name,
         room: c.room,
       })),
-      adminFeedback: [],
+      adminFeedback: adminFeedback.map((f) => ({ id: f.id, message: f.content, createdAt: f.createdAt.toISOString() })),
     };
   }
 
@@ -449,6 +459,7 @@ export class SchoolsService {
       await tx.meeting.deleteMany({ where: { schoolId } }); // with their agenda items
       await tx.calendarEvent.deleteMany({ where: { schoolId } });
       await tx.dailyReport.deleteMany({ where: { schoolId } }); // before the batches and faculty they name
+      await tx.feedback.deleteMany({ where: { schoolId } }); // before the faculty profiles it names
       // Attendance sheets (with their records) before the batches they point at.
       await tx.classOccurrence.deleteMany({ where: { schoolId } });
       await tx.specialClass.deleteMany({ where: { schoolId } });
