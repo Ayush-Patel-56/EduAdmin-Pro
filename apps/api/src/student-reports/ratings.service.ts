@@ -72,7 +72,7 @@ export class RatingsService {
   /**
    * Saves the ratings for a day (Save All Ratings): one statement inserting or
    * updating this teacher's row for each student. The students must be active
-   * in the batch now; the day can't be in the future or before the batch began.
+   * in the batch now; the day can't be in the future, before the batch began or after it ended.
    */
   async save(scope: TeacherScope, dto: RatingsDto) {
     const facultyId = requireTeacher(scope);
@@ -85,9 +85,10 @@ export class RatingsService {
     try {
       await this.prisma.$transaction(async (tx) => {
         // The batch and students shared-locked, so neither is deleted or moved mid-save.
-        const [batch] = await tx.$queryRaw<{ startDate: Date }[]>`SELECT "startDate" FROM "Batch" WHERE "id" = ${dto.batchId} AND "schoolId" = ${scope.schoolId} FOR SHARE`;
+        const [batch] = await tx.$queryRaw<{ startDate: Date; endDate: Date | null }[]>`SELECT "startDate", "endDate" FROM "Batch" WHERE "id" = ${dto.batchId} AND "schoolId" = ${scope.schoolId} FOR SHARE`;
         if (!batch) throw new NotFoundException('Batch not found');
         if (date < batch.startDate) throw new BadRequestException(`Pick a day on or after the batch started (${dayLabel.format(batch.startDate)})`);
+        if (batch.endDate && date > batch.endDate) throw new BadRequestException(`Pick a day on or before the batch ended (${dayLabel.format(batch.endDate)})`);
         const inBatch = await tx.$queryRaw<{ id: string }[]>`
           SELECT "id" FROM "Student" WHERE "id" IN (${Prisma.join(ids)}) AND "schoolId" = ${scope.schoolId} AND "batchId" = ${dto.batchId} AND "status" = 'ACTIVE' FOR SHARE`;
         if (inBatch.length !== ids.length) throw new BadRequestException('Some students are no longer active in this batch. Refresh and try again.');

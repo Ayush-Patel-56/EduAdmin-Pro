@@ -160,4 +160,50 @@ describe('student reports on the database (e2e)', () => {
     expect((await marks.progressList(other, { year })).total).toBe(0);
     expect((await marks.sets(other, { year })).total).toBe(0);
   });
+
+  it("a student who moved batch: the new batch's teacher can't overwrite or delete the marks entered in the old one", async () => {
+    const a2 = id();
+    const [ravi, sita, r1] = [id(), id(), id()];
+    await prisma.batch.create({ data: { id: a2, schoolId: ids.school, programId: ids.program, name: 'B2', startDate: new Date('2026-04-01T00:00:00Z') } });
+    await prisma.faculty.createMany({ data: [{ id: ravi, schoolId: ids.school, name: 'Ravi Kumar' }, { id: sita, schoolId: ids.school, name: 'Sita Iyer' }] });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Rohan Das', rollNumber: 'M01', batchId: ids.batch, status: 'ACTIVE' } });
+    const asTeacher = (facultyId: string, batchId: string) => ({ kind: 'TEACHER' as const, schoolId: ids.school, userId: ids.user, scope: { schoolId: ids.school, facultyId, batchIds: [batchId], programIds: [], active: true } });
+    const raviActor = asTeacher(ravi, ids.batch);
+    const sitaActor = asTeacher(sita, a2);
+    const sheet = (batchId: string, subject: string, marks: string, dryRun: boolean) =>
+      ({ batchId, year, term: 'TERM_2', subject, dryRun, rows: [{ rollNo: 'M01', name: 'Rohan', marks, maxMarks: '50' }] }) as MarksImportDto;
+    const physics = () => prisma.studentMark.findFirstOrThrow({ where: { studentId: r1, academicYear: year, term: 'TERM_2', subject: 'Physics' } });
+
+    // Ravi enters Rohan's Physics in B1; Rohan then moves to B2.
+    await marks.importMarks(raviActor, sheet(ids.batch, 'Physics', '44', false));
+    await prisma.student.update({ where: { id: r1 }, data: { batchId: a2 } });
+
+    // Sita's B2 sheet can't replace it: a row error in the preview, nothing written on apply.
+    const preview = await marks.importMarks(sitaActor, sheet(a2, 'Physics', '10', true));
+    expect(preview.rows[0]).toMatchObject({ action: 'error', errors: ["Rohan Das's mark for this term and subject was entered in B1 by Ravi Kumar; only an admin can replace it"] });
+    expect(await marks.importMarks(sitaActor, sheet(a2, 'Physics', '10', false))).toMatchObject({ applied: true, created: 0, updated: 0, skipped: 1 });
+    expect(await physics()).toMatchObject({ batchId: ids.batch, enteredBy: 'Ravi Kumar' });
+    expect(Number((await physics()).marks)).toBe(44);
+    // An admin sees what the row replaces.
+    expect((await marks.importMarks(admin, sheet(a2, 'Physics', '10', true))).rows[0]).toMatchObject({ action: 'update', label: 'M01 · Rohan Das (replaces the mark entered in B1 by Ravi Kumar)' });
+
+    // Sita adds Mathematics in B2, so the card is now in her batch.
+    await marks.importMarks(sitaActor, sheet(a2, 'Mathematics', '30', false));
+    const card = { studentId: r1, year, term: 'TERM_2' as const };
+    expect((await marks.progressOne(sitaActor, card)).subjects.map((x) => x.subject)).toEqual(['Mathematics', 'Physics']);
+    // Saving with only Mathematics, or with Physics changed, is refused; deleting the card too.
+    await expect(marks.saveProgress(sitaActor, { ...card, subjects: [{ subject: 'Mathematics', marks: 35, maxMarks: 50 }] } as never)).rejects.toThrow('Physics was entered in B1; only an admin can remove it');
+    await expect(marks.saveProgress(sitaActor, { ...card, subjects: [{ subject: 'Physics', marks: 10, maxMarks: 50 }, { subject: 'Mathematics', marks: 30, maxMarks: 50 }] } as never)).rejects.toThrow('Physics was entered in B1; only an admin can change it');
+    await expect(marks.removeProgress(sitaActor, card)).rejects.toThrow("Some of this report's marks were entered in B1; only an admin can delete them");
+    // Keeping Physics as it is, her own subject saves, and Physics stays B1's.
+    await marks.saveProgress(sitaActor, { ...card, subjects: [{ subject: 'Physics', marks: 44, maxMarks: 50 }, { subject: 'Mathematics', marks: 36, maxMarks: 50 }], teacherRemarks: 'Settling in' } as never);
+    expect(await physics()).toMatchObject({ batchId: ids.batch, enteredBy: 'Ravi Kumar' });
+    expect(Number((await physics()).marks)).toBe(44);
+    expect(Number((await prisma.studentMark.findFirstOrThrow({ where: { studentId: r1, term: 'TERM_2', subject: 'Mathematics' } })).marks)).toBe(36);
+    // B1's sheet still lists Rohan.
+    expect((await marks.set(admin, { batchId: ids.batch, year, term: 'TERM_2', subject: 'Physics' })).map((r) => r.student.fullName)).toEqual(['Rohan Das']);
+    // An admin can delete the card.
+    await expect(marks.removeProgress(admin, card)).resolves.toEqual({ ok: true });
+    expect(await prisma.studentMark.count({ where: { studentId: r1 } })).toBe(0);
+  }, 60_000);
 });

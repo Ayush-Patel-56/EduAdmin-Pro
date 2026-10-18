@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { realUniqueError } from '../common/prisma-errors.fixture.js';
+import { Prisma } from '../generated/prisma/client.js';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { FilesService } from '../storage/files.service.js';
@@ -131,6 +132,13 @@ describe('WorkspaceService: assignments and grading', () => {
     // Without one, the typed chapter stays and the links are empty.
     await service.createAssignment(scope(), 'u', assignment());
     expect(prisma.assignment.create.mock.calls[1][0].data).toMatchObject({ chapter: 'Kinematics', chapterId: null, topic: null });
+  });
+
+  it('a chapter (or batch) deleted between the check and the save is a 400, not a 500', async () => {
+    const { service, prisma } = build();
+    prisma.curriculumChapter.findFirst.mockResolvedValueOnce({ id: 'c2', name: 'Laws of Motion', subject: 'Physics' });
+    prisma.assignment.create.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated', { code: 'P2003', clientVersion: '7' }));
+    await expect(service.createAssignment(scope(), 'u', assignment({ chapterId: 'c2' }))).rejects.toThrow('The chapter or batch was just removed. Refresh and try again.');
   });
 
   it('the chapter picker lists the school curriculum with concepts, and nothing for an inactive teacher', async () => {

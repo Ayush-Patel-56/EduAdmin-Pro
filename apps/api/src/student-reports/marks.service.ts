@@ -32,6 +32,7 @@ import {
 } from './student-reports.dto.js';
 
 const num = (v: Prisma.Decimal | string | number) => Number(v);
+const WRITE_REFUSED = 'Only active faculty can change student reports';
 const like = (q: string) => `%${likeEscape(q.trim())}%`;
 
 /**
@@ -86,7 +87,7 @@ export class MarksService {
    * Remarks. Uploading the same sheet again updates the marks it holds.
    */
   async importMarks(actor: Actor, dto: MarksImportDto): Promise<ImportPreview> {
-    activeFacultyId(actor);
+    activeFacultyId(actor, WRITE_REFUSED);
     requireBatchAccess(actor, dto.batchId);
     requireWritableYear(await yearContext(this.prisma, actor.schoolId), dto.year);
     const batch = await this.prisma.batch.findFirst({ where: { id: dto.batchId, schoolId: actor.schoolId }, select: { id: true, name: true } });
@@ -95,9 +96,10 @@ export class MarksService {
       const roster = await db.student.findMany({ where: { schoolId: actor.schoolId, batchId: batch.id }, select: { id: true, fullName: true, rollNumber: true } });
       const existing = await db.studentMark.findMany({
         where: { schoolId: actor.schoolId, academicYear: dto.year, term: dto.term, subject: dto.subject, studentId: { in: roster.map((s) => s.id) } },
-        select: { studentId: true },
+        select: { studentId: true, batchId: true, enteredBy: true, batch: { select: { name: true } } },
       });
-      return checkSheet(dto.rows, batch.name, roster, new Set(existing.map((e) => e.studentId)));
+      const prior = new Map(existing.map((e) => [e.studentId, { batchId: e.batchId, batchName: e.batch.name, enteredBy: e.enteredBy }]));
+      return checkSheet(dto.rows, batch, roster, prior, batchScope(actor));
     };
     if (dto.dryRun) {
       const { rows, ready } = await check(this.prisma);
@@ -111,7 +113,7 @@ export class MarksService {
         const { rows, ready } = await check(tx);
         if (ready.length) {
           await tx.$queryRaw`SELECT 1 FROM "Student" WHERE "id" IN (${Prisma.join(ready.map((r) => r.studentId))}) AND "schoolId" = ${actor.schoolId} FOR SHARE`;
-          await upsertMarks(tx, actor, { batchId: batch.id, year: dto.year, term: dto.term, source: 'IMPORT', enteredBy }, ready.map((r) => ({ ...r, subject: dto.subject })));
+          await upsertMarks(tx, actor, { year: dto.year, term: dto.term, source: 'IMPORT', enteredBy }, ready.map((r) => ({ ...r, batchId: batch.id, subject: dto.subject })));
         }
         return summary(true, rows, ready);
       });
@@ -198,7 +200,7 @@ export class MarksService {
 
   /** Deletes one sheet's marks (uploaded to the wrong batch, term or subject), and any progress report left with no marks. */
   async removeSet(actor: Actor, query: MarkSetQuery) {
-    activeFacultyId(actor);
+    activeFacultyId(actor, WRITE_REFUSED);
     requireBatchAccess(actor, query.batchId);
     return this.prisma.$transaction(async (tx) => {
       const where = { schoolId: actor.schoolId, batchId: query.batchId, academicYear: query.year, term: query.term, subject: query.subject };
@@ -398,10 +400,13 @@ export class MarksService {
    * the rows given (a subject left out is removed; the attendance and remarks
    * an uploaded sheet gave a subject are kept), and the remarks are saved.
    * A new report is in the student's batch now; an existing one stays in its
-   * batch. Admins and teachers of that batch may write both remarks.
+   * batch. Admins and teachers of that batch may write both remarks. Only
+   * the marks that change are written, each keeping the batch it was entered
+   * in; a teacher can't change or remove a mark entered in a batch that isn't
+   * theirs (a student who moved batch): only an admin can.
    */
   async saveProgress(actor: Actor, dto: ProgressReportDto) {
-    activeFacultyId(actor);
+    activeFacultyId(actor, WRITE_REFUSED);
     requireWritableYear(await yearContext(this.prisma, actor.schoolId), dto.year);
     const subjects = dto.subjects.map((s) => s.subject);
     if (new Set(subjects).size !== subjects.length) throw new BadRequestException('Each subject can be on the report once');
@@ -412,13 +417,27 @@ export class MarksService {
         const [student] = await tx.$queryRaw<{ id: string; batchId: string | null }[]>`SELECT "id", "batchId" FROM "Student" WHERE "id" = ${dto.studentId} AND "schoolId" = ${actor.schoolId} FOR SHARE`;
         if (!student) throw new NotFoundException('Student not found');
         const key = { schoolId: actor.schoolId, studentId: dto.studentId, academicYear: dto.year, term: dto.term };
-        const existing = await tx.studentMark.findMany({ where: key, select: { batchId: true, updatedAt: true } });
+        const existing = await tx.studentMark.findMany({ where: key, select: { subject: true, batchId: true, marks: true, maxMarks: true, updatedAt: true, batch: { select: { name: true } } } });
         const batchId = latestBatch(existing) ?? student.batchId;
         if (!batchId) throw new BadRequestException('Assign the student to a batch before generating a report');
         if (isTeacher(actor) && !actor.scope.batchIds.includes(batchId)) throw new ForbiddenException("You aren't assigned to this student's batch");
+        const own = batchScope(actor);
+        const bySubject = new Map(existing.map((m) => [m.subject, m]));
+        const changed = dto.subjects.filter((s) => {
+          const m = bySubject.get(s.subject);
+          return !m || num(m.marks) !== s.marks || num(m.maxMarks) !== s.maxMarks;
+        });
+        for (const m of existing) {
+          if (own === null || own.includes(m.batchId)) continue;
+          if (!subjects.includes(m.subject)) throw new ForbiddenException(`${m.subject} was entered in ${m.batch.name}; only an admin can remove it`);
+          if (changed.some((s) => s.subject === m.subject)) throw new ForbiddenException(`${m.subject} was entered in ${m.batch.name}; only an admin can change it`);
+        }
         await tx.$queryRaw`SELECT 1 FROM "Batch" WHERE "id" = ${batchId} AND "schoolId" = ${actor.schoolId} FOR SHARE`;
         await tx.studentMark.deleteMany({ where: { ...key, subject: { notIn: subjects } } });
-        await upsertMarks(tx, actor, { batchId, year: dto.year, term: dto.term, source: 'MANUAL', enteredBy: updatedBy }, dto.subjects.map((s) => ({ studentId: dto.studentId, subject: s.subject, marks: s.marks, maxMarks: s.maxMarks, attendance: undefined, remarks: undefined })));
+        if (changed.length) {
+          const rows = changed.map((s) => ({ batchId: bySubject.get(s.subject)?.batchId ?? batchId, studentId: dto.studentId, subject: s.subject, marks: s.marks, maxMarks: s.maxMarks, attendance: undefined, remarks: undefined }));
+          await upsertMarks(tx, actor, { year: dto.year, term: dto.term, source: 'MANUAL', enteredBy: updatedBy }, rows);
+        }
         const remarks = { teacherRemarks: dto.teacherRemarks ?? null, principalRemarks: dto.principalRemarks ?? null, updatedById: actor.userId, updatedBy };
         await tx.progressReport.upsert({
           where: { studentId_academicYear_term: { studentId: dto.studentId, academicYear: dto.year, term: dto.term } },
@@ -433,14 +452,16 @@ export class MarksService {
     }
   }
 
-  /** Deletes a student's report for a term: its subject marks and remarks. */
+  /** Deletes a student's report for a term: its subject marks and remarks (a teacher's only when every mark is from their batches). */
   async removeProgress(actor: Actor, query: ProgressKeyQuery) {
-    activeFacultyId(actor);
+    activeFacultyId(actor, WRITE_REFUSED);
     return this.prisma.$transaction(async (tx) => {
       const key = { schoolId: actor.schoolId, studentId: query.studentId, academicYear: query.year, term: query.term };
-      const marks = await tx.studentMark.findMany({ where: key, select: { batchId: true, updatedAt: true } });
+      const marks = await tx.studentMark.findMany({ where: key, select: { batchId: true, updatedAt: true, batch: { select: { name: true } } } });
       const batchId = latestBatch(marks);
       if (!batchId || (isTeacher(actor) && !actor.scope.batchIds.includes(batchId))) throw new NotFoundException('Progress report not found');
+      const foreign = isTeacher(actor) ? marks.find((m) => !actor.scope.batchIds.includes(m.batchId)) : undefined;
+      if (foreign) throw new ForbiddenException(`Some of this report's marks were entered in ${foreign.batch.name}; only an admin can delete them`);
       await tx.studentMark.deleteMany({ where: key });
       await tx.progressReport.deleteMany({ where: key });
       return { ok: true };
@@ -462,22 +483,24 @@ function latestBatch(marks: { batchId: string; updatedAt: Date }[]): string | nu
 }
 
 type ReadyMark = { studentId: string; marks: number; maxMarks: number; attendance: number | null | undefined; remarks: string | null | undefined };
+type PriorMark = { batchId: string; batchName: string; enteredBy: string };
 
 /**
  * Inserts or updates marks in one statement, by the student + year + term +
- * subject key. `undefined` attendance or remarks keep what a row has (a
- * progress report edit); null clears them (a sheet that leaves them blank).
+ * subject key, each row in the batch it names. `undefined` attendance or
+ * remarks keep what a row has (a progress report edit); null clears them (a
+ * sheet that leaves them blank).
  */
 async function upsertMarks(
   tx: Prisma.TransactionClient,
   actor: Actor,
-  set: { batchId: string; year: number; term: ReportTermKey; source: 'IMPORT' | 'MANUAL'; enteredBy: string },
-  rows: (ReadyMark & { subject: string })[],
+  set: { year: number; term: ReportTermKey; source: 'IMPORT' | 'MANUAL'; enteredBy: string },
+  rows: (ReadyMark & { batchId: string; subject: string })[],
 ) {
   const keepExtras = rows.every((r) => r.attendance === undefined && r.remarks === undefined);
   const values = rows.map(
     (r) =>
-      Prisma.sql`(${randomUUID()}, ${actor.schoolId}, ${r.studentId}, ${set.batchId}, ${set.year}::int, ${set.term}::"ReportTerm", ${r.subject}, ${r.marks}::numeric, ${r.maxMarks}::numeric,
+      Prisma.sql`(${randomUUID()}, ${actor.schoolId}, ${r.studentId}, ${r.batchId}, ${set.year}::int, ${set.term}::"ReportTerm", ${r.subject}, ${r.marks}::numeric, ${r.maxMarks}::numeric,
         ${r.attendance ?? null}::numeric, ${r.remarks ?? null}::text, ${set.source}::"MarkSource", ${actor.userId}, ${set.enteredBy}, now(), now())`,
   );
   await tx.$executeRaw`
@@ -519,8 +542,21 @@ function numberCell(value: string | undefined, label: string, errors: string[], 
   return Number(text);
 }
 
-/** Each row of a sheet checked against the batch's students (exported for the tests). */
-export function checkSheet(sheet: MarkImportRow[], batchName: string, roster: { id: string; fullName: string; rollNumber: string | null }[], existing: Set<string>) {
+/**
+ * Each row of a sheet checked against the batch's students (exported for the
+ * tests). A student who already has a mark for the term and subject from
+ * another batch (they moved since) is shown as replacing it, by whom it was
+ * entered; for a teacher (`own`: their batches) who doesn't teach that batch
+ * the row is refused, as only an admin can replace it.
+ */
+export function checkSheet(
+  sheet: MarkImportRow[],
+  batch: { id: string; name: string },
+  roster: { id: string; fullName: string; rollNumber: string | null }[],
+  existing: Map<string, PriorMark>,
+  own: string[] | null,
+) {
+  const batchName = batch.name;
   const byRoll = new Map(roster.filter((s) => s.rollNumber).map((s) => [s.rollNumber!.toUpperCase(), s]));
   const seen = new Map<string, number>();
   const ready: ReadyMark[] = [];
@@ -544,10 +580,13 @@ export function checkSheet(sheet: MarkImportRow[], batchName: string, roster: { 
     if (attendance !== null && attendance > 100) errors.push('Attendance must be a percentage from 0 to 100');
     const remarks = clean(r.remarks) || null;
     if (remarks && remarks.length > MAX_REMARKS) errors.push(`Remarks must be at most ${MAX_REMARKS} characters`);
-    const label = `${roll || '—'} · ${student?.fullName ?? (name || '(no name)')}`;
+    const prior = student ? existing.get(student.id) : undefined;
+    const moved = prior && prior.batchId !== batch.id ? prior : null;
+    if (moved && own && !own.includes(moved.batchId)) errors.push(`${student!.fullName}'s mark for this term and subject was entered in ${moved.batchName} by ${moved.enteredBy}; only an admin can replace it`);
+    const label = `${roll || '—'} · ${student?.fullName ?? (name || '(no name)')}${moved ? ` (replaces the mark entered in ${moved.batchName} by ${moved.enteredBy})` : ''}`;
     if (errors.length) return { row, label, action: 'error' as const, errors };
     ready.push({ studentId: student!.id, marks: marks!, maxMarks: maxMarks!, attendance, remarks });
-    return { row, label, action: existing.has(student!.id) ? ('update' as const) : ('create' as const), errors };
+    return { row, label, action: prior ? ('update' as const) : ('create' as const), errors };
   });
   return { rows, ready };
 }

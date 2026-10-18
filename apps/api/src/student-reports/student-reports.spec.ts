@@ -83,7 +83,7 @@ describe('Import student report: each row checked against the batch', () => {
     expect(sameName('Aarav Mehta', 'aarav  mehta.')).toBe(true);
     expect(sameName('Aarav Mehta', 'Aarav')).toBe(true);
     expect(sameName('Aarav Mehta', 'Mehta Aarav')).toBe(false);
-    const { rows, ready } = checkSheet([{ rollNo: 'r01', name: 'Aarav', marks: '72.5', maxMarks: '100', attendance: '91%', remarks: '  Good  work ' }], 'JEE A', roster, new Set());
+    const { rows, ready } = checkSheet([{ rollNo: 'r01', name: 'Aarav', marks: '72.5', maxMarks: '100', attendance: '91%', remarks: '  Good  work ' }], { id: 'b-mine', name: 'JEE A' }, roster, new Map(), null);
     expect(rows[0]).toMatchObject({ row: 2, action: 'create', errors: [], label: 'R01 · Aarav Mehta' });
     expect(ready).toEqual([{ studentId: 's1', marks: 72.5, maxMarks: 100, attendance: 91, remarks: 'Good work' }]);
   });
@@ -97,9 +97,10 @@ describe('Import student report: each row checked against the batch', () => {
         { rollNo: 'R01', name: 'Aarav', marks: '1.234', maxMarks: '0', attendance: '101' },
         { rollNo: 'R01', name: 'Aarav', marks: '5', maxMarks: '10' },
       ],
-      'JEE A',
+      { id: 'b-mine', name: 'JEE A' },
       roster,
-      new Set(['s1']),
+      new Map([['s1', { batchId: 'b-mine', batchName: 'JEE A', enteredBy: 'Ms Rao' }]]),
+      null,
     );
     expect(ready).toEqual([]);
     expect(rows.map((r) => r.errors)).toEqual([
@@ -112,7 +113,21 @@ describe('Import student report: each row checked against the batch', () => {
   });
 
   it('a student who already has marks for the term and subject is an update', () => {
-    expect(checkSheet([{ rollNo: 'R01', name: 'Aarav', marks: '5', maxMarks: '10' }], 'JEE A', roster, new Set(['s1'])).rows[0].action).toBe('update');
+    const prior = new Map([['s1', { batchId: 'b-mine', batchName: 'JEE A', enteredBy: 'Ms Rao' }]]);
+    expect(checkSheet([{ rollNo: 'R01', name: 'Aarav', marks: '5', maxMarks: '10' }], { id: 'b-mine', name: 'JEE A' }, roster, prior, null).rows[0]).toMatchObject({ action: 'update', label: 'R01 · Aarav Mehta' });
+  });
+
+  it("a mark entered in the student's old batch: an admin sees it replaced, a teacher who doesn't teach that batch can't replace it", () => {
+    const prior = new Map([['s1', { batchId: 'b-old', batchName: 'JEE Old', enteredBy: 'Ravi Kumar' }]]);
+    const row = [{ rollNo: 'R01', name: 'Aarav', marks: '10', maxMarks: '50' }];
+    const asAdmin = checkSheet(row, { id: 'b-mine', name: 'JEE A' }, roster, prior, null);
+    expect(asAdmin.rows[0]).toMatchObject({ action: 'update', label: 'R01 · Aarav Mehta (replaces the mark entered in JEE Old by Ravi Kumar)', errors: [] });
+    expect(asAdmin.ready).toHaveLength(1);
+    const asTeacher = checkSheet(row, { id: 'b-mine', name: 'JEE A' }, roster, prior, ['b-mine']);
+    expect(asTeacher.rows[0]).toMatchObject({ action: 'error', errors: ["Aarav Mehta's mark for this term and subject was entered in JEE Old by Ravi Kumar; only an admin can replace it"] });
+    expect(asTeacher.ready).toEqual([]);
+    // A teacher who teaches both batches may, and sees what it replaces.
+    expect(checkSheet(row, { id: 'b-mine', name: 'JEE A' }, roster, prior, ['b-mine', 'b-old']).rows[0].action).toBe('update');
   });
 
   it('the body: up to 1,000 rows, a known term and subject', () => {
@@ -160,6 +175,9 @@ describe('MarksService: access and writes', () => {
     expect(lock.sql).toContain('FROM "Batch"');
     expect(lock.sql).toContain('FOR SHARE');
     expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.student.findMany.mock.invocationCallOrder[1]);
+    // The batch and the roster are this school's.
+    expect(prisma.batch.findFirst.mock.calls[0][0].where).toEqual({ id: 'b-mine', schoolId: 'school-1' });
+    expect(prisma.student.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', batchId: 'b-mine' });
     const upsert = asSql(prisma.$executeRaw.mock.calls[0]);
     expect(upsert.sql).toContain('ON CONFLICT ("studentId", "academicYear", "term", "subject")');
     expect(upsert.sql).toContain('"attendance" = EXCLUDED."attendance"');
@@ -227,6 +245,70 @@ describe('MarksService: access and writes', () => {
     });
   });
 
+  it("one card: a teacher of another batch, or an inactive one, gets not found", async () => {
+    const prisma = prismaMock();
+    const service = new MarksService(prisma as unknown as PrismaService);
+    prisma.student.findFirst.mockResolvedValue({ id: 'st-1', fullName: 'Aarav', rollNumber: 'R01', batchId: 'b-other' });
+    prisma.studentMark.findMany.mockResolvedValue([{ subject: 'Physics', marks: 40, maxMarks: 50, batchId: 'b-other', updatedAt: new Date() }]);
+    prisma.progressReport.findFirst.mockResolvedValue({ teacherRemarks: 'Private', principalRemarks: null });
+    const key = { studentId: 'st-1', year: 2026, term: 'TERM_1' as const };
+    await expect(service.progressOne(teacher(), key)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.progressOne(teacher({ active: false, batchIds: [] }), key)).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.student.findFirst.mock.calls[0][0].where).toEqual({ id: 'st-1', schoolId: 'school-1' });
+    // The batch's own teacher and an admin read it.
+    await expect(service.progressOne(teacher({ batchIds: ['b-other'] }), key)).resolves.toMatchObject({ batchId: 'b-other', teacherRemarks: 'Private' });
+    await expect(service.progressOne(admin, key)).resolves.toMatchObject({ exists: true });
+  });
+
+  it("a moved student's card: the new batch's teacher can't change or remove marks entered in the old batch, only their own", async () => {
+    const old = { subject: 'Physics', marks: 44, maxMarks: 50, batchId: 'b-old', updatedAt: new Date('2026-07-01'), batch: { name: 'JEE Old' } };
+    const mine = { subject: 'Mathematics', marks: 30, maxMarks: 50, batchId: 'b-mine', updatedAt: new Date('2026-09-01'), batch: { name: 'JEE A' } };
+    const setup = () => {
+      const prisma = prismaMock();
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: 'st-1', batchId: 'b-mine' }]).mockResolvedValue([]);
+      prisma.studentMark.findMany.mockResolvedValueOnce([old, mine]);
+      return { prisma, service: new MarksService(prisma as unknown as PrismaService) };
+    };
+    let t = setup();
+    await expect(t.service.saveProgress(teacher(), report({ subjects: [{ subject: 'Mathematics', marks: 35, maxMarks: 50 }] }))).rejects.toThrow('Physics was entered in JEE Old; only an admin can remove it');
+    expect(t.prisma.studentMark.deleteMany).not.toHaveBeenCalled();
+    t = setup();
+    await expect(t.service.saveProgress(teacher(), report({ subjects: [{ subject: 'Physics', marks: 10, maxMarks: 50 }, { subject: 'Mathematics', marks: 30, maxMarks: 50 }] }))).rejects.toThrow('Physics was entered in JEE Old; only an admin can change it');
+    expect(t.prisma.$executeRaw).not.toHaveBeenCalled();
+    // Keeping the old mark as it is, the teacher's own changes save: only the changed row is written, in its own batch.
+    t = setup();
+    await t.service.saveProgress(teacher(), report({ subjects: [{ subject: 'Physics', marks: 44, maxMarks: 50 }, { subject: 'Mathematics', marks: 35, maxMarks: 50 }] }));
+    const upsert = asSql(t.prisma.$executeRaw.mock.calls[0]);
+    expect(upsert.values).toContain('Mathematics');
+    expect(upsert.values).not.toContain('Physics');
+    expect(upsert.values).toContain('b-mine');
+    // An admin may change the old mark; it stays in the batch it was entered in.
+    t = setup();
+    await t.service.saveProgress(admin, report({ subjects: [{ subject: 'Physics', marks: 10, maxMarks: 50 }, { subject: 'Mathematics', marks: 30, maxMarks: 50 }] }));
+    const adminUpsert = asSql(t.prisma.$executeRaw.mock.calls[0]);
+    expect(adminUpsert.values).toEqual(expect.arrayContaining(['Physics', 'b-old']));
+    expect(adminUpsert.values).not.toContain('Mathematics');
+    // Deleting the card: refused for the teacher, allowed for an admin.
+    const del = prismaMock();
+    del.studentMark.findMany.mockResolvedValue([old, mine]);
+    const delService = new MarksService(del as unknown as PrismaService);
+    await expect(delService.removeProgress(teacher(), { studentId: 'st-1', year: 2026, term: 'TERM_1' })).rejects.toThrow("Some of this report's marks were entered in JEE Old; only an admin can delete them");
+    expect(del.studentMark.deleteMany).not.toHaveBeenCalled();
+    await expect(delService.removeProgress(admin, { studentId: 'st-1', year: 2026, term: 'TERM_1' })).resolves.toEqual({ ok: true });
+  });
+
+  it('a student or batch removed mid-save is a 400, not a 500', async () => {
+    const prisma = prismaMock();
+    prisma.$transaction.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated', { code: 'P2003', clientVersion: '7' }));
+    const service = new MarksService(prisma as unknown as PrismaService);
+    await expect(service.saveProgress(admin, report())).rejects.toThrow('The student or batch was just changed. Refresh and try again.');
+  });
+
+  it("an inactive teacher's write is refused with a student-reports message", async () => {
+    const service = new MarksService(prismaMock() as unknown as PrismaService);
+    await expect(service.removeSet(teacher({ active: false }), { batchId: 'b-mine', year: 2026, term: 'TERM_1', subject: 'Physics' })).rejects.toThrow('Only active faculty can change student reports');
+  });
+
   it('deleting a report or a sheet: a teacher only in their batches, and only while active', async () => {
     const prisma = prismaMock();
     const service = new MarksService(prisma as unknown as PrismaService);
@@ -275,9 +357,11 @@ describe('RatingsService (Student Ratings)', () => {
     const service = new RatingsService(prisma as unknown as PrismaService);
     prisma.$queryRaw.mockResolvedValueOnce([{ startDate: new Date(`${istDay(1)}T00:00:00Z`) }]);
     await expect(service.save(scope(), dto())).rejects.toThrow('Pick a day on or after the batch started');
-    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: new Date('2026-04-01T00:00:00Z') }]).mockResolvedValueOnce([]);
+    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: new Date('2026-04-01T00:00:00Z'), endDate: new Date('2026-04-30T00:00:00Z') }]);
+    await expect(service.save(scope(), dto({ date: '2026-05-01' }))).rejects.toThrow('Pick a day on or before the batch ended (30 Apr 2026)');
+    prisma.$queryRaw.mockResolvedValueOnce([{ startDate: new Date('2026-04-01T00:00:00Z'), endDate: null }]).mockResolvedValueOnce([]);
     await expect(service.save(scope(), dto())).rejects.toBeInstanceOf(BadRequestException);
-    const check = asSql(prisma.$queryRaw.mock.calls[2]);
+    const check = asSql(prisma.$queryRaw.mock.calls[3]);
     expect(check.sql).toContain('"status" = \'ACTIVE\'');
     expect(check.sql).toContain('FOR SHARE');
     expect(check.values).toEqual(expect.arrayContaining(['s1', 'school-1', 'b-mine']));
