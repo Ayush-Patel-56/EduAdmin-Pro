@@ -17,6 +17,7 @@ describe('SchoolsService.teacherDashboard: assignments to grade', () => {
       },
       faculty: { findUnique: vi.fn().mockResolvedValue({ id: 'f1', status, batchAssignments: [{ batchId: 'b1' }, { batchId: 'b2' }] }) },
       assignmentSubmission: { count: vi.fn().mockResolvedValue(4) },
+      dailyReport: { findMany: vi.fn().mockResolvedValue([]) },
       feedback: { findMany: vi.fn().mockResolvedValue([{ id: 'fb1', content: 'Great doubt sessions', createdAt: new Date('2026-10-18T05:00:00Z') }]) },
     };
     const schedule = { classesOn: vi.fn().mockResolvedValue([]) };
@@ -41,6 +42,40 @@ describe('SchoolsService.teacherDashboard: assignments to grade', () => {
     expect(out.stats.assignmentsToGrade).toBe(0);
     expect(prisma.assignmentSubmission.count).not.toHaveBeenCalled();
     expect(schedule.classesOn).not.toHaveBeenCalled();
+  });
+});
+
+describe('SchoolsService.teacherDashboard: pending daily reports', () => {
+  const cls = (batchId: string, subject: string | null) => ({
+    key: `${batchId}-${subject}`, kind: 'SLOT', id: 'x', title: subject ?? 'Doubt class', subject, type: null,
+    batch: { id: batchId, name: batchId, program: 'JEE' }, teacher: null, startMinute: 600, endMinute: 660, time: '10:00 - 11:00', room: null,
+  });
+
+  it("counts today's classes (by batch and subject) that have no report from this teacher today", async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-18T05:00:00Z') }); // 10:30 IST
+    try {
+      const findMany = vi.fn().mockResolvedValue([{ batchId: 'b1', subject: 'physics' }]);
+      const prisma = {
+        user: { findUniqueOrThrow: vi.fn().mockResolvedValue({ accountType: 'TEACHER' }) },
+        schoolMembership: {
+          findFirst: vi.fn().mockResolvedValue({
+            school: { id: 's1', name: 'S', board: 'CBSE', classes: [], mouStartDate: null, mouEndDate: null, programs: [], announcements: [] },
+          }),
+        },
+        faculty: { findUnique: vi.fn().mockResolvedValue({ id: 'f1', status: 'ACTIVE', batchAssignments: [{ batchId: 'b1' }, { batchId: 'b2' }] }) },
+        assignmentSubmission: { count: vi.fn().mockResolvedValue(0) },
+        dailyReport: { findMany },
+        feedback: { findMany: vi.fn().mockResolvedValue([]) },
+      };
+      // Physics twice in b1 (reported, any letter case), Chemistry in b1 and Physics in b2 (not reported).
+      const schedule = { classesOn: vi.fn().mockResolvedValue([cls('b1', 'Physics'), cls('b1', 'Physics'), cls('b1', 'Chemistry'), cls('b2', 'Physics')]) };
+      const service = new SchoolsService(prisma as unknown as PrismaService, {} as AccessService, {} as FilesService, schedule as unknown as ScheduleService);
+      const out = await service.teacherDashboard({ userId: 'u1' } as never);
+      expect(out.stats.pendingDailyReports).toBe(2);
+      expect(findMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', facultyId: 'f1', reportDate: new Date('2026-10-18T00:00:00Z') });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

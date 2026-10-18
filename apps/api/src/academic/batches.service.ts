@@ -40,6 +40,7 @@ export class BatchesService {
             materials: true,
             assignments: true,
             calendarEvents: true,
+            dailyReports: true,
           },
         },
       },
@@ -70,6 +71,7 @@ export class BatchesService {
       assignmentCount: b._count.assignments,
       eventCount: b._count.calendarEvents,
       handedInCount: handedIn.get(b.id) ?? 0,
+      reportCount: b._count.dailyReports,
     }));
   }
 
@@ -189,6 +191,13 @@ export class BatchesService {
       if (classesMarked > 0) {
         throw new ConflictException(
           `Attendance is recorded for ${classesMarked} class${classesMarked === 1 ? '' : 'es'} of this batch. Set an end date for the batch instead.`,
+        );
+      }
+      // So are its teachers' daily reports (a report being submitted waits on the batch lock).
+      const reports = await tx.dailyReport.count({ where: { schoolId, batchId } });
+      if (reports > 0) {
+        throw new ConflictException(
+          `${reports} daily report${reports === 1 ? ' is' : 's are'} recorded for this batch. Set an end date for the batch instead.`,
         );
       }
       const teachers = await tx.facultyBatch.findMany({

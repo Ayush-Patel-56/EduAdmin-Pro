@@ -20,6 +20,7 @@ import { AttendanceModule } from './attendance/attendance.module.js';
 import { FeesModule } from './fees/fees.module.js';
 import { MeetingsModule } from './meetings/meetings.module.js';
 import { CalendarModule } from './calendar/calendar.module.js';
+import { DailyReportsModule } from './daily-reports/daily-reports.module.js';
 import { FeedbackModule } from './feedback/feedback.module.js';
 
 @Module({
@@ -42,6 +43,7 @@ import { FeedbackModule } from './feedback/feedback.module.js';
     FeesModule,
     MeetingsModule,
     CalendarModule,
+    DailyReportsModule,
     FeedbackModule,
   ],
   controllers: [AppController],

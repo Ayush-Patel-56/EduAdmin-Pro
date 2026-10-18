@@ -225,11 +225,12 @@ describe('BatchesService.list: handed-in work for the delete confirmation (#18 r
 });
 
 describe('BatchesService.remove: student history and grades', () => {
-  const build = (graded: number, classesMarked = 0, fees = 0) => {
+  const build = (graded: number, classesMarked = 0, fees = 0, reports = 0) => {
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([]),
       assignmentSubmission: { count: vi.fn().mockResolvedValue(graded) },
       classOccurrence: { count: vi.fn().mockResolvedValue(classesMarked) },
+      dailyReport: { count: vi.fn().mockResolvedValue(reports) },
       feeStructure: { count: vi.fn().mockResolvedValue(fees) },
       facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
       student: { updateMany: vi.fn() },
@@ -251,6 +252,17 @@ describe('BatchesService.remove: student history and grades', () => {
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.assignmentSubmission.count.mock.invocationCallOrder[0]);
     expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it("a batch with its teachers' daily reports is not deleted (they are records too)", async () => {
+    const { tx, batches } = build(0, 0, 0, 2);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('2 daily reports are recorded for this batch. Set an end date for the batch instead.');
+    expect(tx.dailyReport.count.mock.calls[0][0]).toEqual({ where: { schoolId: 's1', batchId: 'b1' } });
+    // Counted after locking the batch, so a report being submitted (it share-locks the batch) can't slip in.
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.dailyReport.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+    tx.dailyReport.count.mockResolvedValueOnce(1);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 daily report is recorded');
   });
 
   it('a batch with handed-in work not graded yet is not deleted either (#18)', async () => {
