@@ -139,7 +139,6 @@ export class StudentsService {
     return { id: studentId };
   }
 
-  /** Removes the student with their guardians and batch history. */
   /**
    * Records that go with the student when they're deleted: faculty's PTM notes
    * and counseling sessions about them (the delete confirmation names them).
@@ -154,6 +153,7 @@ export class StudentsService {
     return { ptmNotes, counselingSessions };
   }
 
+  /** Removes the student with their guardians and batch history. */
   async remove(schoolId: string, studentId: string) {
     const student = await this.prisma.$transaction(async (tx) => {
       // Locked, so attendance can't be added between the check and the delete.

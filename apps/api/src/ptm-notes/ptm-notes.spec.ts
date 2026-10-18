@@ -18,7 +18,7 @@ function build() {
     ptmNote: {
       count: vi.fn().mockResolvedValue(0),
       findMany: vi.fn().mockResolvedValue([]),
-      findFirst: vi.fn().mockResolvedValue({ studentId: 'st-1', batchId: 'b1', batch: { startDate: d('2026-04-01') } }),
+      findFirst: vi.fn().mockResolvedValue({ studentId: 'st-1', batchId: 'b1', meetingDate: d('2026-10-18'), batch: { startDate: d('2026-04-01') } }),
       create: vi.fn().mockResolvedValue({ id: 'n1' }),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -26,7 +26,10 @@ function build() {
     batch: {
       findMany: vi.fn().mockResolvedValue([{ id: 'b1', name: 'Batch 1A', program: { name: 'JEE' }, students: [{ id: 'st-1', fullName: 'Ayush Rajeshkumar Patel', rollNumber: null }] }]),
       findFirst: vi.fn().mockResolvedValue({ id: 'b1', name: 'Batch 1A', startDate: d('2026-04-01') }),
+      // The school's earliest batch start (for a note whose batch was deleted).
+      aggregate: vi.fn().mockResolvedValue({ _min: { startDate: d('2026-04-01') } }),
     },
+    school: { findUniqueOrThrow: vi.fn().mockResolvedValue({ createdAt: new Date('2026-06-01T05:00:00Z') }) },
     student: { findFirst: vi.fn().mockResolvedValue({ id: 'st-1' }) },
     faculty: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }) },
   };
@@ -90,8 +93,47 @@ describe('PtmNotesService', () => {
     await expect(service.create(scope(), dto({ date: '2026-04-01' }))).resolves.toEqual({ id: 'n1' });
     // Correcting a note checks its own batch's start; a note whose batch was deleted has no batch bound.
     await expect(service.update(scope(), 'n1', dto({ date: '2026-03-01' }))).rejects.toThrow('before the batch started');
-    prisma.ptmNote.findFirst.mockResolvedValueOnce({ studentId: 'st-1', batchId: null, batch: null });
+    // A note whose batch was deleted, dated 1 Mar: keeping its day saves; moving it is bounded by the school's records.
+    prisma.ptmNote.findFirst.mockResolvedValueOnce({ studentId: 'st-1', batchId: null, meetingDate: d('2026-03-01'), batch: null });
     await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-03-01' }))).resolves.toEqual({ id: 'n1' });
+  });
+
+  it('a note whose batch was deleted can’t move before the school’s records start (1900-01-01 refused); its own day still saves', async () => {
+    const { service, prisma } = build();
+    const orphan = { studentId: 'st-1', batchId: null, meetingDate: d('2026-05-10'), batch: null };
+    prisma.ptmNote.findFirst.mockResolvedValue(orphan);
+    // The floor is the earlier of the school's earliest batch start (1 Apr) and the day the school was set up (1 Jun).
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '1900-01-01' }))).rejects.toEqual(
+      new BadRequestException("The meeting can't be before this school's records start (1 Apr 2026)"),
+    );
+    expect(prisma.batch.aggregate.mock.calls[0][0]).toEqual({ where: { schoolId: 'school-1' }, _min: { startDate: true } });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-05-10', discussion: 'Fixed a typo' }))).resolves.toEqual({ id: 'n1' });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-04-02' }))).resolves.toEqual({ id: 'n1' });
+    // With no batches left, the day the school was set up is the floor.
+    prisma.batch.aggregate.mockResolvedValueOnce({ _min: { startDate: null } });
+    await expect(service.update(scope(), 'n1', dto({ batchId: null, date: '2026-05-01' }))).rejects.toThrow("this school's records start (1 Jun 2026)");
+  });
+
+  it('after a batch’s start moves later, a text-only edit of an older note saves; changing its day, or re-pointing it, is still bounded', async () => {
+    const { service, prisma } = build();
+    // Batch 1A now starts 1 May; the note is from 1 Apr.
+    prisma.ptmNote.findFirst.mockResolvedValue({ studentId: 'st-1', batchId: 'b1', meetingDate: d('2026-04-01'), batch: { startDate: d('2026-05-01') } });
+    await expect(service.update(scope(), 'n1', dto({ date: '2026-04-01', discussion: 'Corrected spelling' }))).resolves.toEqual({ id: 'n1' });
+    await expect(service.update(scope(), 'n1', dto({ date: '2026-04-15' }))).rejects.toThrow("The meeting can't be before the batch started (1 May 2026)");
+    prisma.student.findFirst.mockResolvedValueOnce({ id: 'st-1' });
+    prisma.batch.findFirst.mockResolvedValueOnce({ id: 'b2', name: 'Batch 2A', startDate: d('2026-05-01') });
+    await expect(service.update(scope(), 'n1', dto({ batchId: 'b2', date: '2026-04-01' }))).rejects.toThrow('before the batch started (1 May 2026)');
+    expect(prisma.ptmNote.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('a correction that leaves batchId out altogether keeps the note’s batch (an API client may omit it)', async () => {
+    const { service, prisma } = build();
+    const { batchId: _omit, ...withoutBatch } = { batchId: 'b1', date: '2026-10-18', studentId: 'st-1', parentName: null, parentAttended: true, discussion: 'Corrected', actionItems: null, followUpDate: null };
+    const body = plainToInstance(PtmNoteDto, withoutBatch);
+    expect('batchId' in body && body.batchId !== undefined).toBe(false);
+    await expect(service.update(scope(), 'n1', body)).resolves.toEqual({ id: 'n1' });
+    expect(prisma.ptmNote.updateMany.mock.calls[0][0].data).not.toHaveProperty('batchId');
+    expect(prisma.batch.findFirst).not.toHaveBeenCalled();
   });
 
   it('at 01:00 in India a meeting dated today (India) is logged, though the UTC day is still yesterday', async () => {
@@ -174,7 +216,7 @@ describe('PtmNotesService', () => {
 
   it('a note whose batch was deleted is corrected with no batch sent, keeping its recorded batch name', async () => {
     const { service, prisma } = build();
-    prisma.ptmNote.findFirst.mockResolvedValue({ studentId: 'st-1', batchId: null, batch: null });
+    prisma.ptmNote.findFirst.mockResolvedValue({ studentId: 'st-1', batchId: null, meetingDate: d('2026-10-18'), batch: null });
     await expect(service.update(scope(), 'n1', dto({ batchId: '', discussion: 'Corrected' }))).resolves.toEqual({ id: 'n1' });
     const data = prisma.ptmNote.updateMany.mock.calls[0][0].data;
     expect(data).not.toHaveProperty('batchId');

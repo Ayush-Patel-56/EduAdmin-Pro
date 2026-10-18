@@ -248,7 +248,7 @@ A new table only (parent-teacher meeting notes), wrapped in a transaction with `
      OR (n."facultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f."id" = n."facultyId" AND f."schoolId" = n."schoolId"));
   ```
 
-  It must be 0. Prisma warns that `SetNull` is set on a relation whose `schoolId` is required; the column list is what makes it safe.
+  It must be 0. Prisma warns that `SetNull` is set on a relation whose `schoolId` is required; the column list is what makes it safe. Prisma can't write the column list itself, so CI checks it on the migrated database (`apps/api/test/schema-constraints.e2e-spec.ts`); a later migration that regenerates these keys must keep it.
 
 ## Tests & Question Bank (`20261019090000_assessments`)
 
