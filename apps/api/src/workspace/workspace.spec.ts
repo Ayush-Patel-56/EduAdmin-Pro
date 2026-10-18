@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { realUniqueError } from '../common/prisma-errors.fixture.js';
+import { Prisma } from '../generated/prisma/client.js';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { FilesService } from '../storage/files.service.js';
@@ -25,6 +26,7 @@ function build() {
     assignment: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'a1' }), update: vi.fn(), delete: vi.fn() },
     assignmentSubmission: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue(null), upsert: vi.fn(), aggregate: vi.fn().mockResolvedValue({ _max: { score: null } }) },
     student: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(), groupBy: vi.fn().mockResolvedValue([]) },
+    curriculumChapter: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     fileObject: { findMany: vi.fn().mockResolvedValue([]) },
     // The row lock; the transaction runs against the same mocks.
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'a1' }]),
@@ -115,6 +117,37 @@ describe('WorkspaceService: assignments and grading', () => {
   });
 
   const visible = { id: 'a1', batchId: 'b-mine', totalMarks: 50, title: 'DPP', dueAt: new Date(), batch: { name: 'Batch A' } };
+
+  it("a curriculum chapter must be this school's and the assignment's subject; its name becomes the chapter, with the topic kept", async () => {
+    const { service, prisma } = build();
+    prisma.curriculumChapter.findFirst.mockResolvedValueOnce(null);
+    await expect(service.createAssignment(scope(), 'u', assignment({ chapterId: 'c-x' }))).rejects.toThrow('no longer in the curriculum');
+    expect(prisma.curriculumChapter.findFirst.mock.calls[0][0].where).toEqual({ id: 'c-x', schoolId: 'school-1' });
+    prisma.curriculumChapter.findFirst.mockResolvedValueOnce({ id: 'c1', name: 'Organic Basics', subject: 'Chemistry' });
+    await expect(service.createAssignment(scope(), 'u', assignment({ chapterId: 'c1' }))).rejects.toThrow('That chapter is a Chemistry chapter; pick one of Physics');
+    expect(prisma.assignment.create).not.toHaveBeenCalled();
+    prisma.curriculumChapter.findFirst.mockResolvedValueOnce({ id: 'c2', name: 'Laws of Motion', subject: 'Physics' });
+    await service.createAssignment(scope(), 'u', assignment({ chapter: 'typed', chapterId: 'c2', topic: "Newton's third law" }));
+    expect(prisma.assignment.create.mock.calls[0][0].data).toMatchObject({ chapter: 'Laws of Motion', chapterId: 'c2', topic: "Newton's third law" });
+    // Without one, the typed chapter stays and the links are empty.
+    await service.createAssignment(scope(), 'u', assignment());
+    expect(prisma.assignment.create.mock.calls[1][0].data).toMatchObject({ chapter: 'Kinematics', chapterId: null, topic: null });
+  });
+
+  it('a chapter (or batch) deleted between the check and the save is a 400, not a 500', async () => {
+    const { service, prisma } = build();
+    prisma.curriculumChapter.findFirst.mockResolvedValueOnce({ id: 'c2', name: 'Laws of Motion', subject: 'Physics' });
+    prisma.assignment.create.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated', { code: 'P2003', clientVersion: '7' }));
+    await expect(service.createAssignment(scope(), 'u', assignment({ chapterId: 'c2' }))).rejects.toThrow('The chapter or batch was just removed. Refresh and try again.');
+  });
+
+  it('the chapter picker lists the school curriculum with concepts, and nothing for an inactive teacher', async () => {
+    const { service, prisma } = build();
+    prisma.curriculumChapter.findMany.mockResolvedValueOnce([{ id: 'c1', name: 'Heat', subject: 'Physics', concepts: [{ name: 'Conduction' }] }]);
+    await expect(service.chapters(scope())).resolves.toEqual([{ id: 'c1', name: 'Heat', subject: 'Physics', concepts: ['Conduction'] }]);
+    expect(prisma.curriculumChapter.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1' });
+    await expect(service.chapters(scope({ active: false }))).resolves.toEqual([]);
+  });
 
   it("only the teacher who set it can edit or delete an assignment, and only while it's in their batch", async () => {
     const { service, prisma } = build();

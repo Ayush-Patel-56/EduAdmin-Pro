@@ -13,10 +13,10 @@ export type Actor =
 
 export const isTeacher = (a: Actor): a is Extract<Actor, { kind: 'TEACHER' }> => a.kind === 'TEACHER';
 
-/** A teacher who can still add or change things (an inactive profile can only read). */
-export function activeFacultyId(a: Actor): string | null {
+/** A teacher who can still add or change things (an inactive profile can only read); the message says what they can't change. */
+export function activeFacultyId(a: Actor, message = 'Only active faculty can change tests and questions'): string | null {
   if (!isTeacher(a)) return null;
-  if (!a.scope.active || !a.scope.facultyId) throw new ForbiddenException('Only active faculty can change tests and questions');
+  if (!a.scope.active || !a.scope.facultyId) throw new ForbiddenException(message);
   return a.scope.facultyId;
 }
 

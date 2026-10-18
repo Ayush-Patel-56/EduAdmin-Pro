@@ -27,6 +27,9 @@ export function QuestionDialog({ base, options, question, withSource, onSaved, o
     setError(null)
   }
   const chapters = options.chapters.filter((c) => c.subject === form.subject)
+  // The picked chapter's concepts first, then the subject's others: picking one keeps topic names alike across tests and assignments.
+  const picked = chapters.find((c) => c.id === form.chapterId)
+  const concepts = [...new Set([...(picked?.concepts ?? []), ...chapters.flatMap((c) => c.concepts)])]
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -68,8 +71,9 @@ export function QuestionDialog({ base, options, question, withSource, onSaved, o
               onChange={(v) => set('chapterId', v)}
             />
           </Field>
-          <Field id="q-topic" label="Concept / Topic *">
-            <input id="q-topic" value={form.topic} maxLength={200} onChange={(e) => set('topic', e.target.value)} placeholder="e.g. Laws of Thermodynamics" className={inputClass()} />
+          <Field id="q-topic" label="Concept / Topic *" hint={concepts.length ? 'Pick a curriculum concept or type your own' : undefined}>
+            <input id="q-topic" list="q-topic-concepts" value={form.topic} maxLength={200} onChange={(e) => set('topic', e.target.value)} placeholder="e.g. Laws of Thermodynamics" className={inputClass()} />
+            <datalist id="q-topic-concepts">{concepts.map((c) => <option key={c} value={c} />)}</datalist>
           </Field>
           <Field id="q-difficulty" label="Difficulty *">
             <Select id="q-difficulty" value={form.difficulty || null} placeholder="Select difficulty" options={options.difficulties.map((d) => ({ value: d, label: DIFFICULTY_LABELS[d] }))} onChange={(v) => set('difficulty', v as QuestionForm['difficulty'])} />

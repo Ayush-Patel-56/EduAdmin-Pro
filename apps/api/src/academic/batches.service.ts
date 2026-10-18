@@ -207,6 +207,13 @@ export class BatchesService {
           `${results} test result${results === 1 ? ' is' : 's are'} recorded for this batch. Set an end date for the batch instead.`,
         );
       }
+      // And term marks entered for it (saving marks share-locks the batch).
+      const marks = await tx.studentMark.count({ where: { schoolId, batchId } });
+      if (marks > 0) {
+        throw new ConflictException(
+          `${marks} term mark${marks === 1 ? ' is' : 's are'} recorded for this batch. Set an end date for the batch instead.`,
+        );
+      }
       const teachers = await tx.facultyBatch.findMany({
         where: { batchId },
         select: { facultyId: true },

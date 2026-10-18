@@ -49,7 +49,11 @@ export class TestsService {
   async options(actor: Actor) {
     const teacher = isTeacher(actor);
     const [chapters, batches, faculty, programs] = await Promise.all([
-      this.prisma.curriculumChapter.findMany({ where: { schoolId: actor.schoolId }, select: { id: true, name: true, subject: true }, orderBy: [{ subject: 'asc' }, { name: 'asc' }] }),
+      this.prisma.curriculumChapter.findMany({
+        where: { schoolId: actor.schoolId },
+        select: { id: true, name: true, subject: true, concepts: { select: { name: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] } },
+        orderBy: [{ subject: 'asc' }, { name: 'asc' }],
+      }),
       this.prisma.batch.findMany({
         where: { schoolId: actor.schoolId, ...(teacher && { id: { in: actor.scope.batchIds } }) },
         select: { id: true, name: true, program: { select: { id: true, name: true } } },
@@ -68,7 +72,8 @@ export class TestsService {
       questionTypes: QUESTION_TYPES,
       testTypes: TEST_TYPES,
       defaults: { ...TEST_DEFAULTS, marks: QUESTION_DEFAULTS.marks, negativeMarks: QUESTION_DEFAULTS.negativeMarks, source: QUESTION_DEFAULTS.source },
-      chapters,
+      // With their concepts, suggested as topics so questions and assignments name topics alike (topic strength).
+      chapters: chapters.map((c) => ({ id: c.id, name: c.name, subject: c.subject, concepts: c.concepts.map((k) => k.name) })),
       batches,
       faculty,
       programs,

@@ -81,6 +81,11 @@ export class TeacherWorkspaceController {
     return this.workspace.deleteMaterial(await this.scope(auth), id);
   }
 
+  @Get('chapters')
+  async chapters(@Auth() auth: AuthContext) {
+    return this.workspace.chapters(await this.scope(auth));
+  }
+
   @Get('assignments')
   async assignments(@Auth() auth: AuthContext, @Query() query: WorkspaceQuery) {
     return this.workspace.teacherAssignments(await this.scope(auth), query);

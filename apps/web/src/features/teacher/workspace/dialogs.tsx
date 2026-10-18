@@ -8,6 +8,7 @@ import { ErrorBanner } from '@/components/ui/form'
 import {
   ASSIGNMENT_TYPE_LABELS,
   MATERIAL_TYPE_LABELS,
+  useWorkspaceChapters,
   useWorkspaceOptions,
   type Assignment,
   type AssignmentType,
@@ -127,10 +128,13 @@ export function MaterialDialog({ schoolId, batches, material, defaultBatchId, on
 /** New Assignment / DPP (PRD 5.9). */
 export function AssignmentDialog({ schoolId, batches, assignment, defaultBatchId, onSaved, onClose }: { schoolId: string; batches: Batch[]; assignment?: Assignment; defaultBatchId: string; onSaved: () => Promise<unknown>; onClose: () => void }) {
   const { data: options } = useWorkspaceOptions()
+  const { data: curriculum } = useWorkspaceChapters()
   const [v, setV] = useState({
     title: assignment?.title ?? '',
     description: assignment?.description ?? '',
     chapter: assignment?.chapter ?? '',
+    chapterId: assignment?.chapterId ?? '',
+    topic: assignment?.topic ?? '',
     batchId: assignment?.batch.id ?? defaultBatchId,
     subject: assignment?.subject ?? 'Mathematics',
     type: (assignment?.type ?? 'HOMEWORK') as AssignmentType,
@@ -148,6 +152,9 @@ export function AssignmentDialog({ schoolId, batches, assignment, defaultBatchId
     setV((prev) => ({ ...prev, [key]: value }))
     setError(null)
   }
+  // Chapters of the assignment's subject; the picked chapter's concepts are suggested first as topics.
+  const chapters = (curriculum ?? []).filter((c) => c.subject === v.subject)
+  const concepts = [...new Set([...(chapters.find((c) => c.id === v.chapterId)?.concepts ?? []), ...chapters.flatMap((c) => c.concepts)])]
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -160,7 +167,7 @@ export function AssignmentDialog({ schoolId, batches, assignment, defaultBatchId
     if (!Number.isInteger(marks) || marks < 1 || marks > 1000) return setError('Total marks must be a whole number from 1 to 1,000')
     setBusy(true)
     try {
-      const body = JSON.stringify({ ...v, dueTime: v.dueTime || '23:59', totalMarks: marks, questionFileId: file?.id ?? null })
+      const body = JSON.stringify({ ...v, chapterId: v.chapterId || null, topic: v.topic.trim() || null, dueTime: v.dueTime || '23:59', totalMarks: marks, questionFileId: file?.id ?? null })
       await (assignment
         ? api(`/teacher/workspace/assignments/${assignment.id}`, { method: 'PATCH', body })
         : api('/teacher/workspace/assignments', { method: 'POST', body }))
@@ -179,7 +186,27 @@ export function AssignmentDialog({ schoolId, batches, assignment, defaultBatchId
         <F id="a-title" text="Title *"><input id="a-title" value={v.title} maxLength={150} onChange={(e) => set('title', e.target.value)} placeholder="e.g. Electromagnetism Practice Set" className={field} /></F>
         <F id="a-desc" text="Description"><textarea id="a-desc" rows={2} value={v.description} maxLength={4000} onChange={(e) => set('description', e.target.value)} placeholder="Enter description, instructions or guidelines for students..." className={area} /></F>
         <div className="grid gap-4 sm:grid-cols-2">
-          <F id="a-chapter" text="Chapter / Topic *"><input id="a-chapter" value={v.chapter} maxLength={150} onChange={(e) => set('chapter', e.target.value)} placeholder="e.g. Chapter 4: Gauss's Law" className={field} /></F>
+          <F id="a-curriculum" text="Curriculum Chapter">
+            <select
+              id="a-curriculum"
+              value={v.chapterId}
+              onChange={(e) => {
+                const picked = chapters.find((c) => c.id === e.target.value)
+                setV((prev) => ({ ...prev, chapterId: e.target.value, chapter: picked ? picked.name : prev.chapterId ? '' : prev.chapter }))
+                setError(null)
+              }}
+              disabled={!chapters.length}
+              className={field}
+            >
+              <option value="">{chapters.length ? 'Not linked (optional)' : `No ${v.subject} chapters in the curriculum`}</option>
+              {chapters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </F>
+          <F id="a-topic" text="Concept / Topic">
+            <input id="a-topic" list="a-topic-concepts" value={v.topic} maxLength={120} onChange={(e) => set('topic', e.target.value)} placeholder="e.g. Gauss's Law applications" className={field} />
+            <datalist id="a-topic-concepts">{concepts.map((c) => <option key={c} value={c} />)}</datalist>
+          </F>
+          <F id="a-chapter" text="Chapter / Topic *" className="sm:col-span-2"><input id="a-chapter" value={v.chapter} maxLength={150} onChange={(e) => set('chapter', e.target.value)} readOnly={!!v.chapterId} placeholder="e.g. Chapter 4: Gauss's Law" className={`${field} ${v.chapterId ? 'text-slate-500' : ''}`} /></F>
           <F id="a-batch" text="Batch *">
             <select id="a-batch" value={v.batchId} onChange={(e) => set('batchId', e.target.value)} className={field}>
               <option value="">{batches.length ? 'Select a batch' : 'No batches assigned to you'}</option>
@@ -187,7 +214,7 @@ export function AssignmentDialog({ schoolId, batches, assignment, defaultBatchId
             </select>
           </F>
           <F id="a-subject" text="Subject *">
-            <select id="a-subject" value={v.subject} onChange={(e) => set('subject', e.target.value)} className={field}>
+            <select id="a-subject" value={v.subject} onChange={(e) => setV((prev) => ({ ...prev, subject: e.target.value, ...(prev.chapterId ? { chapterId: '', chapter: '' } : {}) }))} className={field}>
               {options?.subjects.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </F>

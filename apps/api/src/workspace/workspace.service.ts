@@ -168,26 +168,53 @@ export class WorkspaceService {
     return this.withRates(rows, null);
   }
 
+  /**
+   * The curriculum chapters (with their concepts) an assignment can be linked
+   * to: the school's syllabus, for the form's pickers. None for an inactive teacher.
+   */
+  async chapters(scope: TeacherScope) {
+    if (!scope.active) return [];
+    const rows = await this.prisma.curriculumChapter.findMany({
+      where: { schoolId: scope.schoolId },
+      select: { id: true, name: true, subject: true, concepts: { select: { name: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] } },
+      orderBy: [{ subject: 'asc' }, { name: 'asc' }],
+    });
+    return rows.map((c) => ({ id: c.id, name: c.name, subject: c.subject, concepts: c.concepts.map((k) => k.name) }));
+  }
+
   async createAssignment(scope: TeacherScope, userId: string, dto: AssignmentDto) {
     const facultyId = this.requireTeacher(scope);
     this.requireBatch(scope, dto.batchId);
+    const chapter = await this.curriculumChapter(scope.schoolId, dto);
     if (dto.questionFileId) {
       await this.files.claim(scope.schoolId, dto.questionFileId, 'ASSIGNMENT_SHEET', userId);
     }
-    const row = await duplicateAsConflict(
-      () =>
-        this.prisma.assignment.create({
-          data: { schoolId: scope.schoolId, facultyId, ...assignmentData(dto) },
-          select: { id: true },
-        }),
-      fileClash,
+    const row = await chapterGone(() =>
+      duplicateAsConflict(
+        () =>
+          this.prisma.assignment.create({
+            data: { schoolId: scope.schoolId, facultyId, ...assignmentData(dto, chapter) },
+            select: { id: true },
+          }),
+        fileClash,
+      ),
     );
     return { id: row.id };
   }
 
+  /** The curriculum chapter picked for an assignment: one of this school's, for the assignment's subject. */
+  private async curriculumChapter(schoolId: string, dto: AssignmentDto) {
+    if (!dto.chapterId) return null;
+    const chapter = await this.prisma.curriculumChapter.findFirst({ where: { id: dto.chapterId, schoolId }, select: { id: true, name: true, subject: true } });
+    if (!chapter) throw new BadRequestException('That chapter is no longer in the curriculum. Pick it again.');
+    if (chapter.subject !== dto.subject) throw new BadRequestException(`That chapter is a ${chapter.subject} chapter; pick one of ${dto.subject}`);
+    return chapter;
+  }
+
   async updateAssignment(scope: TeacherScope, userId: string, id: string, dto: AssignmentDto) {
     this.requireBatch(scope, dto.batchId);
-    const replaced = await duplicateAsConflict(
+    const chapter = await this.curriculumChapter(scope.schoolId, dto);
+    const replaced = await chapterGone(() => duplicateAsConflict(
       () =>
         this.prisma.$transaction(async (tx) => {
           // Locked first: a grade saved meanwhile waits, then sees the new total.
@@ -210,13 +237,13 @@ export class WorkspaceService {
           if (dto.questionFileId) {
             await this.files.claim(scope.schoolId, dto.questionFileId, 'ASSIGNMENT_SHEET', userId, current.questionFileId);
           }
-          await tx.assignment.update({ where: { id }, data: assignmentData(dto) });
+          await tx.assignment.update({ where: { id }, data: assignmentData(dto, chapter) });
           return current.questionFile && current.questionFileId !== (dto.questionFileId ?? null)
             ? current.questionFile
             : null;
         }),
       fileClash,
-    );
+    ));
     if (replaced) await this.files.discardQuietly([replaced]);
     return { id };
   }
@@ -472,6 +499,8 @@ export class WorkspaceService {
           title: a.title,
           description: a.description,
           chapter: a.chapter,
+          chapterId: a.chapterId,
+          topic: a.topic,
           subject: a.subject,
           type: a.type,
           batch: a.batch,
@@ -537,11 +566,13 @@ function materialData(dto: MaterialDto) {
   };
 }
 
-function assignmentData(dto: AssignmentDto) {
+function assignmentData(dto: AssignmentDto, chapter: { id: string; name: string } | null) {
   return {
     title: dto.title,
     description: dto.description ?? null,
-    chapter: dto.chapter,
+    chapter: chapter?.name ?? dto.chapter,
+    chapterId: chapter?.id ?? null,
+    topic: dto.topic ?? null,
     batchId: dto.batchId,
     subject: dto.subject,
     type: dto.type,
@@ -549,4 +580,16 @@ function assignmentData(dto: AssignmentDto) {
     totalMarks: dto.totalMarks,
     questionFileId: dto.questionFileId ?? null,
   };
+}
+
+/** A chapter (or batch) deleted between the check and the save (foreign key) is a 400, not a 500. */
+async function chapterGone<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
+      throw new BadRequestException('The chapter or batch was just removed. Refresh and try again.');
+    }
+    throw err;
+  }
 }

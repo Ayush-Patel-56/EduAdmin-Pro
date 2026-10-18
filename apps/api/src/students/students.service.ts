@@ -140,17 +140,19 @@ export class StudentsService {
   }
 
   /**
-   * Records that go with the student when they're deleted: faculty's PTM notes
-   * and counseling sessions about them (the delete confirmation names them).
+   * Records that go with the student when they're deleted: faculty's PTM notes,
+   * counseling sessions and daily ratings about them (the delete confirmation
+   * names them).
    */
   async removal(schoolId: string, studentId: string) {
     const student = await this.prisma.student.findFirst({ where: { id: studentId, schoolId }, select: { id: true } });
     if (!student) throw new NotFoundException('Student not found');
-    const [ptmNotes, counselingSessions] = await Promise.all([
+    const [ptmNotes, counselingSessions, ratings] = await Promise.all([
       this.prisma.ptmNote.count({ where: { schoolId, studentId } }),
       this.prisma.counselingSession.count({ where: { schoolId, studentId } }),
+      this.prisma.dailyRating.count({ where: { schoolId, studentId } }),
     ]);
-    return { ptmNotes, counselingSessions };
+    return { ptmNotes, counselingSessions, ratings };
   }
 
   /** Removes the student with their guardians and batch history. */
@@ -178,6 +180,13 @@ export class StudentsService {
       if (results > 0) {
         throw new ConflictException(
           `This student has ${results} test result${results === 1 ? '' : 's'} on record, so they can't be deleted. Set their status to Inactive or Transferred instead.`,
+        );
+      }
+      // And their term marks (saving marks share-locks the student, so none slip in).
+      const marks = await tx.studentMark.count({ where: { schoolId, studentId } });
+      if (marks > 0) {
+        throw new ConflictException(
+          `This student has ${marks} term mark${marks === 1 ? '' : 's'} on record, so they can't be deleted. Set their status to Inactive or Transferred instead.`,
         );
       }
       const row = await tx.student.findUniqueOrThrow({

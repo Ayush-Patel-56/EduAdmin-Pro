@@ -57,7 +57,8 @@ export type Options = {
   questionTypes: QuestionType[]
   testTypes: TestType[]
   defaults: { durationMinutes: number; totalMarks: number; marks: number; negativeMarks: number; source: string }
-  chapters: { id: string; name: string; subject: string }[]
+  /** Curriculum chapters with their concepts (suggested as topics, so tests and assignments name topics alike). */
+  chapters: { id: string; name: string; subject: string; concepts: string[] }[]
   batches: { id: string; name: string; program: { id: string; name: string } }[]
   faculty: { id: string; name: string }[]
   programs: { id: string; name: string }[]
