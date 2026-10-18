@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -86,14 +87,20 @@ export class DailyReportsService {
         classes: new Set(rows.map((r) => `${r.batchId}|${r.subject.toLowerCase()}`)).size,
         flagged: rows.filter((r) => r.flaggedAt !== null).length,
       },
-      items: items.map((r) => ({
-        ...toReport(r),
-        flag: r.flaggedAt ? { at: r.flaggedAt.toISOString(), by: r.flaggedBy!, reason: r.flagReason } : null,
-      })),
+      items: items.map((r) => {
+        const flag = flagOf(r);
+        return { ...toReport(r), flag: flag && { ...flag, changedAfter: changedAfterFlag(r) } };
+      }),
     };
   }
 
-  /** Flags a report for follow-up (who, when, why), or clears the flag. The report itself doesn't change. */
+  /**
+   * Flags a report for follow-up (who, when, why), or clears the flag. The
+   * report itself doesn't change. The teacher sees the flag and its reason on
+   * their own reports, can still correct the report (the flag stays, and the
+   * admin sees it was changed after flagging), but can't delete it while it's
+   * flagged.
+   */
   async setFlag(schoolId: string, userId: string, id: string, dto: ReportFlagDto) {
     const admin = dto.flagged ? await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { fullName: true } }) : null;
     const { count } = await this.prisma.dailyReport.updateMany({
@@ -164,7 +171,7 @@ export class DailyReportsService {
       orderBy: [{ reportDate: 'desc' }, { submittedAt: 'desc' }],
       take: RECENT_LIMIT,
     });
-    return rows.map(toReport);
+    return rows.map((r) => ({ ...toReport(r), flag: flagOf(r) }));
   }
 
   async submit(scope: TeacherScope, dto: DailyReportDto) {
@@ -235,8 +242,13 @@ export class DailyReportsService {
   async remove(scope: TeacherScope, id: string) {
     const facultyId = requireTeacher(scope);
     await this.own(scope, facultyId, id);
-    const { count } = await this.prisma.dailyReport.deleteMany({ where: { id, schoolId: scope.schoolId, facultyId } });
-    if (!count) throw new NotFoundException('Report not found');
+    // Unflagged only, in the write: a flag set meanwhile still stops the delete.
+    const { count } = await this.prisma.dailyReport.deleteMany({ where: { id, schoolId: scope.schoolId, facultyId, flaggedAt: null } });
+    if (!count) {
+      const flagged = await this.prisma.dailyReport.count({ where: { id, schoolId: scope.schoolId, facultyId, flaggedAt: { not: null } } });
+      if (flagged) throw new ConflictException('An admin flagged this report; ask them to clear the flag before deleting it');
+      throw new NotFoundException('Report not found');
+    }
     return { ok: true };
   }
 
@@ -293,6 +305,16 @@ function fields(dto: DailyReportDto) {
     homework: dto.homework ?? null,
     observations: dto.observations ?? null,
   };
+}
+
+/** An admin's flag on a report: who, when and why. */
+function flagOf(r: ReportRow) {
+  return r.flaggedAt ? { at: r.flaggedAt.toISOString(), by: r.flaggedBy!, reason: r.flagReason } : null;
+}
+
+/** Edited (or moved to another day, which resubmits it) after it was flagged. */
+function changedAfterFlag(r: ReportRow) {
+  return !!r.flaggedAt && (r.editedAt ?? r.submittedAt) > r.flaggedAt;
 }
 
 function toReport(r: ReportRow) {

@@ -1,12 +1,13 @@
-import { useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Award, CalendarDays, ClipboardList, Info, Loader2, Pencil, Send, Trash2 } from 'lucide-react'
+import { Award, CalendarDays, ClipboardList, Flag, Info, Loader2, Pencil, Send, Trash2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { todayIst } from '@/lib/dates'
 import { ConfirmDialog, ErrorBanner } from '@/components/ui/form'
 import { inputClass, textareaClass } from '@/components/ui/formStyles'
 import { Select } from '@/components/ui/Select'
 import {
+  dateTimeIst,
   emptyForm,
   formOf,
   formProblem,
@@ -213,24 +214,43 @@ function DailyClassReport() {
               <tbody className="divide-y divide-slate-100">
                 {mine.data.map((r) => {
                   const own = !!o?.active && o.batches.some((b) => b.id === r.batch.id)
+                  const canDelete = own && !r.flag
                   return (
-                    <tr key={r.id} className={editing?.id === r.id ? 'bg-indigo-50/50' : 'hover:bg-slate-50/60'}>
+                    <Fragment key={r.id}>
+                    <tr className={editing?.id === r.id ? 'bg-indigo-50/50' : 'hover:bg-slate-50/60'}>
                       <td className="px-6 py-4 whitespace-nowrap text-slate-700">{shortDay(r.date)}</td>
                       <td className="px-3 py-4 font-semibold text-slate-900">{r.batch.name}</td>
                       <td className="px-3 py-4 text-slate-600">{r.subject}</td>
                       <td className="max-w-[200px] truncate px-3 py-4 text-slate-600" title={r.chapter ?? undefined}>{r.chapter || '—'}</td>
-                      <td className="px-3 py-4 text-center"><StatusPill late={r.late} /></td>
+                      <td className="px-3 py-4 text-center">
+                        <span className="inline-flex flex-col items-center gap-1">
+                          <StatusPill late={r.late} />
+                          {r.flag && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700"><Flag className="size-3" /> Flagged</span>
+                          )}
+                        </span>
+                      </td>
                       <td className="px-6 py-4">
                         <div className="flex justify-end gap-1">
                           <button type="button" onClick={() => startEdit(r)} disabled={!own} title={own ? 'Edit report' : 'You are no longer assigned to this batch'} aria-label={`Edit ${r.subject} report for ${shortDay(r.date)}`} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">
                             <Pencil className="size-4" />
                           </button>
-                          <button type="button" onClick={() => setDeleting(r)} disabled={!own} title={own ? 'Delete report' : 'You are no longer assigned to this batch'} aria-label={`Delete ${r.subject} report for ${shortDay(r.date)}`} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40">
+                          <button type="button" onClick={() => setDeleting(r)} disabled={!canDelete} title={!own ? 'You are no longer assigned to this batch' : r.flag ? 'An admin flagged this report; ask them to clear the flag before deleting it' : 'Delete report'} aria-label={`Delete ${r.subject} report for ${shortDay(r.date)}`} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40">
                             <Trash2 className="size-4" />
                           </button>
                         </div>
                       </td>
                     </tr>
+                    {r.flag && (
+                      <tr className="bg-rose-50/40">
+                        <td colSpan={6} className="px-6 pb-4 text-xs text-rose-800">
+                          Flagged by {r.flag.by} on {dateTimeIst(r.flag.at)}{r.flag.reason ? ':' : '.'}
+                          {r.flag.reason && <span className="ml-1 whitespace-pre-line [overflow-wrap:anywhere]">{r.flag.reason}</span>}
+                          <span className="block text-[11px] text-rose-700/80">You can still edit the report to correct it. Ask an admin to clear the flag if it should be deleted.</span>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   )
                 })}
               </tbody>
