@@ -222,6 +222,14 @@ A new table only (teachers' daily class reports), wrapped in a transaction, so t
 - **One per class.** A unique index allows one report per teacher, batch, subject (any letter case) and day, so a double submit is a 409 and the first report can be edited instead.
 - **Kept as records.** A batch with daily reports can't be deleted (set an end date instead; the batch delete confirmation says so). A report keeps its teacher's name if the faculty profile is deleted later. Clear All Data removes daily reports with the rest of the academic data.
 
+## PTM notes (`20261018150000_ptm_notes`)
+
+A new table only (parent-teacher meeting notes), wrapped in a transaction with `lock_timeout = 10s`, so there is nothing to check before deploying.
+
+- **Faculty only.** Teachers log meetings with the parents of students in their own batches, and read, correct or delete only the notes they logged. There is no admin screen; the notes are kept for the student's record (the 5-in-1 report).
+- **Checks.** Discussion notes are required, a meeting can't be logged for a day still to come (API), and a CHECK keeps the follow-up date on or after the meeting.
+- **Kept as records.** A note names its batch and teacher as they were, so it still reads right after either is deleted (the links become null). Deleting a student removes their notes, as it does their counseling sessions; Clear All Data removes them with the rest.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

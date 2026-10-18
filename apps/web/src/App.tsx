@@ -51,6 +51,7 @@ const SchedulePage = lazy(() => import('@/features/teacher/SchedulePage').then((
 const TeacherAttendancePage = lazy(() => import('@/features/teacher/AttendancePage').then((m) => ({ default: m.AttendancePage })))
 const DailyReportsPage = lazy(() => import('@/features/admin/daily-reports/DailyReportsPage').then((m) => ({ default: m.DailyReportsPage })))
 const DailyReportPage = lazy(() => import('@/features/teacher/DailyReportPage').then((m) => ({ default: m.DailyReportPage })))
+const PtmNotesPage = lazy(() => import('@/features/teacher/PtmNotesPage').then((m) => ({ default: m.PtmNotesPage })))
 const FeesPage = lazy(() => import('@/features/admin/fees/FeesPage').then((m) => ({ default: m.FeesPage })))
 const MeetingsPage = lazy(() => import('@/features/admin/meetings/MeetingsPage').then((m) => ({ default: m.MeetingsPage })))
 const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
@@ -80,6 +81,7 @@ const teacherPages: Record<string, ReactNode> = {
   schedule: lazyPage(<SchedulePage />),
   attendance: lazyPage(<TeacherAttendancePage />),
   'daily-report': lazyPage(<DailyReportPage />),
+  'ptm-notes': lazyPage(<PtmNotesPage />),
   profile: lazyPage(<MyProfilePage />),
 }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>

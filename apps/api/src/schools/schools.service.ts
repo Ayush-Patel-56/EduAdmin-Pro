@@ -449,6 +449,7 @@ export class SchoolsService {
       await tx.meeting.deleteMany({ where: { schoolId } }); // with their agenda items
       await tx.calendarEvent.deleteMany({ where: { schoolId } });
       await tx.dailyReport.deleteMany({ where: { schoolId } }); // before the batches and faculty they name
+      await tx.ptmNote.deleteMany({ where: { schoolId } }); // before the students they are about
       // Attendance sheets (with their records) before the batches they point at.
       await tx.classOccurrence.deleteMany({ where: { schoolId } });
       await tx.specialClass.deleteMany({ where: { schoolId } });

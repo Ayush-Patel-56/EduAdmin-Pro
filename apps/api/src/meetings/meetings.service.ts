@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { parseDate, toIsoDate } from '../common/dates.js';
+import { likeEscape } from '../common/like-escape.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AgendaItemDto, AgendaStateDto, MeetingDto, MeetingQuery } from './meetings.dto.js';
@@ -210,9 +211,4 @@ function agendaData(dto: AgendaItemDto) {
     priority: dto.priority,
     status: dto.status,
   };
-}
-
-/** Escapes LIKE's wildcards (and its escape character), so the text matches literally. */
-function likeEscape(text: string) {
-  return text.replace(/[\\%_]/g, '\\$&');
 }

@@ -335,6 +335,7 @@ model School {
   agendaItems     MeetingAgendaItem[]
   calendarEvents  CalendarEvent[]
   dailyReports    DailyReport[]
+  ptmNotes        PtmNote[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -418,6 +419,7 @@ model Batch {
   feeStructures  FeeStructure[]
   calendarEvents CalendarEvent[]
   dailyReports   DailyReport[]
+  ptmNotes       PtmNote[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -471,6 +473,7 @@ model Faculty {
   specialClasses     SpecialClass[]
   occurrences        ClassOccurrence[]
   dailyReports       DailyReport[]
+  ptmNotes           PtmNote[]
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -780,6 +783,7 @@ model Student {
   counseling  CounselingSession[]
   attendance  AttendanceRecord[]
   feeDues     FeeDue[]
+  ptmNotes    PtmNote[]
 
   @@unique([schoolId, admissionNumber])
   @@unique([schoolId, aadharNumber])
@@ -1403,5 +1407,37 @@ model DailyReport {
 
   @@index([schoolId, reportDate])
   @@index([facultyId, reportDate])
+  @@index([batchId])
+}
+
+// Notes from a parent-teacher meeting (PRD 5.8): what was discussed about a
+// student, what was agreed, and when to follow up. Faculty log and read their
+// own; the notes feed the student's 5-in-1 report (HLD). The batch and the
+// teacher are kept by name too, so a note still reads right after either goes.
+model PtmNote {
+  id             String    @id @default(uuid())
+  schoolId       String
+  studentId      String
+  batchId        String? // the student's batch at the meeting; null once that batch is deleted
+  batchName      String
+  facultyId      String? // the teacher who logged it; null once their profile is deleted
+  teacherName    String
+  meetingDate    DateTime  @db.Date
+  parentName     String?
+  parentAttended Boolean
+  discussion     String
+  actionItems    String?
+  followUpDate   DateTime? @db.Date
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+
+  school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student Student  @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  batch   Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  faculty Faculty? @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, meetingDate])
+  @@index([facultyId, meetingDate])
+  @@index([studentId])
   @@index([batchId])
 }

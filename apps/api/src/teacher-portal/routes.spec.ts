@@ -16,6 +16,7 @@ import { FeesController } from '../fees/fees.controller.js';
 import { MeetingsController } from '../meetings/meetings.controller.js';
 import { CalendarController } from '../calendar/calendar.controller.js';
 import { AdminDailyReportsController, TeacherDailyReportsController } from '../daily-reports/daily-reports.controller.js';
+import { TeacherPtmNotesController } from '../ptm-notes/ptm-notes.controller.js';
 import {
   AdminScheduleController,
   TeacherScheduleController,
@@ -93,6 +94,8 @@ describe.each([
   ['TeacherScheduleController', (a: AccessService) => new TeacherScheduleController(a, untouched() as never)],
   ['TeacherAttendanceController', (a: AccessService) => new TeacherAttendanceController(a, untouched() as never)],
   ['TeacherDailyReportsController', (a: AccessService) => new TeacherDailyReportsController(a, untouched() as never)],
+  // PTM notes are faculty only: there is no admin controller at all.
+  ['TeacherPtmNotesController', (a: AccessService) => new TeacherPtmNotesController(a, untouched() as never)],
 ])('%s: faculty routes', (_name, build) => {
   const teacherScope = vi.fn().mockRejectedValue(new ForbiddenException('Join a school'));
   const controller = build({ teacherScope } as unknown as AccessService);
