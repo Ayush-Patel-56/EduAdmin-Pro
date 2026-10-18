@@ -253,7 +253,7 @@ export function FeedbackSection({ r }: { r: StudentReport }) {
         </Card>
       </div>
       {f.recentRatings.some((x) => x.notes) && (
-        <Card title="Teachers' notes" sub="From recent daily ratings">
+        <Card title={f.ownOnly ? 'Your notes' : "Teachers' notes"} sub={f.ownOnly ? 'From your recent daily ratings' : 'From recent daily ratings'}>
           <ul className="-my-2 divide-y divide-slate-100">
             {f.recentRatings.filter((x) => x.notes).map((x, i) => (
               <li key={`${x.date}-${x.raterName}-${i}`} className="py-2.5 text-sm">
@@ -264,9 +264,16 @@ export function FeedbackSection({ r }: { r: StudentReport }) {
           </ul>
         </Card>
       )}
-      <Card title="PTM history" sub={f.ptm.meetings ? `${f.ptm.meetings} meeting${f.ptm.meetings === 1 ? '' : 's'} · parent attendance ${pct(f.ptm.parentAttendanceRate)}` : 'From PTM Notes (faculty)'}>
+      <Card
+        title="PTM history"
+        sub={
+          f.ptm.meetings
+            ? `${f.ptm.meetings} meeting${f.ptm.meetings === 1 ? '' : 's'} by all teachers · parent attendance ${pct(f.ptm.parentAttendanceRate)}${f.ownOnly ? ' · notes below are the ones you logged' : ''}`
+            : 'From PTM Notes (faculty)'
+        }
+      >
         {f.ptm.notes.length === 0 ? (
-          <Empty icon={Users} title="No parent meetings logged this year" />
+          <Empty icon={Users} title={f.ownOnly && f.ptm.meetings ? 'You haven’t logged a meeting with this student’s parents this year' : 'No parent meetings logged this year'} />
         ) : (
           <ul className="-my-2 divide-y divide-slate-100">
             {f.ptm.notes.map((n, i) => (

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Actor } from '../assessments/actor.js';
+import { isTeacher, type Actor } from '../assessments/actor.js';
 import { toIsoDate, istParts } from '../common/dates.js';
 import { likeEscape } from '../common/like-escape.js';
 import { Prisma } from '../generated/prisma/client.js';
@@ -78,8 +78,12 @@ export class StudentReportService {
     const s = { schoolId: actor.schoolId, studentId };
     const testRange = { status: 'SCHEDULED' as const, startsAt: { gte: ctx.fromInstant, lt: ctx.toInstant } };
     const dayRange = { gte: ctx.fromDate, lt: ctx.toDate };
+    // Ratings count only from teachers still active in the school (#50): not an inactive or deleted profile.
+    const ratingWhere = { ...s, date: dayRange, faculty: { status: { not: 'INACTIVE' as const } } };
+    // A teacher reads only the ratings and PTM notes they wrote; the totals and averages are everyone's (#50).
+    const ownOnly = isTeacher(actor) ? { facultyId: actor.scope.facultyId ?? '' } : {};
 
-    const [results, answerGroups, testTopics, assignments, recentMistakes, ratingAvg, ratingDays, recentRatings, attendance, ptm] = await Promise.all([
+    const [results, answerGroups, testTopics, assignments, recentMistakes, ratingAvg, ratingDays, recentRatings, attendance, ptmMeetings, ptmAttended, ptm] = await Promise.all([
       this.prisma.testResult.findMany({
         where: { ...s, test: testRange },
         select: { present: true, marks: true, correct: true, incorrect: true, unattempted: true, test: { select: { id: true, title: true, type: true, subject: true, startsAt: true, totalMarks: true } } },
@@ -123,20 +127,22 @@ export class StudentReportService {
         orderBy: [{ result: { test: { startsAt: 'desc' } } }, { testQuestion: { position: 'asc' } }],
         take: RECENT_LIMIT,
       }),
-      this.prisma.dailyRating.aggregate({ where: { ...s, date: dayRange }, _avg: { attitude: true, behaviour: true, focus: true, interaction: true }, _count: { _all: true } }),
-      this.prisma.dailyRating.groupBy({ by: ['date'], where: { ...s, date: dayRange } }),
+      this.prisma.dailyRating.aggregate({ where: ratingWhere, _avg: { attitude: true, behaviour: true, focus: true, interaction: true }, _count: { _all: true } }),
+      this.prisma.dailyRating.groupBy({ by: ['date'], where: ratingWhere }),
       this.prisma.dailyRating.findMany({
-        where: { ...s, date: dayRange },
+        where: { ...ratingWhere, ...ownOnly },
         select: { date: true, raterName: true, attitude: true, behaviour: true, focus: true, interaction: true, notes: true },
         orderBy: [{ date: 'desc' }, { raterName: 'asc' }],
         take: RECENT_LIMIT,
       }),
       this.prisma.attendanceRecord.groupBy({ by: ['status'], where: { ...s, occurrence: { date: dayRange } }, _count: { _all: true } }),
+      this.prisma.ptmNote.count({ where: { ...s, meetingDate: dayRange } }),
+      this.prisma.ptmNote.count({ where: { ...s, meetingDate: dayRange, parentAttended: true } }),
       this.prisma.ptmNote.findMany({
-        where: { ...s, meetingDate: dayRange },
+        where: { ...s, meetingDate: dayRange, ...ownOnly },
         select: { meetingDate: true, teacherName: true, parentName: true, parentAttended: true, discussion: true, actionItems: true, followUpDate: true },
         orderBy: [{ meetingDate: 'desc' }, { createdAt: 'desc' }],
-        take: 200,
+        take: RECENT_LIMIT,
       }),
     ]);
 
@@ -210,7 +216,6 @@ export class StudentReportService {
       : null;
     const statusCount = (status: string) => attendance.find((a) => a.status === status)?._count._all ?? 0;
     const att = { present: statusCount('PRESENT'), late: statusCount('LATE'), absent: statusCount('ABSENT'), excused: statusCount('EXCUSED') };
-    const attended = ptm.filter((n) => n.parentAttended).length;
 
     return {
       generatedAt: new Date().toISOString(),
@@ -238,7 +243,7 @@ export class StudentReportService {
         attemptRate: percent(attempted, attempted + unattempted),
         behaviourScore: ratings?.score ?? null,
         attendanceRate: attendanceRate(att),
-        ptmMeetings: ptm.length,
+        ptmMeetings,
       },
       performance: {
         subjects: [...bySubject.entries()]
@@ -308,14 +313,16 @@ export class StudentReportService {
         })),
       },
       feedback: {
+        /** The lists below hold only this teacher's own ratings and notes (the totals are everyone's). */
+        ownOnly: isTeacher(actor),
         ratings,
         recentRatings: recentRatings.map((r) => ({ date: toIsoDate(r.date), raterName: r.raterName, attitude: r.attitude, behaviour: r.behaviour, focus: r.focus, interaction: r.interaction, notes: r.notes })),
         attendance: { ...att, classes: att.present + att.late + att.absent + att.excused, rate: attendanceRate(att) },
         ptm: {
-          meetings: ptm.length,
-          parentAttended: attended,
-          parentAttendanceRate: percent(attended, ptm.length),
-          notes: ptm.slice(0, RECENT_LIMIT).map((n) => ({
+          meetings: ptmMeetings,
+          parentAttended: ptmAttended,
+          parentAttendanceRate: percent(ptmAttended, ptmMeetings),
+          notes: ptm.map((n) => ({
             date: toIsoDate(n.meetingDate),
             teacherName: n.teacherName,
             parentName: n.parentName,
@@ -333,7 +340,7 @@ export class StudentReportService {
         gradedAssignments: assignments.length,
         ratings: ratingAvg._count._all,
         classes: att.present + att.late + att.absent + att.excused,
-        ptmNotes: ptm.length,
+        ptmNotes: ptmMeetings,
       },
     };
   }

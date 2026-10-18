@@ -159,11 +159,6 @@ export class TeacherStudentReportsController {
     return this.marks.set(await this.actor(auth), query);
   }
 
-  @Delete('marks/set')
-  async removeSet(@Auth() auth: AuthContext, @Query() query: MarkSetQuery) {
-    return this.marks.removeSet(await this.actor(auth), query);
-  }
-
   @Get('overview')
   async overview(@Auth() auth: AuthContext, @Query() query: OverviewQuery) {
     return this.marks.overview(await this.actor(auth), query);

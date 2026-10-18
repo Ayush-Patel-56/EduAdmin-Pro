@@ -14,6 +14,7 @@ import {
   TERM_LABELS,
   gradeOf,
   percent,
+  topicKey,
   type ReportTermKey,
 } from './report-math.js';
 import { batchScope, inScope, requireBatchAccess, requireWritableYear, yearChoices, yearContext } from './scope.js';
@@ -33,6 +34,8 @@ import {
 
 const num = (v: Prisma.Decimal | string | number) => Number(v);
 const WRITE_REFUSED = 'Only active faculty can change student reports';
+/** Topic spellings Mistake Analysis reads (far above a year's distinct topics in a scope). */
+const MISTAKE_GROUPS = 5000;
 const like = (q: string) => `%${likeEscape(q.trim())}%`;
 
 /**
@@ -65,6 +68,8 @@ export class MarksService {
       needsAttentionPercent: NEEDS_ATTENTION_PERCENT,
       /** Whether this person can upload, generate and delete (an inactive teacher only reads, and sees nothing). */
       canWrite: !isTeacher(actor) || (actor.scope.active && !!actor.scope.facultyId),
+      /** Only admins delete a report sheet; a teacher corrects one by uploading it again. */
+      canDeleteSheets: !isTeacher(actor),
       batches: batches.map((b) => ({ id: b.id, name: b.name, program: b.program.name })),
     };
   }
@@ -198,10 +203,13 @@ export class MarksService {
     });
   }
 
-  /** Deletes one sheet's marks (uploaded to the wrong batch, term or subject), and any progress report left with no marks. */
+  /**
+   * Deletes one sheet's marks (uploaded to the wrong batch, term or subject),
+   * and any progress report left with no marks. Admins only: a teacher
+   * corrects a sheet by uploading it again (#50).
+   */
   async removeSet(actor: Actor, query: MarkSetQuery) {
-    activeFacultyId(actor, WRITE_REFUSED);
-    requireBatchAccess(actor, query.batchId);
+    if (isTeacher(actor)) throw new ForbiddenException('Only an admin can delete a report sheet. Upload the corrected sheet instead.');
     return this.prisma.$transaction(async (tx) => {
       const where = { schoolId: actor.schoolId, batchId: query.batchId, academicYear: query.year, term: query.term, subject: query.subject };
       const students = await tx.studentMark.findMany({ where, select: { studentId: true } });
@@ -264,12 +272,13 @@ export class MarksService {
 
   /**
    * Mistake Analysis: the test topics most often answered wrong or skipped this
-   * year, in the batches in view. Topics are matched in any letter case or
-   * spacing (as in topic strength) and named as on the latest paper.
+   * year, in the batches in view. Topics are matched in any letter case,
+   * spacing or punctuation (topicKey, as in topic strength) and named as on
+   * the latest paper.
    */
   private async mistakeTopics(schoolId: string, scope: string[] | null, batchId: string | null, subject: string | null, from: Date, to: Date) {
-    const rows = await this.prisma.$queryRaw<{ subject: string; topic: string; wrong: number; skipped: number; answers: number }[]>`
-      SELECT q."subject", (array_agg(q."topic" ORDER BY t."startsAt" DESC, q."position"))[1] AS "topic",
+    const rows = await this.prisma.$queryRaw<{ subject: string; topic: string; latest: Date; wrong: number; skipped: number; answers: number }[]>`
+      SELECT q."subject", (array_agg(q."topic" ORDER BY t."startsAt" DESC, q."position"))[1] AS "topic", max(t."startsAt") AS "latest",
         count(*) FILTER (WHERE a."outcome" IN ('INCORRECT', 'PARTIAL'))::int AS "wrong",
         count(*) FILTER (WHERE a."outcome" = 'UNATTEMPTED')::int AS "skipped",
         count(*)::int AS "answers"
@@ -280,11 +289,26 @@ export class MarksService {
         ${batchId ? Prisma.sql`AND t."batchId" = ${batchId}` : Prisma.empty}
         ${subject ? Prisma.sql`AND q."subject" = ${subject}` : Prisma.empty}
         ${inScope('t."batchId"', scope)}
-      GROUP BY q."subject", regexp_replace(lower(btrim(q."topic")), '[[:space:]]+', ' ', 'g')
-      HAVING count(*) FILTER (WHERE a."outcome" <> 'CORRECT') > 0
-      ORDER BY count(*) FILTER (WHERE a."outcome" <> 'CORRECT') DESC, q."subject", 2
-      LIMIT 8`;
-    return rows.map((r) => ({ ...r, missRate: percent(r.wrong + r.skipped, r.answers) }));
+      GROUP BY q."subject", lower(btrim(q."topic"))
+      LIMIT ${MISTAKE_GROUPS}`;
+    // Spellings of one topic merged (topicKey), named as on the latest paper.
+    const merged = new Map<string, { subject: string; topic: string; latest: Date; wrong: number; skipped: number; answers: number }>();
+    for (const r of rows) {
+      const key = topicKey(r.subject, r.topic);
+      const m = merged.get(key);
+      if (!m) merged.set(key, { ...r });
+      else {
+        if (r.latest > m.latest) [m.topic, m.latest] = [r.topic, r.latest];
+        m.wrong += r.wrong;
+        m.skipped += r.skipped;
+        m.answers += r.answers;
+      }
+    }
+    return [...merged.values()]
+      .filter((m) => m.wrong + m.skipped > 0)
+      .sort((a, b) => b.wrong + b.skipped - (a.wrong + a.skipped) || a.subject.localeCompare(b.subject) || a.topic.localeCompare(b.topic))
+      .slice(0, 8)
+      .map(({ latest: _latest, ...m }) => ({ ...m, missRate: percent(m.wrong + m.skipped, m.answers) }));
   }
 
   // Student Progress Reports (PRD 4.8)
@@ -528,11 +552,10 @@ function summary(applied: boolean, rows: ImportPreview['rows'], ready: unknown[]
 const clean = (v: string | undefined) => (v ?? '').trim().replace(/\s+/g, ' ');
 const nameKey = (v: string) => v.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
 
-/** The same person: the same name ignoring case and punctuation, or the same first name (a short form of the full name). */
+/** The same person: the full name as on the roster, ignoring letter case, spacing and punctuation (a first name alone isn't enough, #50). */
 export function sameName(rosterName: string, sheetName: string): boolean {
   const a = nameKey(rosterName);
-  const b = nameKey(sheetName);
-  return a === b || (!!a && !!b && a.split(' ')[0] === b.split(' ')[0]);
+  return !!a && a === nameKey(sheetName);
 }
 
 /** A number cell: blank is null; up to two decimals; "92%" reads as 92 where a percentage is allowed. */

@@ -14,6 +14,8 @@ export type ReportOptions = {
   needsAttentionPercent: number
   /** False for a teacher whose profile is inactive: they read nothing and change nothing. */
   canWrite: boolean
+  /** Only admins delete a report sheet; a teacher uploads the corrected sheet instead. */
+  canDeleteSheets: boolean
   batches: { id: string; name: string; program: string }[]
 }
 
@@ -91,6 +93,8 @@ export type StudentReport = {
     }[]
   }
   feedback: {
+    /** A teacher's view: the ratings and PTM notes listed are their own; the totals and averages are everyone's. */
+    ownOnly: boolean
     ratings: { count: number; days: number; attitude: number | null; behaviour: number | null; focus: number | null; interaction: number | null; score: number | null } | null
     recentRatings: { date: string; raterName: string; attitude: number; behaviour: number; focus: number; interaction: number; notes: string | null }[]
     attendance: { present: number; late: number; absent: number; excused: number; classes: number; rate: number | null }

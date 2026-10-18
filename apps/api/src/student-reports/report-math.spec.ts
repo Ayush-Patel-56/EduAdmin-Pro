@@ -53,6 +53,11 @@ describe('student report rules', () => {
   it('matches topics by subject and name in any letter case or spacing', () => {
     expect(topicKey('Physics', '  Laws of   Motion ')).toBe(topicKey('physics', 'laws of motion'));
     expect(topicKey('Physics', 'Heat')).not.toBe(topicKey('Chemistry', 'Heat'));
+    // Punctuation and a possessive 's don't make another topic (#50).
+    expect(topicKey('Physics', "Gauss's Law")).toBe(topicKey('Physics', 'Gauss Law'));
+    expect(topicKey('Physics', 'Gauss’s law.')).toBe(topicKey('Physics', 'gauss law'));
+    expect(topicKey('Physics', 'Work-Energy Theorem')).toBe(topicKey('Physics', 'work energy theorem'));
+    expect(topicKey('Physics', 'Heat')).not.toBe(topicKey('Physics', 'Heats'));
   });
 
   it('blends a topic: the mean of its test and assignment scores, with the counts of each', () => {

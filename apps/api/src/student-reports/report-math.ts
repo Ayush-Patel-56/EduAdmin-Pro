@@ -101,9 +101,17 @@ export function behaviourScore(avg: { attitude: number | null; behaviour: number
   return Math.round(((values as number[]).reduce((a, b) => a + b, 0) / 4) * 10) / 10;
 }
 
-/** How a topic is matched across tests and assignments: its subject and name, ignoring letter case and spacing. */
+/** A name as topics are matched: letter case, spacing, punctuation and a possessive 's ignored ("Gauss's Law" = "gauss law", "Work-Energy" = "work energy"). */
+const matchName = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/['’]s\b/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
+/** How a topic is matched across tests and assignments (and in Mistake Analysis): its subject and name, ignoring letter case, spacing and punctuation. */
 export function topicKey(subject: string, topic: string): string {
-  return `${subject.trim().toLowerCase()}|${topic.trim().replace(/\s+/g, ' ').toLowerCase()}`;
+  return `${matchName(subject)}|${matchName(topic)}`;
 }
 
 export type TestTopic = { subject: string; chapter: string | null; topic: string; questions: number; awarded: number; possible: number };

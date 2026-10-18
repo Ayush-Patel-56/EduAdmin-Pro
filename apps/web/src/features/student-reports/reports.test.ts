@@ -86,7 +86,7 @@ describe('5-in-1 exports', () => {
     analysis: { questions: 0, attempted: 0, correct: 0, incorrect: 0, unattempted: 0, accuracy: null, attemptRate: null, testsCounted: 0, answered: 0, byType: [], byDifficulty: [] },
     topics: { strong: [], average: [], weak: [] },
     mistakes: { incorrect: 0, partial: 0, unattempted: 0, bySubject: [], recent: [] },
-    feedback: { ratings: null, recentRatings: [], attendance: { present: 0, late: 0, absent: 0, excused: 0, classes: 0, rate: null }, ptm: { meetings: 0, parentAttended: 0, parentAttendanceRate: null, notes: [] } },
+    feedback: { ownOnly: false, ratings: null, recentRatings: [], attendance: { present: 0, late: 0, absent: 0, excused: 0, classes: 0, rate: null }, ptm: { meetings: 0, parentAttended: 0, parentAttendanceRate: null, notes: [] } },
     coverage: { tests: 2, answers: 0, gradedAssignments: 0, ratings: 1, classes: 0, ptmNotes: 0 },
   } as unknown as StudentReport
 
