@@ -417,6 +417,14 @@ export class MarksService {
         const [student] = await tx.$queryRaw<{ id: string; batchId: string | null }[]>`SELECT "id", "batchId" FROM "Student" WHERE "id" = ${dto.studentId} AND "schoolId" = ${actor.schoolId} FOR SHARE`;
         if (!student) throw new NotFoundException('Student not found');
         const key = { schoolId: actor.schoolId, studentId: dto.studentId, academicYear: dto.year, term: dto.term };
+        // Lock the card's marks first, so a sheet or report delete running now
+        // either waits for this save, then sees the report with its marks, or
+        // goes first, and this save then sees the marks gone and writes them
+        // back as new. Otherwise an unchanged save (which writes no marks)
+        // could recreate the remarks after the delete dropped them, leaving a
+        // report with no marks. FOR UPDATE, not FOR SHARE: two saves of one card
+        // would each hold a share lock and then deadlock updating the rows.
+        await tx.$queryRaw`SELECT 1 FROM "StudentMark" WHERE "schoolId" = ${actor.schoolId} AND "studentId" = ${dto.studentId} AND "academicYear" = ${dto.year}::int AND "term" = ${dto.term}::"ReportTerm" ORDER BY "id" FOR UPDATE`;
         const existing = await tx.studentMark.findMany({ where: key, select: { subject: true, batchId: true, marks: true, maxMarks: true, updatedAt: true, batch: { select: { name: true } } } });
         const batchId = latestBatch(existing) ?? student.batchId;
         if (!batchId) throw new BadRequestException('Assign the student to a batch before generating a report');
