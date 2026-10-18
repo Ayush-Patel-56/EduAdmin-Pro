@@ -113,6 +113,23 @@ export class AssignmentDto {
   @MaxLength(150)
   chapter: string;
 
+  /**
+   * A curriculum chapter of the subject (optional). Its name becomes the
+   * chapter, and with the topic it lines the assignment's scores up with the
+   * question bank's for topic strength in the student reports.
+   */
+  @Transform(blankToNull)
+  @IsOptional()
+  @IsUUID('4', { message: 'Select the chapter again' })
+  chapterId?: string | null;
+
+  /** The concept / topic it practises (optional). */
+  @Transform(blankToNull)
+  @IsOptional()
+  @IsString()
+  @MaxLength(120, { message: 'Keep the topic under 120 characters' })
+  topic?: string | null;
+
   @IsUUID('4', { message: 'Select a batch' })
   batchId: string;
 

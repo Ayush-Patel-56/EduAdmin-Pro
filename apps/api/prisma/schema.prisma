@@ -342,6 +342,9 @@ model School {
   testQuestions   TestQuestion[]
   testResults     TestResult[]
   testAnswers     TestAnswer[]
+  dailyRatings    DailyRating[]
+  studentMarks    StudentMark[]
+  progressReports ProgressReport[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -427,6 +430,8 @@ model Batch {
   dailyReports   DailyReport[]
   ptmNotes       PtmNote[]
   tests          Test[]
+  dailyRatings   DailyRating[]
+  studentMarks   StudentMark[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -485,6 +490,7 @@ model Faculty {
   ptmNotes           PtmNote[]
   questions          Question[]
   tests              Test[]
+  dailyRatings       DailyRating[]
 
   @@unique([schoolId, userId])
   @@unique([schoolId, email])
@@ -595,12 +601,13 @@ model CurriculumChapter {
   createdAt     DateTime @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime @updatedAt @db.Timestamptz(3)
 
-  school    School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school      School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   // NoAction (checked at end of statement) lets a school delete cascade; the
   // programs service unlinks chapters before deleting a single program.
-  program   Program?            @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
-  concepts  CurriculumConcept[]
-  questions Question[]
+  program     Program?            @relation(fields: [programId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  concepts    CurriculumConcept[]
+  questions   Question[]
+  assignments Assignment[]
 
   @@unique([schoolId, code])
   @@unique([id, schoolId])
@@ -797,6 +804,9 @@ model Student {
   feeDues     FeeDue[]
   ptmNotes    PtmNote[]
   testResults TestResult[]
+  ratings     DailyRating[]
+  marks       StudentMark[]
+  reports     ProgressReport[]
 
   @@unique([schoolId, admissionNumber])
   @@unique([schoolId, aadharNumber])
@@ -916,7 +926,9 @@ model Assignment {
   subject        String
   title          String
   description    String?
-  chapter        String // chapter / topic
+  chapter        String // chapter / topic as entered (or the curriculum chapter's name when picked)
+  chapterId      String? // a curriculum chapter of the school; null once it is deleted
+  topic          String? // the concept / topic: matched with question topics for topic strength
   type           AssignmentType
   dueAt          DateTime       @db.Timestamptz(3) // due date + time, entered in IST
   totalMarks     Int
@@ -929,11 +941,14 @@ model Assignment {
   batch        Batch                  @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
   questionFile FileObject?            @relation(fields: [questionFileId, schoolId], references: [id, schoolId], onDelete: NoAction)
   faculty      Faculty?               @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  // School-tied: deleting the chapter nulls only chapterId (ON DELETE SET NULL ("chapterId") in the migration).
+  curriculum   CurriculumChapter?     @relation(fields: [chapterId, schoolId], references: [id, schoolId], onDelete: SetNull)
   submissions  AssignmentSubmission[]
 
   @@unique([id, schoolId])
   @@index([schoolId, dueAt])
   @@index([batchId])
+  @@index([chapterId])
 }
 
 // One student's work on one assignment, entered by a teacher.
@@ -1717,4 +1732,109 @@ model TestAnswer {
 
   @@unique([resultId, testQuestionId])
   @@index([testQuestionId])
+}
+
+// Student Reports (PRD 4.5, 4.8, 5.4, 5.7; HLD 9.7). The 5-in-1 report is
+// worked out when read from the records each module keeps (tests and their
+// answers, graded assignments, attendance, PTM notes); these tables hold what
+// no other module collects.
+
+// The terms a school reports marks for (PRD 4.8).
+enum ReportTerm {
+  UNIT_TEST_1
+  TERM_1
+  MID_TERM
+  TERM_2
+  ANNUAL
+}
+
+enum MarkSource {
+  IMPORT // an uploaded sheet (Import student report)
+  MANUAL // Generate / Edit Progress Report
+}
+
+// A teacher's rating of one student for one day (Student Ratings, PRD 5.7):
+// four dimensions, each Unsatisfactory (1) to Excellent (5). One per student,
+// day and teacher; the behaviour score averages every teacher's ratings.
+model DailyRating {
+  id          String   @id @default(uuid())
+  schoolId    String
+  studentId   String
+  batchId     String? // the batch it was given in; null once that batch is deleted
+  facultyId   String? // the rating teacher; null once their profile is deleted
+  raterName   String // as they were named then
+  date        DateTime @db.Date
+  attitude    Int // 1-5, checked by the database
+  behaviour   Int
+  focus       Int
+  interaction Int
+  notes       String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  school  School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student Student  @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  // School-tied; deleting the batch or profile nulls only that link (ON DELETE SET NULL ("batchId") / ("facultyId")).
+  batch   Batch?   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: SetNull)
+  faculty Faculty? @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
+
+  @@unique([studentId, date, facultyId])
+  @@index([schoolId, date])
+  @@index([batchId, date])
+  @@index([facultyId, date])
+}
+
+// One student's marks in one subject for one term of an academic year (an
+// imported report sheet, or a progress report). The batch is the student's
+// when entered: the cohort term ranks are worked out in.
+model StudentMark {
+  id           String     @id @default(uuid())
+  schoolId     String
+  studentId    String
+  batchId      String
+  academicYear Int // the year it starts, e.g. 2026 for 2026-27
+  term         ReportTerm
+  subject      String
+  marks        Decimal    @db.Decimal(7, 2) // 0 to maxMarks, checked by the database
+  maxMarks     Decimal    @db.Decimal(7, 2)
+  attendance   Decimal?   @db.Decimal(5, 2) // percent, 0-100 (from the sheet)
+  remarks      String?
+  source       MarkSource
+  enteredById  String?
+  enteredBy    String // who entered it last, as they were named then
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(3)
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // Marks are records: a student or batch with marks can't be deleted (the API
+  // refuses); NoAction (checked at end of statement) lets a school delete cascade.
+  student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: NoAction)
+  batch   Batch   @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: NoAction)
+
+  @@unique([studentId, academicYear, term, subject])
+  @@index([schoolId, academicYear, term])
+  @@index([batchId, academicYear, term])
+}
+
+// The remarks on one student's progress report for a term (PRD 4.8). The
+// report's subjects are that term's StudentMark rows; rank and percentile are
+// worked out when read, within the batch.
+model ProgressReport {
+  id               String     @id @default(uuid())
+  schoolId         String
+  studentId        String
+  academicYear     Int
+  term             ReportTerm
+  teacherRemarks   String?
+  principalRemarks String?
+  updatedById      String?
+  updatedBy        String // who generated or last edited it, as they were named then
+  createdAt        DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime   @updatedAt @db.Timestamptz(3)
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@unique([studentId, academicYear, term])
+  @@index([schoolId, academicYear, term])
 }

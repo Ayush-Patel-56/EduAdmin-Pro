@@ -19,7 +19,9 @@ import {
   type DailyReport,
   type ReportForm,
 } from '@/features/daily-reports/api'
-import { ProgressReportsLater, ReportTab, ReportTabBar, StatusPill } from '@/features/daily-reports/ui'
+import { ReportTab, ReportTabBar, StatusPill } from '@/features/daily-reports/ui'
+import { ProgressReports } from '@/features/student-reports/ProgressReports'
+import { useTeacherContext } from './useTeacherDashboard'
 
 type Tab = 'daily' | 'progress'
 
@@ -33,9 +35,14 @@ export function DailyReportPage() {
         <ReportTab accent="ink" active={tab === 'daily'} onClick={() => setParams({}, { replace: true })} icon={ClipboardList} label="Daily Class Report" />
         <ReportTab accent="ink" active={tab === 'progress'} onClick={() => setParams({ tab: 'progress' }, { replace: true })} icon={Award} label="Student Progress Reports" />
       </ReportTabBar>
-      {tab === 'daily' ? <DailyClassReport /> : <ProgressReportsLater />}
+      {tab === 'daily' ? <DailyClassReport /> : <TeacherProgressReports />}
     </>
   )
+}
+
+function TeacherProgressReports() {
+  const { dashboard } = useTeacherContext()
+  return <ProgressReports school={dashboard?.school?.name ?? 'School'} />
 }
 
 function DailyClassReport() {

@@ -10,13 +10,14 @@ import { ALL } from '@/features/academic/filters'
 import { todayIst } from '@/lib/dates'
 import { useQueryClient } from '@tanstack/react-query'
 import { adminReportsPath, classLine, dateTimeIst, longDay, STATUS_TABS, timeIst, useAdminReports, type AdminDay, type ReportStatus } from '@/features/daily-reports/api'
-import { ProgressReportsLater, ReportTab, ReportTabBar, StatusPill } from '@/features/daily-reports/ui'
+import { ReportTab, ReportTabBar, StatusPill } from '@/features/daily-reports/ui'
+import { ProgressReports } from '@/features/student-reports/ProgressReports'
 import { useAdminContext } from '../adminContext'
 import { exportReportsCsv, exportReportsPdf, printReport } from './exportDailyReports'
 
 type Tab = 'daily' | 'progress'
 
-/** Daily Reports (PRD 4.8): what each teacher reported for a day, and (later) student progress reports. */
+/** Daily Reports (PRD 4.8): what each teacher reported for a day, and student progress reports. */
 export function DailyReportsPage() {
   const [params, setParams] = useSearchParams()
   const tab: Tab = params.get('tab') === 'progress' ? 'progress' : 'daily'
@@ -32,9 +33,14 @@ export function DailyReportsPage() {
         <ReportTab active={tab === 'daily'} onClick={() => select('daily')} icon={ClipboardList} label="Daily Teacher Reports" />
         <ReportTab active={tab === 'progress'} onClick={() => select('progress')} icon={Award} label="Student Progress Reports" />
       </ReportTabBar>
-      {tab === 'daily' ? <DailyTeacherReports /> : <ProgressReportsLater />}
+      {tab === 'daily' ? <DailyTeacherReports /> : <AdminProgressReports />}
     </>
   )
+}
+
+function AdminProgressReports() {
+  const { schoolId, dashboard } = useAdminContext()
+  return <ProgressReports schoolId={schoolId} school={dashboard?.school.name ?? 'School'} />
 }
 
 function DailyTeacherReports() {

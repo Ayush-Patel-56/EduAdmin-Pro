@@ -280,6 +280,18 @@ New enums and new tables only (the question bank, tests, their papers and result
   ```
   The migration rewrites `TestAnswer` (it adds and fills `testId`), so that table is locked while it runs: about 40 s for 3 million answers on a scratch database, during which reading or saving answers waits. `lock_timeout` only limits waiting to *get* the lock, not how long the migration runs. The feature is new, so a production deploy now should take moments; deploy it at a quiet time if answers have grown large.
 
+## Student Reports (`20261019150000_student_reports`)
+
+New enums, three new tables and two nullable columns on `Assignment`, in a transaction with `lock_timeout = 10s`. Nothing to backfill or check before deploying. Needs PostgreSQL 15+ for `ON DELETE SET NULL (column)` (Neon runs 18).
+
+- **What the reports read.** The 5-in-1 report is worked out on each request from records other modules already keep: test results and their answers, graded assignments, attendance and PTM notes. Nothing is copied. The new tables hold only what no module collected before.
+- **`DailyRating`.** Student Ratings: one row per student, day and teacher, with four dimensions held at 1-5 by a CHECK. The batch and teacher links are school-tied and null out (`SET NULL (column)`) when the batch or profile is deleted. Ratings go with a deleted student, and the delete confirmation counts them.
+- **`StudentMark`.** Term marks, from uploaded report sheets or Generate Progress Report. There is one row per student, academic year, term and subject. CHECKs keep marks between 0 and max marks, max marks above 0, and attendance at 0-100. Marks are records: a student or batch with marks can't be deleted (set a status or end date instead).
+- **`ProgressReport`.** Teacher and principal remarks for a student's term. The report's subjects are that term's marks, and rank and percentile within the batch are worked out when read, so they never go stale.
+- **`Assignment.chapterId` / `topic`.** An optional curriculum chapter (school-tied, nulled if the chapter is deleted) and topic. Graded assignments then join test answers in topic strength.
+- Clear All Data removes ratings, marks and remarks with the rest of the academic data.
+- If the migration times out behind a long query on `Assignment`, mark it `--rolled-back` and deploy again.
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.

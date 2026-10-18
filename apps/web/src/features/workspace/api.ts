@@ -52,6 +52,9 @@ export type Assignment = {
   title: string
   description: string | null
   chapter: string
+  /** The curriculum chapter it's linked to, and the topic it practises (topic strength in the student reports). */
+  chapterId: string | null
+  topic: string | null
   subject: string
   type: AssignmentType
   batch: { id: string; name: string }
@@ -100,6 +103,13 @@ const query = (f: Partial<WorkspaceFilters>) => {
 
 export function useWorkspaceOptions() {
   return useQuery({ queryKey: ['workspace-options'], queryFn: () => api<WorkspaceOptions>('/workspace/options'), staleTime: Infinity })
+}
+
+export type CurriculumChapter = { id: string; name: string; subject: string; concepts: string[] }
+
+/** The school's curriculum chapters with their concepts, for linking an assignment to a chapter and topic. */
+export function useWorkspaceChapters() {
+  return useQuery({ queryKey: ['teacher', 'workspace', 'chapters'], queryFn: () => api<CurriculumChapter[]>('/teacher/workspace/chapters'), staleTime: 60_000 })
 }
 
 /** Teacher: their batches' material and assignments. Admin (`schoolId`): everything in the school. */

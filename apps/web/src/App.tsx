@@ -59,6 +59,9 @@ const MeetingsPage = lazy(() => import('@/features/admin/meetings/MeetingsPage')
 const TestsBankPage = lazy(() => import('@/features/admin/tests/TestsBankPage').then((m) => ({ default: m.TestsBankPage })))
 const TeacherTestsPage = lazy(() => import('@/features/teacher/TestsPage').then((m) => ({ default: m.TestsPage })))
 const AcademicRecordsPage = lazy(() => import('@/features/teacher/AcademicRecordsPage').then((m) => ({ default: m.AcademicRecordsPage })))
+const AdminStudentReportsPage = lazy(() => import('@/features/admin/student-reports/StudentReportsPage').then((m) => ({ default: m.StudentReportsPage })))
+const TeacherStudentReportsPage = lazy(() => import('@/features/teacher/StudentReportsPage').then((m) => ({ default: m.StudentReportsPage })))
+const RatingsPage = lazy(() => import('@/features/teacher/RatingsPage').then((m) => ({ default: m.RatingsPage })))
 const lazyPage = (page: ReactNode) => <Suspense fallback={<PageSpinner />}>{page}</Suspense>
 
 const adminOnly = (element: ReactNode) => <RequireAuth accountType="ADMIN">{element}</RequireAuth>
@@ -76,6 +79,7 @@ const adminPages: Record<string, ReactNode> = {
   'daily-reports': lazyPage(<DailyReportsPage />),
   feedback: lazyPage(<FeedbackPage />),
   'tests-bank': lazyPage(<TestsBankPage />),
+  'student-reports': lazyPage(<AdminStudentReportsPage />),
   // The dashboard's "Manage Schedule" used to point here; class schedules live under Calendar.
   schedule: <Navigate to="/management/calendar?tab=schedules" replace />,
 }
@@ -92,6 +96,8 @@ const teacherPages: Record<string, ReactNode> = {
   'ptm-notes': lazyPage(<PtmNotesPage />),
   tests: lazyPage(<TeacherTestsPage />),
   'academic-records': lazyPage(<AcademicRecordsPage />),
+  'student-reports': lazyPage(<TeacherStudentReportsPage />),
+  'daily-ratings': lazyPage(<RatingsPage />),
   profile: lazyPage(<MyProfilePage />),
 }
 const teacherOnly = (element: ReactNode) => <RequireAuth accountType="TEACHER">{element}</RequireAuth>

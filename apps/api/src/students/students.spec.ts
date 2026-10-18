@@ -175,6 +175,7 @@ describe('StudentsService: records stay inside the school', () => {
     attendanceRecord: { count: vi.fn().mockResolvedValue(0) },
     feeDue: { count: vi.fn().mockResolvedValue(0) },
     testResult: { count: vi.fn().mockResolvedValue(0) },
+    studentMark: { count: vi.fn().mockResolvedValue(0) },
     studentGuardian: { count: vi.fn().mockResolvedValue(0), updateMany: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'g1' }), findFirst: vi.fn(), update: vi.fn() },
     studentEnrollment: { updateMany: vi.fn(), create: vi.fn() },
   };
@@ -258,6 +259,17 @@ describe('StudentsService: records stay inside the school', () => {
     tx.testResult.count.mockResolvedValueOnce(3);
     await expect(service.remove('school-1', 'st-1')).rejects.toThrow("This student has 3 test results on record, so they can't be deleted.");
     expect(tx.testResult.count.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', studentId: 'st-1' });
+    expect(tx.student.delete).not.toHaveBeenCalled();
+  });
+
+  it('a student with term marks is not deleted (progress reports read them)', async () => {
+    runTx();
+    tx.$queryRaw.mockResolvedValue([{ id: 'st-1' }]);
+    tx.studentMark.count.mockResolvedValueOnce(1);
+    await expect(service.remove('school-1', 'st-1')).rejects.toThrow("This student has 1 term mark on record, so they can't be deleted.");
+    expect(tx.studentMark.count.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', studentId: 'st-1' });
+    // Counted after locking the student (saving marks share-locks it).
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.studentMark.count.mock.invocationCallOrder[0]);
     expect(tx.student.delete).not.toHaveBeenCalled();
   });
 
@@ -349,13 +361,15 @@ describe('student helpers', () => {
 });
 
 describe('StudentsService: what a delete also removes', () => {
-  it("counts the faculty's PTM notes and counseling sessions about the student, in this school", async () => {
+  it("counts the faculty's PTM notes, counseling sessions and daily ratings about the student, in this school", async () => {
     const ptm = vi.fn().mockResolvedValue(5);
     const counseling = vi.fn().mockResolvedValue(2);
+    const ratings = vi.fn().mockResolvedValue(9);
     const findFirst = vi.fn().mockResolvedValue({ id: 'st-1' });
-    const prisma = { student: { findFirst }, ptmNote: { count: ptm }, counselingSession: { count: counseling } } as unknown as PrismaService;
+    const prisma = { student: { findFirst }, ptmNote: { count: ptm }, counselingSession: { count: counseling }, dailyRating: { count: ratings } } as unknown as PrismaService;
     const service = new StudentsService(prisma, {} as FilesService);
-    await expect(service.removal('school-1', 'st-1')).resolves.toEqual({ ptmNotes: 5, counselingSessions: 2 });
+    await expect(service.removal('school-1', 'st-1')).resolves.toEqual({ ptmNotes: 5, counselingSessions: 2, ratings: 9 });
+    expect(ratings.mock.calls[0][0]).toEqual({ where: { schoolId: 'school-1', studentId: 'st-1' } });
     expect(findFirst.mock.calls[0][0].where).toEqual({ id: 'st-1', schoolId: 'school-1' });
     expect(ptm.mock.calls[0][0]).toEqual({ where: { schoolId: 'school-1', studentId: 'st-1' } });
     expect(counseling.mock.calls[0][0]).toEqual({ where: { schoolId: 'school-1', studentId: 'st-1' } });

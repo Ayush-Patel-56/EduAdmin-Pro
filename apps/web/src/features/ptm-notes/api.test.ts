@@ -38,6 +38,7 @@ describe('PTM form', () => {
     expect(toPtmPayload(f).batchId).toBeNull()
     expect(removalLines({ ptmNotes: 5, counselingSessions: 1 })).toEqual(['5 PTM notes', '1 counseling session'])
     expect(removalLines({ ptmNotes: 0, counselingSessions: 0 })).toEqual([])
+    expect(removalLines({ ptmNotes: 1, counselingSessions: 0, ratings: 12 })).toEqual(['1 PTM note', '12 daily ratings'])
   })
 
   it('sends blank optional fields as null and round-trips a note for editing', () => {

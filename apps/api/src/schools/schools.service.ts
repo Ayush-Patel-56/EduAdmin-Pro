@@ -466,6 +466,9 @@ export class SchoolsService {
       await tx.dailyReport.deleteMany({ where: { schoolId } }); // before the batches and faculty they name
       await tx.feedback.deleteMany({ where: { schoolId } }); // before the faculty profiles it names
       await tx.ptmNote.deleteMany({ where: { schoolId } }); // before the students they are about
+      await tx.dailyRating.deleteMany({ where: { schoolId } }); // before the students, batches and faculty they name
+      await tx.progressReport.deleteMany({ where: { schoolId } });
+      await tx.studentMark.deleteMany({ where: { schoolId } }); // before the students and batches
       await tx.testResult.deleteMany({ where: { schoolId } }); // with their answers; before the students
       await tx.test.deleteMany({ where: { schoolId } }); // with their papers; before the batches
       await tx.question.deleteMany({ where: { schoolId } }); // before the chapters and faculty they name

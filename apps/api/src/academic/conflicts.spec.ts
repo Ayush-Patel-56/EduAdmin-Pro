@@ -225,13 +225,14 @@ describe('BatchesService.list: handed-in work for the delete confirmation (#18 r
 });
 
 describe('BatchesService.remove: student history and grades', () => {
-  const build = (graded: number, classesMarked = 0, fees = 0, reports = 0, results = 0) => {
+  const build = (graded: number, classesMarked = 0, fees = 0, reports = 0, results = 0, marks = 0) => {
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue([]),
       assignmentSubmission: { count: vi.fn().mockResolvedValue(graded) },
       classOccurrence: { count: vi.fn().mockResolvedValue(classesMarked) },
       dailyReport: { count: vi.fn().mockResolvedValue(reports) },
       testResult: { count: vi.fn().mockResolvedValue(results) },
+      studentMark: { count: vi.fn().mockResolvedValue(marks) },
       feeStructure: { count: vi.fn().mockResolvedValue(fees) },
       facultyBatch: { findMany: vi.fn().mockResolvedValue([]) },
       student: { updateMany: vi.fn() },
@@ -251,6 +252,14 @@ describe('BatchesService.remove: student history and grades', () => {
     expect(tx.testResult.count.mock.calls[0][0]).toEqual({ where: { schoolId: 's1', test: { batchId: 'b1' } } });
     // Counted after locking the batch (saving results share-locks it, so none slip in).
     expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.testResult.count.mock.invocationCallOrder[0]);
+    expect(tx.batch.delete).not.toHaveBeenCalled();
+  });
+
+  it('a batch with term marks is not deleted (they are the cohort its progress reports rank in)', async () => {
+    const { tx, batches } = build(0, 0, 0, 0, 0, 1);
+    await expect(batches.remove('s1', 'b1')).rejects.toThrow('1 term mark is recorded for this batch. Set an end date for the batch instead.');
+    expect(tx.studentMark.count.mock.calls[0][0]).toEqual({ where: { schoolId: 's1', batchId: 'b1' } });
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.studentMark.count.mock.invocationCallOrder[0]);
     expect(tx.batch.delete).not.toHaveBeenCalled();
   });
 

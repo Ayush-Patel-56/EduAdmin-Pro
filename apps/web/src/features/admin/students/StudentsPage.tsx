@@ -297,12 +297,12 @@ export function StudentsPage() {
 function RemovalMessage({ schoolId, studentId }: { schoolId: string; studentId: string }) {
   const removal = useQuery({
     queryKey: [schoolId, 'student-removal', studentId],
-    queryFn: () => api<{ ptmNotes: number; counselingSessions: number }>(`/schools/${schoolId}/students/${studentId}/removal`),
+    queryFn: () => api<{ ptmNotes: number; counselingSessions: number; ratings: number }>(`/schools/${schoolId}/students/${studentId}/removal`),
   })
   const gone = removal.data ? removalLines(removal.data) : []
   return (
     <div className="space-y-2">
-      <p>The student, their parents/guardians and batch history are deleted. This can’t be undone; to keep the record, set the status to Inactive, Transferred or Completed instead. A student with recorded attendance, fees or test results can’t be deleted.</p>
+      <p>The student, their parents/guardians and batch history are deleted. This can’t be undone; to keep the record, set the status to Inactive, Transferred or Completed instead. A student with recorded attendance, fees, test results or term marks can’t be deleted.</p>
       {removal.isLoading && <p className="text-xs text-slate-400">Checking their records…</p>}
       {gone.length > 0 && (
         <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
