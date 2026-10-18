@@ -11,6 +11,7 @@ import {
   questionPayload,
   questionProblem,
   quickFill,
+  resultChunks,
   resultsCsvRows,
   testPayload,
   testProblem,
@@ -157,5 +158,19 @@ describe('PDF text lines', () => {
   it('joins runs on a line, breaks at end-of-line marks and when the baseline moves', () => {
     const text = linesOf([item('Subject: ', 800), item('Physics', 800, true), item('1. What is', 760), item(' heat?', 760), item('(A) a (B) b', 740), { type: 'beginMarkedContent' }, item('ANSWER KEY', 700, true)])
     expect(text).toBe('Subject: Physics\n1. What is heat?\n(A) a (B) b\nANSWER KEY\n')
+  })
+})
+
+describe('saving results in chunks', () => {
+  const student = (answers: number) => ({ studentId: 's', present: true, answers: Array.from({ length: answers }, () => ({ testQuestionId: 'q' })) })
+  it('starts a new chunk at 200 students or 12,000 answers, never splitting a student', () => {
+    expect(resultChunks(Array.from({ length: 450 }, () => ({ studentId: 's', present: false, answers: [] }))).map((c) => c.length)).toEqual([200, 200, 50])
+    // A 90-question paper: 133 students fit (11,970 answers), the 134th starts the next chunk.
+    expect(resultChunks(Array.from({ length: 300 }, () => student(90))).map((c) => c.length)).toEqual([133, 133, 34])
+    expect(resultChunks([student(20_000), student(1)]).map((c) => c.length)).toEqual([1, 1])
+    expect(resultChunks([])).toEqual([])
+    // Exactly 12,000 answers fit in one chunk; one more starts the next.
+    expect(resultChunks([student(6000), student(6000)]).map((c) => c.length)).toEqual([2])
+    expect(resultChunks([student(6000), student(6000), student(1)]).map((c) => c.length)).toEqual([2, 1])
   })
 })

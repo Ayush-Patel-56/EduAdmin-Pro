@@ -170,7 +170,8 @@ export class QuestionsService {
       if (!text) errors.push('The question has no text');
       else if (text.length > 4000) errors.push('The question is over 4000 characters');
       const shaped = shapeAnswer(type, q.options, q.answer);
-      if (typeof shaped === 'string') errors.push(q.answer === null && type !== 'SUBJECTIVE' ? `No answer for question ${q.number} in the ANSWER KEY` : shaped);
+      if (q.ambiguous) errors.push("Couldn't tell where the options start (an option mentions another letter). Put each option (A) to (D) on its own line.");
+      else if (typeof shaped === 'string') errors.push(q.answer === null && type !== 'SUBJECTIVE' ? `No answer for question ${q.number} in the ANSWER KEY` : shaped);
       if (type !== 'MCQ' && q.options.length) errors.push('Only MCQ questions have options (A)-(D)');
       const key = text.toLowerCase();
       if (!errors.length && existing.has(key)) errors.push('Already in the question bank');
@@ -178,7 +179,8 @@ export class QuestionsService {
       if (errors.length || typeof shaped === 'string') return { row: q.number, label, action: 'error' as const, errors };
       seen.set(key, q.number);
       ready.push({ subject, chapterId: null, chapterName: null, topic, difficulty, type, text, ...shaped, marks, negativeMarks: negative, source });
-      return { row: q.number, label, action: 'create' as const, errors: [] };
+      // The parsed options, so the preview shows how the file was read.
+      return { row: q.number, label, action: 'create' as const, errors: [], ...(shaped.options.length && { options: shaped.options }) };
     });
     return { rows, ready };
   }

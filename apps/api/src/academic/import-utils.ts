@@ -12,6 +12,8 @@ export type ImportPreview = {
     errors: string[];
     /** An importer that takes a file in chunks returns each new row's key, sent back with the next chunk. */
     key?: string;
+    /** A question bank upload: the four options as read from the file, for the preview. */
+    options?: string[];
   }[];
 };
 

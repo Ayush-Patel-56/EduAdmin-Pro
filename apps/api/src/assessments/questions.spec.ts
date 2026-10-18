@@ -217,6 +217,16 @@ describe('QuestionsService: PDF upload', () => {
     expect(prisma.question.createMany).not.toHaveBeenCalled();
   });
 
+  it('an ambiguous option split is refused with how to fix it; ready rows show the options as read', async () => {
+    const { service } = build();
+    const text = pdf('1. Choose one?\n(A) Both (B) and (C) (B) x (C) y (D) z\n\n2. Pick one?\n(A) a (B) b (C) c (D) d\n\nANSWER KEY\n1. A\n2. B');
+    const out = await service.import(admin, { text, dryRun: true });
+    expect(out.rows[0]).toMatchObject({ action: 'error', errors: ["Couldn't tell where the options start (an option mentions another letter). Put each option (A) to (D) on its own line."] });
+    expect(out.rows[1]).toMatchObject({ action: 'create', options: ['a', 'b', 'c', 'd'] });
+    const missingD = await service.import(admin, { text: pdf('1. Three only?\n(A) a\n(B) b\n(C) c\n\nANSWER KEY\n1. A'), dryRun: true });
+    expect(missingD.rows[0].errors).toEqual(['An MCQ needs all four options, A to D']);
+  });
+
   it('refuses a header it can’t use, naming each problem', async () => {
     const { service } = build();
     await expect(service.import(admin, { text: pdf('1. Q?', 'Subject: History\nTopic: X\nDifficulty: Tough\nType: Essay\nMarks: 0\nNegative Marks: -12'), dryRun: true })).rejects.toThrow(

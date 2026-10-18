@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { SUBJECTS } from '../academic/academic-options.js';
 import { istInstant, istParts, istWeekStart, parseDate } from '../common/dates.js';
@@ -276,7 +277,7 @@ export class TestsService {
     const found = await this.find(actor, id);
     const grader = await actorName(this.prisma, actor);
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      await this.prisma.$transaction(async (tx) => {
         // The batch first (shared), as deleting a batch locks it before counting
         // results: a batch delete and a save queue instead of losing results.
         await tx.$queryRaw`SELECT 1 FROM "Batch" WHERE "id" = ${found.batchId} AND "schoolId" = ${actor.schoolId} FOR SHARE`;
@@ -300,29 +301,24 @@ export class TestsService {
             throw new BadRequestException(`${student.fullName}${student.rollNumber ? ` (${student.rollNumber})` : ''}: ${err instanceof Error ? err.message : 'invalid result'}`);
           }
         });
-        for (const p of prepared) {
-          const data = { present: p.present, marks: p.marks, correct: p.correct, incorrect: p.incorrect, unattempted: p.unattempted, remarks: p.remarks, gradedById: actor.userId, gradedBy: grader };
-          const row = await tx.testResult.upsert({
-            where: { testId_studentId: { testId: id, studentId: p.studentId } },
-            create: { schoolId: actor.schoolId, testId: id, studentId: p.studentId, ...data },
-            update: data,
-            select: { id: true },
-          });
-          await tx.testAnswer.deleteMany({ where: { resultId: row.id, schoolId: actor.schoolId } });
-          if (p.answers.length) {
-            await tx.testAnswer.createMany({
-              data: p.answers.map((a) => ({ schoolId: actor.schoolId, resultId: row.id, testQuestionId: a.testQuestionId, response: a.response, outcome: a.outcome, marksAwarded: a.marksAwarded })),
-            });
-          }
-        }
-        const full = await tx.test.findUniqueOrThrow({ where: { id }, include: testInclude });
-        return this.resultsView(tx, actor, full);
+        // Three statements however many students: the results (insert or update), then their answers replaced.
+        const saved = await upsertResults(tx, actor.schoolId, id, prepared, { id: actor.userId, name: grader });
+        const resultOf = new Map(saved.map((r) => [r.studentId, r.id]));
+        await tx.testAnswer.deleteMany({ where: { schoolId: actor.schoolId, resultId: { in: saved.map((r) => r.id) } } });
+        const answers = prepared.flatMap((p) =>
+          p.answers.map((a) => ({ schoolId: actor.schoolId, testId: id, resultId: resultOf.get(p.studentId)!, testQuestionId: a.testQuestionId, response: a.response, outcome: a.outcome, marksAwarded: a.marksAwarded })),
+        );
+        if (answers.length) await tx.testAnswer.createMany({ data: answers });
       }, TX);
     } catch (err) {
       // A student removed by another request mid-save (the locks make this rare).
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') throw new BadRequestException(STUDENTS_CHANGED);
+      if (isForeignKeyViolation(err)) throw new BadRequestException(STUDENTS_CHANGED);
       throw err;
     }
+    // Built after the save commits, so the locks aren't held while the whole sheet is read.
+    if (dto.summaryOnly) return { saved: dto.results.length };
+    const full = await this.prisma.test.findUniqueOrThrow({ where: { id }, include: testInclude });
+    return this.resultsView(this.prisma, actor, full);
   }
 
   /** Removes one student's result (it was entered by mistake). */
@@ -502,6 +498,38 @@ export function prepareResult(r: ResultInput, paper: PaperQuestion[], totalMarks
   const counts = [r.correct, r.incorrect, r.unattempted];
   if (paper.length && counts.reduce<number>((n, c) => n + (c ?? 0), 0) > paper.length) throw new Error(`Correct, incorrect and unattempted add up to more than the paper's ${paper.length} questions`);
   return { present: true, marks: r.marks, correct: r.correct ?? null, incorrect: r.incorrect ?? null, unattempted: r.unattempted ?? null, remarks, answers: [] as GradedAnswer[] };
+}
+
+/**
+ * A foreign-key failure, from the query builder (P2003) or from raw SQL such
+ * as the results upsert (P2010 carrying Postgres code 23503).
+ */
+export function isForeignKeyViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code === 'P2003') return true;
+  const cause = (err.meta as { driverAdapterError?: { cause?: { originalCode?: string } } } | undefined)?.driverAdapterError?.cause;
+  return err.code === 'P2010' && cause?.originalCode === '23503';
+}
+
+type PreparedResult = ReturnType<typeof prepareResult> & { studentId: string };
+
+/**
+ * Inserts or updates the results of one test in one statement (one row per
+ * student, by the test + student unique key), returning each result's id.
+ */
+async function upsertResults(tx: Prisma.TransactionClient, schoolId: string, testId: string, results: PreparedResult[], grader: { id: string; name: string }) {
+  if (!results.length) return [];
+  const rows = results.map(
+    (p) =>
+      Prisma.sql`(${randomUUID()}, ${schoolId}, ${testId}, ${p.studentId}, ${p.present}::boolean, ${p.marks}::numeric, ${p.correct}::int, ${p.incorrect}::int, ${p.unattempted}::int, ${p.remarks}::text, ${grader.id}, ${grader.name}, now(), now())`,
+  );
+  return tx.$queryRaw<{ id: string; studentId: string }[]>`
+    INSERT INTO "TestResult" ("id", "schoolId", "testId", "studentId", "present", "marks", "correct", "incorrect", "unattempted", "remarks", "gradedById", "gradedBy", "createdAt", "updatedAt")
+    VALUES ${Prisma.join(rows)}
+    ON CONFLICT ("testId", "studentId") DO UPDATE SET
+      "present" = EXCLUDED."present", "marks" = EXCLUDED."marks", "correct" = EXCLUDED."correct", "incorrect" = EXCLUDED."incorrect",
+      "unattempted" = EXCLUDED."unattempted", "remarks" = EXCLUDED."remarks", "gradedById" = EXCLUDED."gradedById", "gradedBy" = EXCLUDED."gradedBy", "updatedAt" = now()
+    RETURNING "id", "studentId"`;
 }
 
 async function lockTest(tx: Prisma.TransactionClient, schoolId: string, id: string) {

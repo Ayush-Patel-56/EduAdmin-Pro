@@ -110,6 +110,7 @@ export function UploadPdfDialog({ base, onImported, onClose }: { base: string; o
     void pick(e.dataTransfer.files[0])
   }
   const problems = preview?.rows.filter((r) => r.action === 'error') ?? []
+  const ready = preview?.rows.filter((r) => r.action === 'create') ?? []
 
   return (
     <Dialog title="Upload PDF Question Bank" description="Add many questions at once from a PDF in the format below." onClose={onClose} widthClass="max-w-3xl">
@@ -200,6 +201,27 @@ export function UploadPdfDialog({ base, onImported, onClose }: { base: string; o
                     </li>
                   ))}
                 </ul>
+              )}
+              {ready.length > 0 && (
+                <details className="border-t border-slate-100 px-4 py-3 text-xs" open={ready.some((r) => r.options)}>
+                  <summary className="cursor-pointer font-semibold text-slate-700">Check how the questions were read</summary>
+                  <ol className="mt-2 max-h-56 space-y-2.5 overflow-y-auto">
+                    {ready.map((r) => (
+                      <li key={r.row}>
+                        <span className="font-semibold text-slate-800 [overflow-wrap:anywhere]">{r.label}</span>
+                        {r.options && (
+                          <span className="mt-0.5 grid grid-cols-1 gap-x-3 text-slate-600 sm:grid-cols-2">
+                            {r.options.map((o, i) => (
+                              <span key={i} className="[overflow-wrap:anywhere]">
+                                ({'ABCD'[i]}) {o}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
               )}
             </div>
           )}

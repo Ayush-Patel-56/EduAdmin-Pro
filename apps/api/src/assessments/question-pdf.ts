@@ -26,7 +26,8 @@ export type PdfHeader = {
   negativeMarks: string;
   source: string;
 };
-export type PdfQuestion = { number: number; text: string; options: string[]; answer: string | null };
+/** `ambiguous`: the (A)-(D) markers could be split more than one way (see splitOptions). */
+export type PdfQuestion = { number: number; text: string; options: string[]; answer: string | null; ambiguous?: boolean };
 
 const HEADER_KEYS: Record<string, keyof PdfHeader> = {
   subject: 'subject',
@@ -86,7 +87,9 @@ export function parseQuestionPdf(text: string): { header: PdfHeader; questions: 
   const questions = blocks.map((b) => {
     const joined = b.lines.join('\n');
     const found = splitOptions(joined);
-    return { number: b.number, text: (found ? joined.slice(0, found.start) : joined).trim(), options: found?.options ?? [], answer: answers.get(b.number) ?? null };
+    const text = (found ? joined.slice(0, found.start) : joined).trim();
+    if (found && 'ambiguous' in found) return { number: b.number, text, options: [], answer: answers.get(b.number) ?? null, ambiguous: true };
+    return { number: b.number, text, options: found?.options ?? [], answer: answers.get(b.number) ?? null };
   });
   return {
     header: {
@@ -105,24 +108,57 @@ export function parseQuestionPdf(text: string): { header: PdfHeader; questions: 
 const MARKERS: Record<string, RegExp> = { A: /\(\s*A\s*\)/g, B: /\(\s*B\s*\)/g, C: /\(\s*C\s*\)/g, D: /\(\s*D\s*\)/g };
 const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
 
+type Marker = { index: number; end: number; lineStart: boolean };
+type Run = [Marker, Marker, Marker, Marker];
+
 /**
- * Finds the options in a question's text: the last "(A)" that is followed by
- * "(B)", "(C)" and "(D)" in that order, each option running to the next
- * letter. So "(A)"/"(B)" inside the question ("Is it (A) a noun or (B) a
- * verb?") stay in its text, and an option such as "(D) Both (A) and (B)"
- * stays whole. Options can sit one per line or several on a line. Null when
- * there is no full A-D run (an MCQ is then reported as missing options).
+ * Finds the options in a question's text, each option running to the next
+ * letter:
+ *  1. When every option starts its own line, that run is the options (so any
+ *     "(A)"/"(B)" inside the question or an option is just text), unless
+ *     another full (A)-(D) run follows it: then the lines were a list in the
+ *     question ("Match the following: (A) Force / (B) Energy / …") and the
+ *     run after it is the options, read as in 2.
+ *  2. Otherwise the last "(A)" followed by "(B)", "(C)" and "(D)" starts them,
+ *     and each later letter is read two ways: its last marker that still
+ *     leaves the rest in order, and its first. When both readings agree the
+ *     split is clear ("Is it (A) a noun or (B) a verb? (A) run (B) dog …",
+ *     "(D) Both (A) and (B)"); when they differ ("(A) Both (B) and (C) (B) x
+ *     (C) y (D) z") the question is ambiguous and the caller asks for one
+ *     option per line rather than guessing.
+ * Null when there is no full A-D run (an MCQ is then reported as missing options).
  */
-export function splitOptions(text: string): { start: number; options: string[] } | null {
-  const at = (letter: string) => [...text.matchAll(MARKERS[letter])].map((m) => ({ index: m.index, end: m.index + m[0].length }));
+export function splitOptions(text: string): { start: number; options: string[] } | { start: number; ambiguous: true } | null {
+  const at = (letter: string): Marker[] =>
+    [...text.matchAll(MARKERS[letter])].map((m) => ({ index: m.index, end: m.index + m[0].length, lineStart: /(^|\n)[ \t]*$/.test(text.slice(0, m.index)) }));
   const [as, bs, cs, ds] = ['A', 'B', 'C', 'D'].map(at);
-  for (let k = as.length - 1; k >= 0; k--) {
-    const a = as[k];
-    const b = bs.find((m) => m.index >= a.end);
-    const c = b && cs.find((m) => m.index >= b.end);
-    const d = c && ds.find((m) => m.index >= c.end);
+  const after = (list: Marker[], m: Marker) => list.filter((x) => x.index >= m.end);
+  const options = ([a, b, c, d]: Run) => [clean(text.slice(a.end, b.index)), clean(text.slice(b.end, c.index)), clean(text.slice(c.end, d.index)), clean(text.slice(d.end))];
+
+  // 1. One option per line.
+  const lines = (list: Marker[]) => list.filter((m) => m.lineStart);
+  for (const a of lines(as).reverse()) {
+    const b = after(lines(bs), a)[0];
+    const c = b && after(lines(cs), b)[0];
+    const d = c && after(lines(ds), c)[0];
     if (!b || !c || !d) continue;
-    return { start: a.index, options: [clean(text.slice(a.end, b.index)), clean(text.slice(b.end, c.index)), clean(text.slice(c.end, d.index)), clean(text.slice(d.end))] };
+    const runAfter = after(as, d).some((a2) => after(bs, a2).some((b2) => after(cs, b2).some((c2) => after(ds, c2).length > 0)));
+    if (!runAfter) return { start: a.index, options: options([a, b, c, d]) };
+    break;
   }
-  return null;
+
+  // 2. Several on a line: the last (A) with a full run after it, then each letter read last-fit and first-fit.
+  const fits = (b: Marker, c?: Marker) => (c ? after(ds, c).length > 0 : after(cs, b).some((x) => after(ds, x).length > 0));
+  const a = [...as].reverse().find((m) => after(bs, m).some((b) => fits(b)));
+  if (!a) return null;
+  const read = (pick: <T>(list: T[]) => T | undefined): Run => {
+    const b = pick(after(bs, a).filter((x) => fits(x)))!;
+    const c = pick(after(cs, b).filter((x) => fits(b, x)))!;
+    const d = after(ds, c)[0];
+    return [a, b, c, d];
+  };
+  const last = read((list) => list.at(-1));
+  const first = read((list) => list[0]);
+  if (last.some((m, i) => m.index !== first[i].index)) return { start: a.index, ambiguous: true };
+  return { start: a.index, options: options(last) };
 }

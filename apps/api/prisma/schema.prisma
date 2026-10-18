@@ -1590,7 +1590,8 @@ model Question {
 
   school  School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   chapter CurriculumChapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
-  faculty Faculty?           @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  // School-tied: deleting the profile nulls only facultyId (ON DELETE SET NULL ("facultyId") in the migration).
+  faculty Faculty?           @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
   papers  TestQuestion[]
 
   @@unique([id, schoolId])
@@ -1625,7 +1626,7 @@ model Test {
   // A batch with recorded results can't be deleted (the API refuses); one with
   // only scheduled tests takes them along.
   batch     Batch          @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  faculty   Faculty?       @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  faculty   Faculty?       @relation(fields: [facultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
   questions TestQuestion[]
   results   TestResult[]
 
@@ -1657,10 +1658,12 @@ model TestQuestion {
 
   school   School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   test     Test         @relation(fields: [testId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  question Question?    @relation(fields: [questionId], references: [id], onDelete: SetNull)
+  // School-tied: deleting the bank question nulls only questionId (ON DELETE SET NULL ("questionId")).
+  question Question?    @relation(fields: [questionId, schoolId], references: [id, schoolId], onDelete: SetNull)
   answers  TestAnswer[]
 
   @@unique([id, schoolId])
+  @@unique([id, testId, schoolId])
   @@unique([testId, position])
   @@index([questionId])
 }
@@ -1691,6 +1694,7 @@ model TestResult {
   answers TestAnswer[]
 
   @@unique([id, schoolId])
+  @@unique([id, testId, schoolId])
   @@unique([testId, studentId])
   @@index([studentId])
 }
@@ -1700,6 +1704,7 @@ model TestResult {
 model TestAnswer {
   id             String        @id @default(uuid())
   schoolId       String
+  testId         String // the result's test: an answer is tied to a result and a paper question of the same test
   resultId       String
   testQuestionId String
   response       String? // the option or value given (objective questions)
@@ -1707,8 +1712,8 @@ model TestAnswer {
   marksAwarded   Decimal       @db.Decimal(6, 2)
 
   school       School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  result       TestResult   @relation(fields: [resultId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  testQuestion TestQuestion @relation(fields: [testQuestionId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  result       TestResult   @relation(fields: [resultId, testId, schoolId], references: [id, testId, schoolId], onDelete: Cascade)
+  testQuestion TestQuestion @relation(fields: [testQuestionId, testId, schoolId], references: [id, testId, schoolId], onDelete: Cascade)
 
   @@unique([resultId, testQuestionId])
   @@index([testQuestionId])

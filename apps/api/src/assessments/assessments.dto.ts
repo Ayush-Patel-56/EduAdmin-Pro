@@ -261,4 +261,10 @@ export class ResultsDto {
   @ValidateNested({ each: true })
   @Type(() => ResultInput)
   results: ResultInput[];
+
+  /**
+   * A large sheet is saved in chunks: every chunk but the last asks for just
+   * the count saved, so the full sheet (ranks, stats) is built once, at the end.
+   */
+  @IsOptional() @IsBoolean() summaryOnly?: boolean;
 }

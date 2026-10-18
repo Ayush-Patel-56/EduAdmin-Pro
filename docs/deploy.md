@@ -270,6 +270,15 @@ New enums and new tables only (the question bank, tests, their papers and result
 - **Kept as records.** A student, or a batch, with test results can't be deleted (set a leaving or end date instead); a test with results is cancelled, not deleted. Deleting a batch with only scheduled tests takes them along. Clear All Data removes results, tests and questions with the rest of the academic data.
 - Sets `lock_timeout = 10s` like the others; if it times out behind a long query on `Batch` or `Student`, mark it `--rolled-back` and deploy again.
 - **`20261019100000_test_ends_at`** stores when each test ends (`startsAt` + `durationMinutes`, held by a CHECK), so the tests lists filter Scheduled / Ongoing / Completed and page in the database instead of reading a capped set. Existing tests get it from their start and length in the same transaction.
+- **`20261019140000_assessment_school_keys`** ties a paper copy's bank question, and a question's or test's faculty member, to the row's school (composite keys with `ON DELETE SET NULL (column)`, PostgreSQL 15+), and gives `TestAnswer` a `testId` (filled from its result) so an answer always pairs a result and a paper question of the same test. Rows are only written through the API, which never crosses schools or tests; to check first (all must be 0):
+
+  ```sql
+  SELECT (SELECT count(*) FROM "Question" x WHERE x."facultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f.id = x."facultyId" AND f."schoolId" = x."schoolId")) AS questions,
+         (SELECT count(*) FROM "Test" x WHERE x."facultyId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Faculty" f WHERE f.id = x."facultyId" AND f."schoolId" = x."schoolId")) AS tests,
+         (SELECT count(*) FROM "TestQuestion" x WHERE x."questionId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Question" b WHERE b.id = x."questionId" AND b."schoolId" = x."schoolId")) AS papers,
+         (SELECT count(*) FROM "TestAnswer" a JOIN "TestResult" r ON r.id = a."resultId" JOIN "TestQuestion" p ON p.id = a."testQuestionId" WHERE r."testId" <> p."testId") AS mixed_answers;
+  ```
+  The migration rewrites `TestAnswer` (it adds and fills `testId`), so that table is locked while it runs: about 40 s for 3 million answers on a scratch database, during which reading or saving answers waits. `lock_timeout` only limits waiting to *get* the lock, not how long the migration runs. The feature is new, so a production deploy now should take moments; deploy it at a quiet time if answers have grown large.
 
 ## File storage (Cloudflare R2)
 
