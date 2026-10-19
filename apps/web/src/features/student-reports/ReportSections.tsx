@@ -118,7 +118,7 @@ export function TopicsSection({ r }: { r: StudentReport }) {
         {(['STRONG', 'AVERAGE', 'WEAK'] as const).map((band) => {
           const list = band === 'STRONG' ? r.topics.strong : band === 'AVERAGE' ? r.topics.average : r.topics.weak
           return (
-            <Card key={band} title={BAND_LABELS[band]} sub={`${list.length} topic${list.length === 1 ? '' : 's'}`}>
+            <Card key={band} title={BAND_LABELS[band]} sub={bandCount(list.length, r.topics.counts?.[band === 'STRONG' ? 'strong' : band === 'AVERAGE' ? 'average' : 'weak'])}>
               {list.length === 0 ? <p className="text-xs text-slate-400">None</p> : <ul className="space-y-3">{list.map((t) => <TopicRow key={`${t.subject}|${t.topic}`} t={t} />)}</ul>}
             </Card>
           )
@@ -304,4 +304,10 @@ function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: Re
       {sub && <div className="mt-1 text-[11px] text-slate-500">{sub}</div>}
     </div>
   )
+}
+
+/** "12 topics", or "Showing 25 of 40 topics" when the band was capped. */
+function bandCount(shown: number, total = shown) {
+  if (total > shown) return `Showing ${shown} of ${total} topics`
+  return `${total} topic${total === 1 ? '' : 's'}`
 }

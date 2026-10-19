@@ -62,6 +62,11 @@ describe('student report rules', () => {
     expect(topicKey('Physics', 'किल')).not.toBe(topicKey('Physics', 'कील'));
     expect(topicKey('Physics', 'गति')).not.toBe(topicKey('Physics', 'गत'));
     expect(topicKey('Physics', 'Énergie')).toBe(topicKey('Physics', 'energie'));
+    // + and # count (#53): C++, C# and C are three topics, and Na+ isn't Na.
+    const c = ['C++', 'C#', 'C'].map((t) => topicKey('Computer Science', t));
+    expect(new Set(c).size).toBe(3);
+    expect(topicKey('Chemistry', 'Na+ ions')).not.toBe(topicKey('Chemistry', 'Na ions'));
+    expect(topicKey('Computer Science', 'c++')).toBe(topicKey('Computer Science', ' C ++ '));
   });
 
   it('names a topic spelled several ways as on its latest paper, whatever the order (#52)', () => {
@@ -70,6 +75,15 @@ describe('student report rules', () => {
     for (const order of [[older, newer], [newer, older]]) {
       expect(topicStrength(order, [])).toMatchObject([{ topic: "Gauss's Law.", chapter: 'Electrostatics', percent: 50, test: { questions: 2 } }]);
     }
+  });
+
+  it("a newer assignment's spelling names the topic too; an older one doesn't (#53)", () => {
+    const test = { subject: 'Physics', chapter: 'Electrostatics', topic: 'Gauss Law', latest: new Date('2026-08-01'), questions: 1, awarded: 4, possible: 4 };
+    const hw = (latest: string) => ({ subject: 'Physics', chapter: 'Electrostatics', topic: "Gauss's law (applications)", latest: new Date(latest), score: 5, total: 10 });
+    expect(topicStrength([test], [hw('2026-09-01')]).map((t) => t.topic)).toEqual(['Gauss Law', "Gauss's law (applications)"]);
+    const same = { ...hw('2026-09-01'), topic: "Gauss's Law." };
+    expect(topicStrength([test], [same])).toMatchObject([{ topic: "Gauss's Law.", test: { questions: 1 }, assignments: { count: 1 } }]);
+    expect(topicStrength([test], [{ ...same, latest: new Date('2026-07-01') }])).toMatchObject([{ topic: 'Gauss Law' }]);
   });
 
   it('blends a topic: the mean of its test and assignment scores, with the counts of each', () => {

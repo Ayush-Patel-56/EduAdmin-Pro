@@ -83,7 +83,13 @@ describe('Import student report: each row checked against the batch', () => {
     expect(sameName('Aarav Mehta', 'aarav  mehta.')).toBe(true);
     expect(sameName('Aarav Mehta', 'Aarav')).toBe(false);
     expect(sameName('Aarav Mehta', 'Aarav One')).toBe(false);
-    expect(sameName('Aarav Mehta', 'Mehta Aarav')).toBe(false);
+    // Any word order (#53); still not initials, nor a missing or extra name.
+    expect(sameName('Aarav Mehta', 'Mehta Aarav')).toBe(true);
+    expect(sameName('Aarav Kumar Mehta', 'mehta, aarav kumar')).toBe(true);
+    expect(sameName('Aarav Mehta', 'A. Mehta')).toBe(false);
+    expect(sameName('Aarav Mehta', 'Aarav Kumar Mehta')).toBe(false);
+    expect(sameName('Aarav Kumar Mehta', 'Aarav Mehta')).toBe(false);
+    expect(sameName('Aarav Aarav', 'Aarav')).toBe(false);
     // Punctuation reads as spacing, Latin accents don't count; Hindi vowel signs do (#52).
     expect(sameName('Mary-Jane Doe', 'Mary Jane Doe')).toBe(true);
     expect(sameName("Ryan D'Souza", 'ryan d souza')).toBe(true);
@@ -482,6 +488,10 @@ describe('StudentReportService: the hub', () => {
     const r = await service.report(teacher(), 'st-1');
     const active = { status: { not: 'INACTIVE' } };
     expect(p.dailyRating.aggregate.mock.calls[0][0].where.faculty).toEqual(active);
+    // PTM notes too, like ratings (#53): the totals and the list leave out inactive teachers' notes.
+    expect(p.ptmNote.count.mock.calls[0][0].where.faculty).toEqual(active);
+    expect(p.ptmNote.count.mock.calls[1][0].where.faculty).toEqual(active);
+    expect(p.ptmNote.findMany.mock.calls[0][0].where.faculty).toEqual(active);
     expect(p.dailyRating.groupBy.mock.calls[0][0].where.faculty).toEqual(active);
     // The teacher's lists: their own only.
     expect(p.dailyRating.findMany.mock.calls[0][0].where).toMatchObject({ faculty: active, facultyId: 'fac-1' });
