@@ -79,11 +79,18 @@ describe('Import student report: each row checked against the batch', () => {
     { id: 's2', fullName: 'Diya Shah', rollNumber: 'R02' },
   ];
 
-  it('matches roll numbers in any case, and names by full name or first name', () => {
+  it('matches roll numbers in any case, and names by the full name (case, spacing and punctuation ignored), never a first name alone (#50)', () => {
     expect(sameName('Aarav Mehta', 'aarav  mehta.')).toBe(true);
-    expect(sameName('Aarav Mehta', 'Aarav')).toBe(true);
+    expect(sameName('Aarav Mehta', 'Aarav')).toBe(false);
+    expect(sameName('Aarav Mehta', 'Aarav One')).toBe(false);
     expect(sameName('Aarav Mehta', 'Mehta Aarav')).toBe(false);
-    const { rows, ready } = checkSheet([{ rollNo: 'r01', name: 'Aarav', marks: '72.5', maxMarks: '100', attendance: '91%', remarks: '  Good  work ' }], { id: 'b-mine', name: 'JEE A' }, roster, new Map(), null);
+    // Punctuation reads as spacing, Latin accents don't count; Hindi vowel signs do (#52).
+    expect(sameName('Mary-Jane Doe', 'Mary Jane Doe')).toBe(true);
+    expect(sameName("Ryan D'Souza", 'ryan d souza')).toBe(true);
+    expect(sameName('Ánanya Rao', 'Ananya Rao')).toBe(true);
+    expect(sameName('सीता राम', 'सीता  राम')).toBe(true);
+    expect(sameName('सीता राम', 'सत रम')).toBe(false);
+    const { rows, ready } = checkSheet([{ rollNo: 'r01', name: 'Aarav Mehta', marks: '72.5', maxMarks: '100', attendance: '91%', remarks: '  Good  work ' }], { id: 'b-mine', name: 'JEE A' }, roster, new Map(), null);
     expect(rows[0]).toMatchObject({ row: 2, action: 'create', errors: [], label: 'R01 · Aarav Mehta' });
     expect(ready).toEqual([{ studentId: 's1', marks: 72.5, maxMarks: 100, attendance: 91, remarks: 'Good work' }]);
   });
@@ -94,8 +101,8 @@ describe('Import student report: each row checked against the batch', () => {
         { rollNo: '', name: '', marks: '', maxMarks: '' },
         { rollNo: 'R09', name: 'Ghost', marks: '5', maxMarks: '10' },
         { rollNo: 'R02', name: 'Zara', marks: '11', maxMarks: '10' },
-        { rollNo: 'R01', name: 'Aarav', marks: '1.234', maxMarks: '0', attendance: '101' },
-        { rollNo: 'R01', name: 'Aarav', marks: '5', maxMarks: '10' },
+        { rollNo: 'R01', name: 'Aarav Mehta', marks: '1.234', maxMarks: '0', attendance: '101' },
+        { rollNo: 'R01', name: 'Aarav Mehta', marks: '5', maxMarks: '10' },
       ],
       { id: 'b-mine', name: 'JEE A' },
       roster,
@@ -114,12 +121,12 @@ describe('Import student report: each row checked against the batch', () => {
 
   it('a student who already has marks for the term and subject is an update', () => {
     const prior = new Map([['s1', { batchId: 'b-mine', batchName: 'JEE A', enteredBy: 'Ms Rao' }]]);
-    expect(checkSheet([{ rollNo: 'R01', name: 'Aarav', marks: '5', maxMarks: '10' }], { id: 'b-mine', name: 'JEE A' }, roster, prior, null).rows[0]).toMatchObject({ action: 'update', label: 'R01 · Aarav Mehta' });
+    expect(checkSheet([{ rollNo: 'R01', name: 'Aarav Mehta', marks: '5', maxMarks: '10' }], { id: 'b-mine', name: 'JEE A' }, roster, prior, null).rows[0]).toMatchObject({ action: 'update', label: 'R01 · Aarav Mehta' });
   });
 
   it("a mark entered in the student's old batch: an admin sees it replaced, a teacher who doesn't teach that batch can't replace it", () => {
     const prior = new Map([['s1', { batchId: 'b-old', batchName: 'JEE Old', enteredBy: 'Ravi Kumar' }]]);
-    const row = [{ rollNo: 'R01', name: 'Aarav', marks: '10', maxMarks: '50' }];
+    const row = [{ rollNo: 'R01', name: 'Aarav Mehta', marks: '10', maxMarks: '50' }];
     const asAdmin = checkSheet(row, { id: 'b-mine', name: 'JEE A' }, roster, prior, null);
     expect(asAdmin.rows[0]).toMatchObject({ action: 'update', label: 'R01 · Aarav Mehta (replaces the mark entered in JEE Old by Ravi Kumar)', errors: [] });
     expect(asAdmin.ready).toHaveLength(1);
@@ -166,7 +173,7 @@ describe('MarksService: access and writes', () => {
     const service = new MarksService(prisma as unknown as PrismaService);
     const now = new Date(Date.now() + 5.5 * 3_600_000);
     const year = now.getUTCMonth() + 1 >= 4 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
-    const dto = (dryRun: boolean) => ({ batchId: 'b-mine', year, term: 'TERM_1', subject: 'Physics', dryRun, rows: [{ rollNo: 'R01', name: 'Aarav', marks: '8', maxMarks: '10' }] }) as unknown as MarksImportDto;
+    const dto = (dryRun: boolean) => ({ batchId: 'b-mine', year, term: 'TERM_1', subject: 'Physics', dryRun, rows: [{ rollNo: 'R01', name: 'Aarav Mehta', marks: '8', maxMarks: '10' }] }) as unknown as MarksImportDto;
     await expect(service.importMarks(teacher(), dto(true))).resolves.toMatchObject({ applied: false, created: 1, skipped: 0 });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
@@ -306,7 +313,52 @@ describe('MarksService: access and writes', () => {
 
   it("an inactive teacher's write is refused with a student-reports message", async () => {
     const service = new MarksService(prismaMock() as unknown as PrismaService);
-    await expect(service.removeSet(teacher({ active: false }), { batchId: 'b-mine', year: 2026, term: 'TERM_1', subject: 'Physics' })).rejects.toThrow('Only active faculty can change student reports');
+    const dto = { batchId: 'b-mine', year: 2026, term: 'TERM_1', subject: 'Physics', dryRun: true, rows: [] } as unknown as MarksImportDto;
+    await expect(service.importMarks(teacher({ active: false }), dto)).rejects.toThrow('Only active faculty can change student reports');
+  });
+
+  it('only an admin deletes a report sheet; a teacher (even of the batch) is refused before anything is read (#50)', async () => {
+    const prisma = prismaMock();
+    const service = new MarksService(prisma as unknown as PrismaService);
+    await expect(service.removeSet(teacher(), { batchId: 'b-mine', year: 2026, term: 'TERM_1', subject: 'Physics' })).rejects.toThrow('Only an admin can delete a report sheet. Upload the corrected sheet instead.');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    await expect(service.options(teacher())).resolves.toMatchObject({ canWrite: true, canDeleteSheets: false });
+    await expect(service.options(admin)).resolves.toMatchObject({ canDeleteSheets: true });
+  });
+
+  it('Mistake Analysis merges spellings of one topic (case, spacing, punctuation) and names it as on the latest paper (#50)', async () => {
+    const prisma = prismaMock();
+    const service = new MarksService(prisma as unknown as PrismaService);
+    prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) =>
+      Promise.resolve(
+        strings.join('').includes('"TestAnswer"')
+          ? [
+              { subject: 'Physics', topic: "Gauss's Law", latest: new Date('2026-09-01'), wrong: 2, skipped: 1, answers: 6 },
+              { subject: 'Physics', topic: 'gauss law', latest: new Date('2026-10-01'), wrong: 1, skipped: 2, answers: 4 },
+              { subject: 'Physics', topic: 'Optics', latest: new Date('2026-10-01'), wrong: 0, skipped: 0, answers: 3 },
+            ]
+          : [],
+      ),
+    );
+    const out = await service.overview(admin, {});
+    expect(out.mistakes).toEqual([{ subject: 'Physics', topic: 'gauss law', wrong: 3, skipped: 3, answers: 10, missRate: 60 }]);
+  });
+
+  it('Mistake Analysis: the 8 most missed topics, most misses first; the database is read most-missed first up to the cap (#52)', async () => {
+    const prisma = prismaMock();
+    const service = new MarksService(prisma as unknown as PrismaService);
+    // Ten topics, missed 1 to 10 times (wrong and skipped), answered fewer times the more they are missed (so answers and misses disagree).
+    const groups = Array.from({ length: 10 }, (_, i) => ({ subject: 'Physics', topic: `T${i + 1}`, latest: new Date('2026-10-01'), wrong: Math.ceil((i + 1) / 2), skipped: Math.floor((i + 1) / 2), answers: 40 - i }));
+    prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => Promise.resolve(strings.join('').includes('"TestAnswer"') ? groups : []));
+    service.mistakeGroups = 123;
+    const out = await service.overview(admin, {});
+    expect(out.mistakes.map((m) => `${m.topic}:${m.wrong + m.skipped}`)).toEqual(['T10:10', 'T9:9', 'T8:8', 'T7:7', 'T6:6', 'T5:5', 'T4:4', 'T3:3']);
+    const sql = asSql(prisma.$queryRaw.mock.calls.find((c) => (c[0] as TemplateStringsArray).join('').includes('"TestAnswer"'))!);
+    const text = sql.sql.replace(/\s+/g, ' ');
+    const order = text.indexOf(`ORDER BY count(*) FILTER (WHERE a."outcome" <> 'CORRECT') DESC`);
+    expect(order).toBeGreaterThan(0);
+    expect(order).toBeLessThan(text.lastIndexOf('LIMIT'));
+    expect(sql.values.at(-1)).toBe(123);
   });
 
   it('deleting a report or a sheet: a teacher only in their batches, and only while active', async () => {
@@ -316,6 +368,7 @@ describe('MarksService: access and writes', () => {
     await expect(service.removeProgress(teacher(), { studentId: 'st-1', year: 2026, term: 'TERM_1' })).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.removeSet(teacher({ active: false }), { batchId: 'b-mine', year: 2026, term: 'TERM_1', subject: 'Physics' })).rejects.toBeInstanceOf(ForbiddenException);
     await expect(service.removeSet(teacher(), { batchId: 'b-other', year: 2026, term: 'TERM_1', subject: 'Physics' })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.removeSet(teacher(), { batchId: 'b-mine', year: 2026, term: 'TERM_1', subject: 'Physics' })).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.studentMark.deleteMany).not.toHaveBeenCalled();
   });
 
@@ -410,6 +463,42 @@ describe('RatingsService (Student Ratings)', () => {
 });
 
 describe('StudentReportService: the hub', () => {
+  it("ratings count only from active teachers; a teacher lists only their own ratings and PTM notes, while the totals are everyone's (#50)", async () => {
+    const prisma = prismaMock();
+    const p = prisma as unknown as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
+    prisma.student.findFirst.mockResolvedValue({ id: 'st-1', fullName: 'Aarav', rollNumber: 'R01', admissionNumber: null, classLevel: null, status: 'ACTIVE', batchId: 'b-mine', batch: { id: 'b-mine', name: 'JEE A' }, program: null });
+    Object.assign(prisma, {
+      testResult: { findMany: vi.fn().mockResolvedValue([]) },
+      assignmentSubmission: { findMany: vi.fn().mockResolvedValue([]) },
+      testAnswer: { findMany: vi.fn().mockResolvedValue([]) },
+      attendanceRecord: { groupBy: vi.fn().mockResolvedValue([]) },
+      ptmNote: { count: vi.fn().mockResolvedValueOnce(5).mockResolvedValueOnce(3), findMany: vi.fn().mockResolvedValue([]) },
+    });
+    Object.assign(prisma.dailyRating, {
+      aggregate: vi.fn().mockResolvedValue({ _avg: { attitude: 4, behaviour: 4, focus: 4, interaction: 4 }, _count: { _all: 2 } }),
+      groupBy: vi.fn().mockResolvedValue([{ date: new Date() }]),
+    });
+    const service = new StudentReportService(prisma as unknown as PrismaService);
+    const r = await service.report(teacher(), 'st-1');
+    const active = { status: { not: 'INACTIVE' } };
+    expect(p.dailyRating.aggregate.mock.calls[0][0].where.faculty).toEqual(active);
+    expect(p.dailyRating.groupBy.mock.calls[0][0].where.faculty).toEqual(active);
+    // The teacher's lists: their own only.
+    expect(p.dailyRating.findMany.mock.calls[0][0].where).toMatchObject({ faculty: active, facultyId: 'fac-1' });
+    expect(p.ptmNote.findMany.mock.calls[0][0].where).toMatchObject({ facultyId: 'fac-1' });
+    // The totals: every teacher's notes.
+    expect(p.ptmNote.count.mock.calls[0][0].where).not.toHaveProperty('facultyId');
+    expect(p.ptmNote.count.mock.calls[1][0].where).toMatchObject({ parentAttended: true });
+    expect(r.feedback).toMatchObject({ ownOnly: true, ptm: { meetings: 5, parentAttended: 3, parentAttendanceRate: 60 } });
+    expect(r.summary.ptmMeetings).toBe(5);
+    // An admin's lists are everyone's.
+    p.ptmNote.count.mockResolvedValue(0);
+    const asAdmin = await service.report(admin, 'st-1');
+    expect(asAdmin.feedback.ownOnly).toBe(false);
+    expect(p.dailyRating.findMany.mock.calls[1][0].where).not.toHaveProperty('facultyId');
+    expect(p.ptmNote.findMany.mock.calls[1][0].where).not.toHaveProperty('facultyId');
+  });
+
   it("a teacher searches only their batches; an inactive one (no batches) finds no one without a query", async () => {
     const prisma = prismaMock();
     const service = new StudentReportService(prisma as unknown as PrismaService);

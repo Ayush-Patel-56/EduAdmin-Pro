@@ -129,12 +129,12 @@ describe('student reports on the database (e2e)', () => {
   it('term marks: an imported sheet, its group, term ranks within the batch, and a progress report edit', async () => {
     const sheet = (subject: string, rows: MarksImportDto['rows']) => ({ batchId: ids.batch, year, term: 'TERM_1', subject, dryRun: false, rows }) as MarksImportDto;
     const out = await marks.importMarks(admin, sheet('Physics', [
-      { rollNo: 'r01', name: 'Aarav', marks: '72', maxMarks: '100', attendance: '91', remarks: 'Good' },
+      { rollNo: 'r01', name: 'aarav  mehta', marks: '72', maxMarks: '100', attendance: '91', remarks: 'Good' },
       { rollNo: 'R02', name: 'Diya Shah', marks: '45', maxMarks: '100' },
-      { rollNo: 'R03', name: 'Kabir', marks: '38', maxMarks: '50' },
+      { rollNo: 'R03', name: 'Kabir Rao', marks: '38', maxMarks: '50' },
     ]));
     expect(out).toMatchObject({ applied: true, created: 3, skipped: 0 });
-    await marks.importMarks(admin, sheet('Chemistry', [{ rollNo: 'R01', name: 'Aarav', marks: '60', maxMarks: '80' }]));
+    await marks.importMarks(admin, sheet('Chemistry', [{ rollNo: 'R01', name: 'Aarav Mehta', marks: '60', maxMarks: '80' }]));
     const sets = await marks.sets(admin, { year });
     expect(sets.items.map((s) => `${s.subject}:${s.students}:${s.average}`).sort()).toEqual(['Chemistry:1:75', 'Physics:3:64.33']);
     let list = await marks.progressList(admin, { year, term: 'TERM_1' });
@@ -171,7 +171,7 @@ describe('student reports on the database (e2e)', () => {
     const raviActor = asTeacher(ravi, ids.batch);
     const sitaActor = asTeacher(sita, a2);
     const sheet = (batchId: string, subject: string, marks: string, dryRun: boolean) =>
-      ({ batchId, year, term: 'TERM_2', subject, dryRun, rows: [{ rollNo: 'M01', name: 'Rohan', marks, maxMarks: '50' }] }) as MarksImportDto;
+      ({ batchId, year, term: 'TERM_2', subject, dryRun, rows: [{ rollNo: 'M01', name: 'Rohan Das', marks, maxMarks: '50' }] }) as MarksImportDto;
     const physics = () => prisma.studentMark.findFirstOrThrow({ where: { studentId: r1, academicYear: year, term: 'TERM_2', subject: 'Physics' } });
 
     // Ravi enters Rohan's Physics in B1; Rohan then moves to B2.
@@ -211,7 +211,7 @@ describe('student reports on the database (e2e)', () => {
     const [b3, b4, r1] = [id(), id(), id()];
     await prisma.batch.createMany({ data: [{ id: b3, schoolId: ids.school, programId: ids.program, name: 'B3', startDate: new Date('2026-04-01T00:00:00Z') }, { id: b4, schoolId: ids.school, programId: ids.program, name: 'B4', startDate: new Date('2026-04-01T00:00:00Z') }] });
     await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Meera Nair', rollNumber: 'T01', batchId: b3, status: 'ACTIVE' } });
-    const sheet = (batchId: string, subject: string) => ({ batchId, year, term: 'TERM_1', subject, dryRun: false, rows: [{ rollNo: 'T01', name: 'Meera', marks: '40', maxMarks: '50' }] }) as MarksImportDto;
+    const sheet = (batchId: string, subject: string) => ({ batchId, year, term: 'TERM_1', subject, dryRun: false, rows: [{ rollNo: 'T01', name: 'Meera Nair', marks: '40', maxMarks: '50' }] }) as MarksImportDto;
     const card = { studentId: r1, year, term: 'TERM_1' as const };
     const mark = (subject: string) => prisma.studentMark.findFirstOrThrow({ where: { studentId: r1, term: 'TERM_1', subject } });
     await marks.importMarks(admin, sheet(b3, 'Physics'));
@@ -233,7 +233,7 @@ describe('student reports on the database (e2e)', () => {
     await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Ishaan Roy', rollNumber: 'U01', batchId: b5, status: 'ACTIVE' } });
     const card = { studentId: r1, year, term: 'TERM_1' as const };
     const physics = [{ subject: 'Physics', marks: 40, maxMarks: 50 }];
-    await marks.importMarks(admin, { batchId: b5, year, term: 'TERM_1', subject: 'Physics', dryRun: false, rows: [{ rollNo: 'U01', name: 'Ishaan', marks: '40', maxMarks: '50' }] } as MarksImportDto);
+    await marks.importMarks(admin, { batchId: b5, year, term: 'TERM_1', subject: 'Physics', dryRun: false, rows: [{ rollNo: 'U01', name: 'Ishaan Roy', marks: '40', maxMarks: '50' }] } as MarksImportDto);
     await marks.saveProgress(admin, { ...card, subjects: physics, teacherRemarks: 'First' } as never);
     // The sheet delete has removed the marks and the then-empty report but not
     // committed yet, when a save of the card with Physics unchanged comes in.
@@ -263,4 +263,57 @@ describe('student reports on the database (e2e)', () => {
     expect(await prisma.dailyRating.count({ where: { studentId: r1 } })).toBe(1);
     await prisma.dailyRating.deleteMany({ where: { studentId: r1 } });
   });
+
+  it("the report counts ratings only from active teachers; a teacher lists only their own ratings and notes, the totals are everyone's (#50)", async () => {
+    const [b7, r1, other] = [id(), id(), id()];
+    await prisma.batch.create({ data: { id: b7, schoolId: ids.school, programId: ids.program, name: 'B7', startDate: new Date('2026-04-01T00:00:00Z') } });
+    await prisma.faculty.create({ data: { id: other, schoolId: ids.school, name: 'Mr Sen' } });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Nia Paul', rollNumber: 'W01', batchId: b7, status: 'ACTIVE' } });
+    const mine = { ...teacher, batchIds: [b7] };
+    const theirs = { ...teacher, facultyId: other, batchIds: [b7] };
+    await ratings.save(mine, { date: istToday, batchId: b7, ratings: [rate(r1, 5, 5, 5, 5)] } as never);
+    await ratings.save(theirs, { date: istToday, batchId: b7, ratings: [rate(r1, 1, 1, 1, 1)] } as never);
+    const day = new Date(`${istToday}T00:00:00Z`);
+    await prisma.ptmNote.createMany({
+      data: [
+        { schoolId: ids.school, studentId: r1, batchId: b7, batchName: 'B7', facultyId: ids.faculty, teacherName: 'Ms Rao', meetingDate: day, parentAttended: true, discussion: 'Mine' },
+        { schoolId: ids.school, studentId: r1, batchId: b7, batchName: 'B7', facultyId: other, teacherName: 'Mr Sen', meetingDate: day, parentAttended: false, discussion: 'Theirs' },
+      ],
+    });
+    const asMsRao = { kind: 'TEACHER' as const, schoolId: ids.school, userId: ids.user, scope: mine };
+    let r = await reports.report(asMsRao, r1);
+    expect(r.feedback.ratings).toMatchObject({ count: 2, score: 3 });
+    expect(r.feedback.recentRatings.map((x) => x.raterName)).toEqual(['Ms Rao']);
+    expect(r.feedback.ptm).toMatchObject({ meetings: 2, parentAttended: 1, parentAttendanceRate: 50 });
+    expect(r.feedback.ptm.notes.map((n) => n.discussion)).toEqual(['Mine']);
+    expect((await reports.report(admin, r1)).feedback.ptm.notes.map((n) => n.discussion).sort()).toEqual(['Mine', 'Theirs']);
+    // Mr Sen leaves: his rating no longer counts, for anyone.
+    await prisma.faculty.update({ where: { id: other }, data: { status: 'INACTIVE' } });
+    r = await reports.report(admin, r1);
+    expect(r.feedback.ratings).toMatchObject({ count: 1, days: 1, score: 5 });
+    expect(r.feedback.recentRatings.map((x) => x.raterName)).toEqual(['Ms Rao']);
+    expect(r.summary.behaviourScore).toBe(5);
+  }, 60_000);
+
+  it('Mistake Analysis reads the most missed spellings first, so more topics than its cap never hide the misses (#52)', async () => {
+    const [b8, r1, t] = [id(), id(), id()];
+    await prisma.batch.create({ data: { id: b8, schoolId: ids.school, programId: ids.program, name: 'B8', startDate: new Date('2026-04-01T00:00:00Z') } });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Om Vyas', rollNumber: 'X01', batchId: b8, status: 'ACTIVE' } });
+    // 40 topics answered right, then "Gauss Law" and "Gauss's Law." answered wrong and "Optics" skipped.
+    const topics = [...Array.from({ length: 40 }, (_, i) => `Fine topic ${i + 1}`), 'Gauss Law', "Gauss's Law.", 'Optics'];
+    const startsAt = new Date(Date.now() - 4 * 3_600_000);
+    await prisma.test.create({ data: { id: t, schoolId: ids.school, title: 'Cap', type: 'DPP', subject: 'Physics', batchId: b8, startsAt, endsAt: new Date(startsAt.getTime() + 3_600_000), durationMinutes: 60, totalMarks: topics.length, createdByName: 'Report Admin' } });
+    const qids = topics.map(() => id());
+    await prisma.testQuestion.createMany({ data: topics.map((topic, i) => ({ id: qids[i], schoolId: ids.school, testId: t, position: i + 1, subject: 'Physics', topic, difficulty: 'EASY' as const, type: 'INTEGER' as const, text: `Q${i + 1}`, correctAnswer: '1', marks: 1 })) });
+    const answers = topics.map((topic, i) => ({ testQuestionId: qids[i], response: topic === 'Optics' ? null : topic.startsWith('Gauss') ? '2' : '1' }));
+    await tests.saveResults(admin, t, { summaryOnly: true, results: [{ studentId: r1, present: true, answers }] } as never);
+    const capped = Object.assign(new MarksService(db), { mistakeGroups: 3 });
+    const out = await capped.overview(admin, { year, batchId: b8 });
+    // Both spellings are on the same paper, so neither is later: the first in the database's order names it.
+    expect(out.mistakes.map((m) => [m.topic, m.wrong, m.skipped, m.answers])).toEqual([
+      ['Gauss Law', 2, 0, 2],
+      ['Optics', 0, 1, 1],
+    ]);
+    await prisma.testResult.deleteMany({ where: { testId: t } });
+  }, 60_000);
 });

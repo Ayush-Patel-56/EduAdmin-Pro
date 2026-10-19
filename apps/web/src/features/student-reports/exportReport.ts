@@ -90,7 +90,7 @@ export function reportSections(r: StudentReport): Section[] {
       ],
     },
     {
-      name: 'PTM Notes',
+      name: r.feedback.ownOnly ? 'PTM Notes (yours)' : 'PTM Notes',
       header: ['Date', 'Teacher', 'Parent', 'Parent attended', 'Discussion', 'Action items', 'Follow-up'],
       rows: r.feedback.ptm.notes.map((n) => [n.date, n.teacherName, n.parentName, n.parentAttended ? 'Yes' : 'No', n.discussion, n.actionItems, n.followUpDate]),
     },

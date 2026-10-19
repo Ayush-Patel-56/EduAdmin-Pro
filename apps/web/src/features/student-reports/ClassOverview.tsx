@@ -178,7 +178,7 @@ export function ClassOverview({ base, school }: { base: string; school: string }
 
       {uploading && o && <ImportMarksDialog base={base} options={o} onClose={() => setUploading(false)} />}
       {exporting && <ExportDialog title="Export uploaded reports" onClose={() => setExporting(false)} onExport={exportOverview} />}
-      {open && <SetDialog base={base} set={open} year={v?.year.year ?? o?.currentYear ?? 0} canWrite={!!o?.canWrite} onClose={() => setOpen(null)} />}
+      {open && <SetDialog base={base} set={open} year={v?.year.year ?? o?.currentYear ?? 0} canDelete={!!o?.canDeleteSheets} onClose={() => setOpen(null)} />}
     </>
   )
 }
@@ -218,7 +218,7 @@ function TrendChart({ overview }: { overview: Overview }) {
 }
 
 /** One sheet's rows, with Delete for a sheet uploaded to the wrong class, term or subject. */
-function SetDialog({ base, set, year, canWrite, onClose }: { base: string; set: MarkSet; year: number; canWrite: boolean; onClose: () => void }) {
+function SetDialog({ base, set, year, canDelete, onClose }: { base: string; set: MarkSet; year: number; canDelete: boolean; onClose: () => void }) {
   const key = { batchId: set.batch.id, year, term: set.term as Term, subject: set.subject }
   const rows = useMarkSet(base, key)
   const invalidate = useInvalidateReports(base)
@@ -248,7 +248,7 @@ function SetDialog({ base, set, year, canWrite, onClose }: { base: string; set: 
         )}
       </div>
       <div className="flex justify-between gap-3 border-t border-slate-100 px-6 py-4">
-        {canWrite ? <button type="button" onClick={() => setDeleting(true)} className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-200 px-3.5 text-sm font-semibold text-rose-700 hover:bg-rose-50"><Trash2 className="size-4" /> Delete sheet</button> : <span />}
+        {canDelete ? <button type="button" onClick={() => setDeleting(true)} className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-200 px-3.5 text-sm font-semibold text-rose-700 hover:bg-rose-50"><Trash2 className="size-4" /> Delete sheet</button> : <span />}
         <button type="button" onClick={onClose} className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">Close</button>
       </div>
       {deleting && (
