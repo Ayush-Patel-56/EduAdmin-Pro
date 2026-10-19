@@ -1,5 +1,6 @@
-import { Building2, LogIn, Settings, User } from 'lucide-react'
+import { Building2, Camera, LogIn, Settings, User } from 'lucide-react'
 import type { Me } from '@/features/auth/types'
+import { Avatar } from '@/features/portal/Avatar'
 
 type ProfileMenuProps = {
   me: Me
@@ -7,21 +8,19 @@ type ProfileMenuProps = {
   onSwitchSchool: () => void
   onPreferences: () => void
   onMyProfile: () => void
+  onProfilePicture: () => void
   onClose: () => void
 }
 
 /** Dropdown under the teacher's avatar: who they are, their school, and switching it. */
-export function ProfileMenu({ me, schoolName, onSwitchSchool, onPreferences, onMyProfile, onClose }: ProfileMenuProps) {
-  const initial = me.fullName.trim().charAt(0).toUpperCase()
+export function ProfileMenu({ me, schoolName, onSwitchSchool, onPreferences, onMyProfile, onProfilePicture, onClose }: ProfileMenuProps) {
   return (
     <div
       role="menu"
       className="absolute top-full right-0 z-40 mt-3 w-[min(240px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_50px_-12px_rgba(15,23,42,0.25)]"
     >
       <div className="flex items-start gap-3 bg-slate-50 px-4 py-4">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-ink text-sm font-semibold text-white">
-          {initial}
-        </span>
+        <Avatar me={me} className="size-10 shrink-0 rounded-full bg-ink text-sm" />
         <div className="min-w-0">
           <p className="truncate text-sm font-bold text-slate-900">{me.fullName}</p>
           <p className="truncate text-[11px] text-slate-500">{me.email}</p>
@@ -58,6 +57,17 @@ export function ProfileMenu({ me, schoolName, onSwitchSchool, onPreferences, onM
           className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 transition hover:bg-slate-100"
         >
           <User className="size-3.5" /> My Profile
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose()
+            onProfilePicture()
+          }}
+          className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 transition hover:bg-slate-100"
+        >
+          <Camera className="size-3.5" /> {me.avatarUrl ? 'Change Profile Picture' : 'Add Profile Picture'}
         </button>
         <button
           type="button"

@@ -67,12 +67,13 @@ function AdminShell({ me, schoolId }: { me: Me; schoolId: string }) {
       extraPages={adminExtraSections}
       avatarClassName="bg-emerald-600"
       searchRemote={searchRemote}
-      renderProfileMenu={({ close, openPreferences }) => (
+      renderProfileMenu={({ close, openPreferences, openProfilePicture }) => (
         <AdminProfileMenu
           me={me}
           schoolName={schoolName}
           manageSchoolsTo={`${PLANNING}?tab=schools`}
           onPreferences={openPreferences}
+          onProfilePicture={openProfilePicture}
           onClose={close}
         />
       )}

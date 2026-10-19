@@ -1,5 +1,6 @@
 import { Controller, Get, Module, UseGuards } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { AcademicAdminController } from './academic-admin.controller.js';
 import {
@@ -37,7 +38,7 @@ class AcademicOptionsController {
 }
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, NotificationsModule],
   controllers: [
     AcademicOptionsController,
     AcademicAdminController,

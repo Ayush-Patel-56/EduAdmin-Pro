@@ -10,6 +10,7 @@ import type { SyllabusImportDto, SyllabusItemDto } from './academic.dto.js';
 import { SUBJECTS } from './academic-options.js';
 import type { ImportPreview } from './import-utils.js';
 import { duplicateAsConflict } from '../common/unique-violation.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 const CHAPTER_EXISTS =
   'A chapter with this title already exists for this batch and subject (or it was just added by someone else). Refresh and try again.';
@@ -43,7 +44,10 @@ const itemSelect = {
 
 @Injectable()
 export class SyllabusService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /** A batch's chapters, for one subject or (for exports) all of them. */
   async list(
@@ -89,9 +93,9 @@ export class SyllabusService {
     itemId: string,
     dto: SyllabusItemDto,
   ) {
-    await this.find(schoolId, scope, itemId);
+    const before = await this.find(schoolId, scope, itemId);
     await this.assertBatch(schoolId, scope, dto.batchId);
-    return duplicateAsConflict(
+    const item = await duplicateAsConflict(
       () =>
         this.prisma.syllabusItem.update({
           where: { id: itemId },
@@ -100,6 +104,8 @@ export class SyllabusService {
         }),
       CHAPTER_EXISTS,
     );
+    if (item.status !== before.status) await this.notifications.syllabusChanged(schoolId, userId, [item]);
+    return item;
   }
 
   /** Moving a card between Kanban columns. */
@@ -110,12 +116,14 @@ export class SyllabusService {
     itemId: string,
     status: SyllabusStatus,
   ) {
-    await this.find(schoolId, scope, itemId);
-    return this.prisma.syllabusItem.update({
+    const before = await this.find(schoolId, scope, itemId);
+    const item = await this.prisma.syllabusItem.update({
       where: { id: itemId },
       data: { status, updatedById: userId },
       select: itemSelect,
     });
+    if (status !== before.status) await this.notifications.syllabusChanged(schoolId, userId, [item]);
+    return item;
   }
 
   async remove(schoolId: string, scope: BatchScope, itemId: string) {
@@ -299,6 +307,13 @@ export class SyllabusService {
     if (!dto.dryRun) {
       const toCreate = rows.filter((r) => r.action === 'create');
       const toUpdate = rows.filter((r) => r.action === 'update');
+      // Statuses before, to tell who should hear that a chapter's status changed.
+      const before = new Map(
+        (toUpdate.length
+          ? await this.prisma.syllabusItem.findMany({ where: { schoolId, id: { in: toUpdate.map((r) => r.existingId!) } }, select: { id: true, status: true } })
+          : []
+        ).map((i) => [i.id, i.status]),
+      );
       const [created] = (await duplicateAsConflict(
         () =>
           this.prisma.$transaction(
@@ -341,6 +356,15 @@ export class SyllabusService {
         )
           raced.add(r.row);
       }
+      const changed = [
+        ...toUpdate.filter((r) => r.data!.status && r.data!.status !== before.get(r.existingId!)),
+        ...toCreate.filter((r) => !raced.has(r.row) && r.data!.status && r.data!.status !== 'NOT_STARTED'),
+      ];
+      await this.notifications.syllabusChanged(
+        schoolId,
+        userId,
+        changed.map((r) => ({ batchId: r.data!.batchId, subject: r.data!.subject, title: r.data!.title, status: r.data!.status! })),
+      );
     }
     const results = rows.map((r) =>
       raced.has(r.row)
@@ -385,7 +409,7 @@ export class SyllabusService {
   private async find(schoolId: string, scope: BatchScope, itemId: string) {
     const item = await this.prisma.syllabusItem.findFirst({
       where: { id: itemId, schoolId },
-      select: { batchId: true },
+      select: { batchId: true, status: true },
     });
     if (!item) throw new NotFoundException('Chapter not found');
     if (scope && !scope.includes(item.batchId))

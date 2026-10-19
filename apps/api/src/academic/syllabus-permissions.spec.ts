@@ -37,7 +37,7 @@ describe('SyllabusService: who may touch which batch', () => {
     school: { findUniqueOrThrow: vi.fn() },
     program: { findFirst: vi.fn() },
   } as unknown as PrismaService;
-  const syllabus = new SyllabusService(prisma);
+  const syllabus = new SyllabusService(prisma, { syllabusChanged: vi.fn() } as never);
   const teacherScope = [MINE];
 
   beforeEach(() => {

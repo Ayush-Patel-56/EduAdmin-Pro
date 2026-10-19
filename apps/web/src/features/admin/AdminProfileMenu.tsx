@@ -1,27 +1,26 @@
 import { Link } from 'react-router-dom'
-import { Building2, Settings } from 'lucide-react'
+import { Building2, Camera, Settings } from 'lucide-react'
 import type { Me } from '@/features/auth/types'
+import { Avatar } from '@/features/portal/Avatar'
 
 type AdminProfileMenuProps = {
   me: Me
   schoolName: string | null
   manageSchoolsTo: string
   onPreferences: () => void
+  onProfilePicture: () => void
   onClose: () => void
 }
 
 /** Dropdown under the admin's avatar: who they are, the school in view, and account settings. */
-export function AdminProfileMenu({ me, schoolName, manageSchoolsTo, onPreferences, onClose }: AdminProfileMenuProps) {
-  const initial = me.fullName.trim().charAt(0).toUpperCase()
+export function AdminProfileMenu({ me, schoolName, manageSchoolsTo, onPreferences, onProfilePicture, onClose }: AdminProfileMenuProps) {
   return (
     <div
       role="menu"
       className="absolute top-full right-0 z-40 mt-3 w-[min(240px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_50px_-12px_rgba(15,23,42,0.25)]"
     >
-      <div className="flex items-start gap-3 bg-slate-50 px-4 py-4">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-semibold text-white">
-          {initial}
-        </span>
+      <div className="flex items-start gap-3 px-4 py-4">
+        <Avatar me={me} className="size-10 shrink-0 rounded-full bg-emerald-600 text-sm" />
         <div className="min-w-0">
           <p className="truncate text-sm font-bold text-slate-900">{me.fullName}</p>
           <p className="truncate text-[11px] text-slate-500">{me.email}</p>
@@ -29,6 +28,20 @@ export function AdminProfileMenu({ me, schoolName, manageSchoolsTo, onPreference
             Admin
           </span>
         </div>
+      </div>
+
+      <div className="px-4 pb-3">
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose()
+            onProfilePicture()
+          }}
+          className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-emerald-50 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+        >
+          <Camera className="size-3.5" /> {me.avatarUrl ? 'Change Profile Picture' : 'Add Profile Picture'}
+        </button>
       </div>
 
       <div className="border-t border-slate-100 px-4 py-3">

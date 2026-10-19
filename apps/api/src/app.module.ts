@@ -25,6 +25,7 @@ import { FeedbackModule } from './feedback/feedback.module.js';
 import { PtmNotesModule } from './ptm-notes/ptm-notes.module.js';
 import { AssessmentsModule } from './assessments/assessments.module.js';
 import { StudentReportsModule } from './student-reports/student-reports.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { StudentReportsModule } from './student-reports/student-reports.module.j
     PtmNotesModule,
     AssessmentsModule,
     StudentReportsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
