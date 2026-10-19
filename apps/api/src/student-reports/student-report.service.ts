@@ -99,9 +99,9 @@ export class StudentReportService {
         WHERE a."schoolId" = ${actor.schoolId} AND r."studentId" = ${studentId} AND r."present"
           AND t."status" = 'SCHEDULED' AND t."startsAt" >= ${ctx.fromInstant} AND t."startsAt" < ${ctx.toInstant}
         GROUP BY q."type", q."difficulty", q."subject", a."outcome"`,
-      this.prisma.$queryRaw<{ subject: string; chapter: string | null; topic: string; questions: number; awarded: string; possible: number }[]>`
+      this.prisma.$queryRaw<{ subject: string; chapter: string | null; topic: string; latest: Date; questions: number; awarded: string; possible: number }[]>`
         SELECT q."subject", (array_agg(q."chapterName" ORDER BY t."startsAt" DESC, q."position") FILTER (WHERE q."chapterName" IS NOT NULL))[1] AS "chapter",
-          (array_agg(q."topic" ORDER BY t."startsAt" DESC, q."position"))[1] AS "topic", count(*)::int AS "questions",
+          (array_agg(q."topic" ORDER BY t."startsAt" DESC, q."position"))[1] AS "topic", max(t."startsAt") AS "latest", count(*)::int AS "questions",
           sum(a."marksAwarded")::text AS "awarded", sum(q."marks")::int AS "possible"
         FROM "TestAnswer" a
         JOIN "TestResult" r ON r."id" = a."resultId" AND r."schoolId" = a."schoolId"
@@ -196,7 +196,7 @@ export class StudentReportService {
 
     // Strength vs Weakness: test answers and graded assignments, by topic.
     const topics = topicStrength(
-      testTopics.map((t): TestTopic => ({ subject: t.subject, chapter: t.chapter, topic: t.topic, questions: t.questions, awarded: Number(t.awarded), possible: t.possible })),
+      testTopics.map((t): TestTopic => ({ subject: t.subject, chapter: t.chapter, topic: t.topic, latest: t.latest, questions: t.questions, awarded: Number(t.awarded), possible: t.possible })),
       assignments.map((a): AssignmentTopic => ({ subject: a.assignment.subject, chapter: a.assignment.chapter, topic: a.assignment.topic, score: Number(a.score), total: a.assignment.totalMarks })),
     );
 

@@ -13,6 +13,7 @@ import {
   REPORT_TERMS,
   TERM_LABELS,
   gradeOf,
+  looseText,
   percent,
   topicKey,
   type ReportTermKey,
@@ -34,8 +35,12 @@ import {
 
 const num = (v: Prisma.Decimal | string | number) => Number(v);
 const WRITE_REFUSED = 'Only active faculty can change student reports';
-/** Topic spellings Mistake Analysis reads (far above a year's distinct topics in a scope). */
-const MISTAKE_GROUPS = 5000;
+/**
+ * Topic spellings Mistake Analysis reads, most missed first (far above a
+ * year's distinct topics in a scope): past the cap only the least-missed
+ * spellings fall off, never the top of the list.
+ */
+export const MISTAKE_GROUPS = 5000;
 const like = (q: string) => `%${likeEscape(q.trim())}%`;
 
 /**
@@ -48,6 +53,9 @@ const like = (q: string) => `%${likeEscape(q.trim())}%`;
  */
 @Injectable()
 export class MarksService {
+  /** How many topic spellings Mistake Analysis reads (MISTAKE_GROUPS; smaller in tests). */
+  mistakeGroups = MISTAKE_GROUPS;
+
   constructor(private readonly prisma: PrismaService) {}
 
   /** The pickers: academic years, terms, subjects, the grade scale and the batches this person reaches. */
@@ -290,7 +298,8 @@ export class MarksService {
         ${subject ? Prisma.sql`AND q."subject" = ${subject}` : Prisma.empty}
         ${inScope('t."batchId"', scope)}
       GROUP BY q."subject", lower(btrim(q."topic"))
-      LIMIT ${MISTAKE_GROUPS}`;
+      ORDER BY count(*) FILTER (WHERE a."outcome" <> 'CORRECT') DESC, max(t."startsAt") DESC, q."subject", lower(btrim(q."topic"))
+      LIMIT ${this.mistakeGroups}`;
     // Spellings of one topic merged (topicKey), named as on the latest paper.
     const merged = new Map<string, { subject: string; topic: string; latest: Date; wrong: number; skipped: number; answers: number }>();
     for (const r of rows) {
@@ -550,9 +559,13 @@ function summary(applied: boolean, rows: ImportPreview['rows'], ready: unknown[]
 }
 
 const clean = (v: string | undefined) => (v ?? '').trim().replace(/\s+/g, ' ');
-const nameKey = (v: string) => v.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+const nameKey = looseText;
 
-/** The same person: the full name as on the roster, ignoring letter case, spacing and punctuation (a first name alone isn't enough, #50). */
+/**
+ * The same person: the full name as on the roster, ignoring letter case,
+ * Latin accents, spacing and punctuation ("Mary-Jane D'Souza" = "mary jane d
+ * souza"); a first name alone isn't enough (#50).
+ */
 export function sameName(rosterName: string, sheetName: string): boolean {
   const a = nameKey(rosterName);
   return !!a && a === nameKey(sheetName);

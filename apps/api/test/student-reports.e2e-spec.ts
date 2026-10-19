@@ -294,4 +294,26 @@ describe('student reports on the database (e2e)', () => {
     expect(r.feedback.recentRatings.map((x) => x.raterName)).toEqual(['Ms Rao']);
     expect(r.summary.behaviourScore).toBe(5);
   }, 60_000);
+
+  it('Mistake Analysis reads the most missed spellings first, so more topics than its cap never hide the misses (#52)', async () => {
+    const [b8, r1, t] = [id(), id(), id()];
+    await prisma.batch.create({ data: { id: b8, schoolId: ids.school, programId: ids.program, name: 'B8', startDate: new Date('2026-04-01T00:00:00Z') } });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Om Vyas', rollNumber: 'X01', batchId: b8, status: 'ACTIVE' } });
+    // 40 topics answered right, then "Gauss Law" and "Gauss's Law." answered wrong and "Optics" skipped.
+    const topics = [...Array.from({ length: 40 }, (_, i) => `Fine topic ${i + 1}`), 'Gauss Law', "Gauss's Law.", 'Optics'];
+    const startsAt = new Date(Date.now() - 4 * 3_600_000);
+    await prisma.test.create({ data: { id: t, schoolId: ids.school, title: 'Cap', type: 'DPP', subject: 'Physics', batchId: b8, startsAt, endsAt: new Date(startsAt.getTime() + 3_600_000), durationMinutes: 60, totalMarks: topics.length, createdByName: 'Report Admin' } });
+    const qids = topics.map(() => id());
+    await prisma.testQuestion.createMany({ data: topics.map((topic, i) => ({ id: qids[i], schoolId: ids.school, testId: t, position: i + 1, subject: 'Physics', topic, difficulty: 'EASY' as const, type: 'INTEGER' as const, text: `Q${i + 1}`, correctAnswer: '1', marks: 1 })) });
+    const answers = topics.map((topic, i) => ({ testQuestionId: qids[i], response: topic === 'Optics' ? null : topic.startsWith('Gauss') ? '2' : '1' }));
+    await tests.saveResults(admin, t, { summaryOnly: true, results: [{ studentId: r1, present: true, answers }] } as never);
+    const capped = Object.assign(new MarksService(db), { mistakeGroups: 3 });
+    const out = await capped.overview(admin, { year, batchId: b8 });
+    // Both spellings are on the same paper, so neither is later: the first in the database's order names it.
+    expect(out.mistakes.map((m) => [m.topic, m.wrong, m.skipped, m.answers])).toEqual([
+      ['Gauss Law', 2, 0, 2],
+      ['Optics', 0, 1, 1],
+    ]);
+    await prisma.testResult.deleteMany({ where: { testId: t } });
+  }, 60_000);
 });

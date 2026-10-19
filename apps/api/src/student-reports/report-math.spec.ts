@@ -58,6 +58,18 @@ describe('student report rules', () => {
     expect(topicKey('Physics', 'Gauss’s law.')).toBe(topicKey('Physics', 'gauss law'));
     expect(topicKey('Physics', 'Work-Energy Theorem')).toBe(topicKey('Physics', 'work energy theorem'));
     expect(topicKey('Physics', 'Heat')).not.toBe(topicKey('Physics', 'Heats'));
+    // Hindi vowel signs tell topics apart; Latin accents don't (#52).
+    expect(topicKey('Physics', 'किल')).not.toBe(topicKey('Physics', 'कील'));
+    expect(topicKey('Physics', 'गति')).not.toBe(topicKey('Physics', 'गत'));
+    expect(topicKey('Physics', 'Énergie')).toBe(topicKey('Physics', 'energie'));
+  });
+
+  it('names a topic spelled several ways as on its latest paper, whatever the order (#52)', () => {
+    const older = { subject: 'Physics', chapter: 'Electrostatics', topic: 'Gauss Law', latest: new Date('2026-08-01'), questions: 1, awarded: 4, possible: 4 };
+    const newer = { subject: 'Physics', chapter: null, topic: "Gauss's Law.", latest: new Date('2026-10-01'), questions: 1, awarded: 0, possible: 4 };
+    for (const order of [[older, newer], [newer, older]]) {
+      expect(topicStrength(order, [])).toMatchObject([{ topic: "Gauss's Law.", chapter: 'Electrostatics', percent: 50, test: { questions: 2 } }]);
+    }
   });
 
   it('blends a topic: the mean of its test and assignment scores, with the counts of each', () => {

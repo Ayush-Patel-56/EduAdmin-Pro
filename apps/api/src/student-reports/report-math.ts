@@ -102,19 +102,30 @@ export function behaviourScore(avg: { attitude: number | null; behaviour: number
 }
 
 /** A name as topics are matched: letter case, spacing, punctuation and a possessive 's ignored ("Gauss's Law" = "gauss law", "Work-Energy" = "work energy"). */
-const matchName = (s: string) =>
-  s
+/**
+ * Text as names and topics are compared: letter case and Latin accents
+ * ignored ("Ánanya" = "ananya"), and any run of spacing or punctuation read as
+ * one space. Combining marks of other scripts are kept, so Hindi vowel signs
+ * still tell words apart ("किल" ≠ "कील").
+ */
+export function looseText(s: string): string {
+  return s
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/['’]s\b/g, '')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ')
     .trim();
+}
+
+const matchName = (s: string) => looseText(s.replace(/['’]s\b/gi, ''));
 
 /** How a topic is matched across tests and assignments (and in Mistake Analysis): its subject and name, ignoring letter case, spacing and punctuation. */
 export function topicKey(subject: string, topic: string): string {
   return `${matchName(subject)}|${matchName(topic)}`;
 }
 
-export type TestTopic = { subject: string; chapter: string | null; topic: string; questions: number; awarded: number; possible: number };
+/** `latest`: when the newest paper with this spelling was set; a merged topic is named as on the latest paper. */
+export type TestTopic = { subject: string; chapter: string | null; topic: string; latest?: Date; questions: number; awarded: number; possible: number };
 export type AssignmentTopic = { subject: string; chapter: string; topic: string | null; score: number; total: number };
 export type TopicStrength = {
   subject: string;
@@ -130,23 +141,28 @@ export type TopicStrength = {
  * Topic strength from both sources (tests and graded assignments): each
  * source's score is its marks earned out of marks possible (negative marking
  * floors a topic at 0), and the blended score is the mean of the sources a
- * topic has. An assignment without a topic counts for its chapter.
+ * topic has. An assignment without a topic counts for its chapter. Spellings
+ * of one topic (topicKey) are named as on the latest paper, as in Mistake
+ * Analysis.
  */
 export function topicStrength(tests: TestTopic[], assignments: AssignmentTopic[]): TopicStrength[] {
-  type Acc = { subject: string; chapter: string | null; topic: string; questions: number; awarded: number; possible: number; count: number; score: number; total: number };
+  type Acc = { subject: string; chapter: string | null; topic: string; latest: number; questions: number; awarded: number; possible: number; count: number; score: number; total: number };
   const acc = new Map<string, Acc>();
-  const at = (subject: string, topic: string, chapter: string | null) => {
+  const at = (subject: string, topic: string, chapter: string | null, latest = -Infinity) => {
     const key = topicKey(subject, topic);
+    const name = topic.trim().replace(/\s+/g, ' ');
     let a = acc.get(key);
     if (!a) {
-      a = { subject, chapter, topic: topic.trim().replace(/\s+/g, ' '), questions: 0, awarded: 0, possible: 0, count: 0, score: 0, total: 0 };
+      a = { subject, chapter, topic: name, latest, questions: 0, awarded: 0, possible: 0, count: 0, score: 0, total: 0 };
       acc.set(key, a);
+    } else if (latest > a.latest) {
+      [a.topic, a.latest, a.chapter] = [name, latest, chapter ?? a.chapter];
     }
     a.chapter ??= chapter;
     return a;
   };
   for (const t of tests) {
-    const a = at(t.subject, t.topic, t.chapter);
+    const a = at(t.subject, t.topic, t.chapter, t.latest?.getTime());
     a.questions += t.questions;
     a.awarded += t.awarded;
     a.possible += t.possible;

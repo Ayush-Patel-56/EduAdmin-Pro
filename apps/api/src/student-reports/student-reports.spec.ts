@@ -84,6 +84,12 @@ describe('Import student report: each row checked against the batch', () => {
     expect(sameName('Aarav Mehta', 'Aarav')).toBe(false);
     expect(sameName('Aarav Mehta', 'Aarav One')).toBe(false);
     expect(sameName('Aarav Mehta', 'Mehta Aarav')).toBe(false);
+    // Punctuation reads as spacing, Latin accents don't count; Hindi vowel signs do (#52).
+    expect(sameName('Mary-Jane Doe', 'Mary Jane Doe')).toBe(true);
+    expect(sameName("Ryan D'Souza", 'ryan d souza')).toBe(true);
+    expect(sameName('Ánanya Rao', 'Ananya Rao')).toBe(true);
+    expect(sameName('सीता राम', 'सीता  राम')).toBe(true);
+    expect(sameName('सीता राम', 'सत रम')).toBe(false);
     const { rows, ready } = checkSheet([{ rollNo: 'r01', name: 'Aarav Mehta', marks: '72.5', maxMarks: '100', attendance: '91%', remarks: '  Good  work ' }], { id: 'b-mine', name: 'JEE A' }, roster, new Map(), null);
     expect(rows[0]).toMatchObject({ row: 2, action: 'create', errors: [], label: 'R01 · Aarav Mehta' });
     expect(ready).toEqual([{ studentId: 's1', marks: 72.5, maxMarks: 100, attendance: 91, remarks: 'Good work' }]);
@@ -328,14 +334,31 @@ describe('MarksService: access and writes', () => {
         strings.join('').includes('"TestAnswer"')
           ? [
               { subject: 'Physics', topic: "Gauss's Law", latest: new Date('2026-09-01'), wrong: 2, skipped: 1, answers: 6 },
-              { subject: 'Physics', topic: 'gauss law', latest: new Date('2026-10-01'), wrong: 1, skipped: 0, answers: 4 },
+              { subject: 'Physics', topic: 'gauss law', latest: new Date('2026-10-01'), wrong: 1, skipped: 2, answers: 4 },
               { subject: 'Physics', topic: 'Optics', latest: new Date('2026-10-01'), wrong: 0, skipped: 0, answers: 3 },
             ]
           : [],
       ),
     );
     const out = await service.overview(admin, {});
-    expect(out.mistakes).toEqual([{ subject: 'Physics', topic: 'gauss law', wrong: 3, skipped: 1, answers: 10, missRate: 40 }]);
+    expect(out.mistakes).toEqual([{ subject: 'Physics', topic: 'gauss law', wrong: 3, skipped: 3, answers: 10, missRate: 60 }]);
+  });
+
+  it('Mistake Analysis: the 8 most missed topics, most misses first; the database is read most-missed first up to the cap (#52)', async () => {
+    const prisma = prismaMock();
+    const service = new MarksService(prisma as unknown as PrismaService);
+    // Ten topics, missed 1 to 10 times (wrong and skipped), answered fewer times the more they are missed (so answers and misses disagree).
+    const groups = Array.from({ length: 10 }, (_, i) => ({ subject: 'Physics', topic: `T${i + 1}`, latest: new Date('2026-10-01'), wrong: Math.ceil((i + 1) / 2), skipped: Math.floor((i + 1) / 2), answers: 40 - i }));
+    prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => Promise.resolve(strings.join('').includes('"TestAnswer"') ? groups : []));
+    service.mistakeGroups = 123;
+    const out = await service.overview(admin, {});
+    expect(out.mistakes.map((m) => `${m.topic}:${m.wrong + m.skipped}`)).toEqual(['T10:10', 'T9:9', 'T8:8', 'T7:7', 'T6:6', 'T5:5', 'T4:4', 'T3:3']);
+    const sql = asSql(prisma.$queryRaw.mock.calls.find((c) => (c[0] as TemplateStringsArray).join('').includes('"TestAnswer"'))!);
+    const text = sql.sql.replace(/\s+/g, ' ');
+    const order = text.indexOf(`ORDER BY count(*) FILTER (WHERE a."outcome" <> 'CORRECT') DESC`);
+    expect(order).toBeGreaterThan(0);
+    expect(order).toBeLessThan(text.lastIndexOf('LIMIT'));
+    expect(sql.values.at(-1)).toBe(123);
   });
 
   it('deleting a report or a sheet: a teacher only in their batches, and only while active', async () => {
