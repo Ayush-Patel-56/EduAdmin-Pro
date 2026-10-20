@@ -78,7 +78,7 @@ var checks = []check{
 }
 
 // Run executes every check against webOrigin (which proxies /api/* to the API)
-// and apiOrigin (hit directly for the cron check). The client is copied, never
+// and apiOrigin (hit directly for the cron check and the client ip comparison). The client is copied, never
 // modified: the copy follows no redirects (a 3xx must not let another host
 // answer for the site under test) and keeps no cookies. A nil client gets a
 // plain one.
@@ -363,51 +363,69 @@ func notPublicReason(addr netip.Addr) string {
 
 // clientIP: the API sees the real client address. Two calls carry different
 // forged X-Forwarded-For values; both must answer with the same public address
-// that is neither forged value (a header echoed back, or a proxy hop).
+// that is neither forged value (a header echoed back, or a proxy hop). Each
+// call is made through the web rewrite and to the API origin directly (with
+// the same forged header), and the two answers must match: behind the rewrite
+// the API could otherwise see the web edge's address, the same for every user,
+// which is public and stable too.
 func (s *site) clientIP(ctx context.Context) error {
-	const path = "/api/health/ip"
-	var forged []netip.Addr
-	for _, f := range forgedIPs {
-		forged = append(forged, netip.MustParseAddr(f))
-	}
 	var first netip.Addr
 	for i, xff := range forgedIPs {
-		r, err := s.get(ctx, s.web+path, map[string]string{"X-Forwarded-For": xff})
+		viaWeb, err := s.seenIP(ctx, s.web, xff)
 		if err != nil {
 			return err
 		}
-		if err := expectStatus(path, r, http.StatusOK); err != nil {
-			return err
-		}
-		var body struct {
-			IP string `json:"ip"`
-		}
-		if err := json.Unmarshal(r.body, &body); err != nil {
-			return fmt.Errorf("%s: response is not JSON", path)
-		}
-		if body.IP == "" {
-			return fmt.Errorf("%s: ip is empty", path)
-		}
-		addr, err := netip.ParseAddr(body.IP)
+		direct, err := s.seenIP(ctx, s.api, xff)
 		if err != nil {
-			return fmt.Errorf("%s: ip is not an address", path)
+			return fmt.Errorf("direct to the api: %w", err)
 		}
-		addr = addr.Unmap()
-		for _, f := range forged {
-			if addr == f {
-				return fmt.Errorf("%s: ip matched a forged X-Forwarded-For", path)
-			}
-		}
-		if why := notPublicReason(addr); why != "" {
-			return fmt.Errorf("%s: ip is %s", path, why)
+		if viaWeb != direct {
+			return fmt.Errorf("/api/health/ip: ip through the web rewrite differed from the api's direct answer (the api may see the web edge, not the caller)")
 		}
 		if i == 0 {
-			first = addr
-		} else if addr != first {
-			return fmt.Errorf("%s: ip differed between calls", path)
+			first = viaWeb
+		} else if viaWeb != first {
+			return fmt.Errorf("/api/health/ip: ip differed between calls")
 		}
 	}
 	return nil
+}
+
+// seenIP asks origin's /api/health/ip which address it sees, sending xff as a
+// forged X-Forwarded-For, and checks the answer is a public address that is
+// not a forged one. Errors never include the address.
+func (s *site) seenIP(ctx context.Context, origin, xff string) (netip.Addr, error) {
+	const path = "/api/health/ip"
+	r, err := s.get(ctx, origin+path, map[string]string{"X-Forwarded-For": xff})
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if err := expectStatus(path, r, http.StatusOK); err != nil {
+		return netip.Addr{}, err
+	}
+	var body struct {
+		IP string `json:"ip"`
+	}
+	if err := json.Unmarshal(r.body, &body); err != nil {
+		return netip.Addr{}, fmt.Errorf("%s: response is not JSON", path)
+	}
+	if body.IP == "" {
+		return netip.Addr{}, fmt.Errorf("%s: ip is empty", path)
+	}
+	addr, err := netip.ParseAddr(body.IP)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("%s: ip is not an address", path)
+	}
+	addr = addr.Unmap()
+	for _, f := range forgedIPs {
+		if addr == netip.MustParseAddr(f) {
+			return netip.Addr{}, fmt.Errorf("%s: ip matched a forged X-Forwarded-For", path)
+		}
+	}
+	if why := notPublicReason(addr); why != "" {
+		return netip.Addr{}, fmt.Errorf("%s: ip is %s", path, why)
+	}
+	return addr, nil
 }
 
 // cronLocked: the digest endpoint, hit on the API origin itself, refuses a

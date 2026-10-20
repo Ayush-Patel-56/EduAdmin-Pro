@@ -124,8 +124,9 @@ func (c *Client) PreviousProduction(ctx context.Context, projectID string) (depl
 
 // Rollback points the project's production domains back at deploymentID
 // (Instant Rollback). Afterwards Vercel stops assigning production domains to
-// new deployments until someone undoes the rollback (Undo Rollback in the
-// dashboard, or `vercel promote`).
+// new deployments until the rolled-back state is cleared: promoting the
+// deployment that serves now keeps it live (`vercel promote`, or Promote in
+// the dashboard); Undo Rollback puts the deployment rolled back from live again.
 func (c *Client) Rollback(ctx context.Context, projectID, deploymentID string) error {
 	return c.do(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/rollback/"+url.PathEscape(deploymentID), nil, nil, nil)
 }

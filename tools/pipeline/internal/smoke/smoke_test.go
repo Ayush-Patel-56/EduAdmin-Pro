@@ -24,7 +24,10 @@ func init() {
 	Timeout = 2 * time.Second
 }
 
-const realIP = "8.8.4.4"
+const (
+	realIP = "8.8.4.4"
+	edgeIP = "76.76.21.21"
+)
 
 // fake imitates the live site: a web origin that serves the SPA and proxies
 // /api/*, and an API origin that serves the cron route. Each flag breaks one
@@ -41,7 +44,8 @@ type fake struct {
 	meStatus                       int
 	noNosniff, noCSP               bool
 	corsReflect                    bool
-	ipMode                         string // "", "forged", "loopback", "private", "empty", "vary", "garbage"
+	ipMode                         string // "", "forged", "loopback", "private", "empty", "vary", "garbage", "edge" (through the web only)
+	directIP                       string // what the API origin's /api/health/ip answers; "" means realIP
 	cronStatus                     int
 	meRefusal, cronRefusal         string // "", "html" (platform wall), "nocode" (JSON without statusCode)
 	failFirst                      int32  // first N requests to /api/health/ready get a 503
@@ -139,6 +143,10 @@ func (f *fake) web() http.Handler {
 				ip = "not-an-ip"
 			case "vary":
 				ip = "8.8.8." + string(rune('0'+n))
+			case "edge":
+				// The rewrite hands the API the web edge's address: public and
+				// stable, but the same for every user.
+				ip = edgeIP
 			}
 			w.Write([]byte(`{"ip":"` + ip + `"}`))
 		default:
@@ -182,6 +190,14 @@ func (f *fake) asset(w http.ResponseWriter, ctype string) {
 func (f *fake) api() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)
+		if r.URL.Path == "/api/health/ip" {
+			ip := f.directIP
+			if ip == "" {
+				ip = realIP
+			}
+			w.Write([]byte(`{"ip":"` + ip + `"}`))
+			return
+		}
 		if r.URL.Path == "/api/internal/cron/digest" {
 			if f.cronStatus != 0 {
 				w.WriteHeader(f.cronStatus)
@@ -259,6 +275,8 @@ func TestEachBreakageFailsOnlyItsCheck(t *testing.T) {
 		{"ip varies", "client ip", func(f *fake) { f.ipMode = "vary" }},
 		{"ip cgnat", "client ip", func(f *fake) { f.ipMode = "cgnat" }},
 		{"ip documentation range", "client ip", func(f *fake) { f.ipMode = "documentation" }},
+		{"ip is the web edge's", "client ip", func(f *fake) { f.ipMode = "edge" }},
+		{"ip direct is private", "client ip", func(f *fake) { f.directIP = "10.0.0.1" }},
 		{"me html 401", "auth refuses", func(f *fake) { f.meRefusal = "html" }},
 		{"me json without statusCode", "auth refuses", func(f *fake) { f.meRefusal = "nocode" }},
 		{"cron html 401", "cron locked", func(f *fake) { f.cronRefusal = "html" }},
@@ -333,6 +351,51 @@ func TestCORSSendsForeignOriginAndIPSendsForgedHeader(t *testing.T) {
 	}
 	if !sawXFF.Load() {
 		t.Error("client ip check did not send X-Forwarded-For: 203.0.113.7")
+	}
+}
+
+func TestClientIPComparesRewriteWithDirect(t *testing.T) {
+	// The rewrite path answers a different, stable public address than the
+	// API answers directly: the API is seeing the web edge, so it fails, and
+	// the message names neither address.
+	f := &fake{ipMode: "edge"}
+	web, api := start(t, f)
+	err := byName(Run(context.Background(), nil, web, api))["client ip"]
+	if err == nil || !strings.Contains(err.Error(), "differed from the api's direct answer") {
+		t.Fatalf("got %v", err)
+	}
+	for _, addr := range []string{realIP, edgeIP} {
+		if strings.Contains(err.Error(), addr) {
+			t.Errorf("error contains %s: %q", addr, err)
+		}
+	}
+	// The same address both ways passes.
+	f = &fake{directIP: realIP}
+	web, api = start(t, f)
+	if err := byName(Run(context.Background(), nil, web, api))["client ip"]; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientIPDirectCallSendsForgedHeader(t *testing.T) {
+	var sawXFF atomic.Int32
+	as := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/health/ip" {
+			if x := r.Header.Get("X-Forwarded-For"); x == "203.0.113.7" || x == "198.51.100.23" {
+				sawXFF.Add(1)
+			}
+			w.Write([]byte(`{"ip":"` + realIP + `"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer as.Close()
+	web, _ := start(t, &fake{})
+	if err := byName(Run(context.Background(), nil, web, as.URL))["client ip"]; err != nil {
+		t.Fatal(err)
+	}
+	if sawXFF.Load() != 2 {
+		t.Fatalf("the api origin got %d calls with a forged X-Forwarded-For, want 2", sawXFF.Load())
 	}
 }
 

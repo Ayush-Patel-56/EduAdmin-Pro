@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/run"
 	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/stages"
@@ -59,9 +60,13 @@ type fakeDeps struct {
 	rollbacks   []string // "label deployment"
 	smokeArgs   [2]string
 	rewriteTo   string
-	noURL       bool       // Deploy succeeds but returns no URL
-	onSmoke     func()     // runs when smoke starts
-	rollbackCtx []ctxState // the context each Rollback got, as it was then
+	noURL       bool             // Deploy succeeds but returns no URL
+	onSmoke     func()           // runs when smoke starts
+	rollbackCtx []ctxState       // the context each Rollback got, as it was then
+	deployed    map[string]bool  // label -> deployed in this release
+	notLive     map[string]bool  // label -> its alias stays on the old deployment after deploying
+	aliasErr    map[string]error // label -> reading its alias after deploying fails
+	onLiveCheck func(label string)
 }
 
 func label(id string) string { return strings.TrimPrefix(id, "prj_") }
@@ -86,9 +91,25 @@ func (f *fakeDeps) RolledBack(_ context.Context, id string) (bool, error) {
 	return f.rolledBack[label(id)], nil
 }
 
+// PreviousProduction is what the production alias serves: the previous
+// deployment until the project is deployed, then the new one (unless notLive).
 func (f *fakeDeps) PreviousProduction(_ context.Context, id string) (string, bool, error) {
-	f.steps = append(f.steps, "previous "+label(id))
-	d, ok := f.prev[label(id)]
+	l := label(id)
+	if f.deployed[l] {
+		f.steps = append(f.steps, "live? "+l)
+		if f.onLiveCheck != nil {
+			f.onLiveCheck(l)
+		}
+		if err := f.aliasErr[l]; err != nil {
+			return "", false, err
+		}
+		if !f.notLive[l] {
+			return "dpl_" + l + "_new", true, nil
+		}
+	} else {
+		f.steps = append(f.steps, "previous "+l)
+	}
+	d, ok := f.prev[l]
 	return d, ok, nil
 }
 
@@ -116,6 +137,10 @@ func (f *fakeDeps) Deploy(_ context.Context, id string) (string, error) {
 	if err := f.deployErr[label(id)]; err != nil {
 		return "", err
 	}
+	if f.deployed == nil {
+		f.deployed = map[string]bool{}
+	}
+	f.deployed[label(id)] = true
 	if f.noURL {
 		return "", nil
 	}
@@ -192,9 +217,11 @@ func TestReleaseOrder(t *testing.T) {
 		"migrate",
 		"sync env api",
 		"deploy api",
+		"live? api",
 		"write rewrite",
 		"deploy web",
 		"restore rewrite",
+		"live? web",
 		"smoke",
 	}
 	if strings.Join(f.steps, "\n") != strings.Join(want, "\n") {
@@ -229,7 +256,8 @@ func TestReleaseStopsWhenRolledBack(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	for _, want := range []string{"Undo Rollback", "vercel promote", "eduadmin-web"} {
+	for _, want := range []string{"promoting the deployment that is serving now", "vercel promote", "Promote", "eduadmin-web",
+		"Undo Rollback only if the rollback was a false alarm"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should contain %q: %v", want, err)
 		}
@@ -268,7 +296,11 @@ func TestSmokeFailureRollsBackBoth(t *testing.T) {
 	if strings.Join(f.rollbacks, ",") != strings.Join(want, ",") {
 		t.Fatalf("rollbacks = %v, want %v", f.rollbacks, want)
 	}
-	for _, s := range []string{"smoke checks failed", "rolled back", "eduadmin-api", "eduadmin-web", "Undo Rollback", "vercel promote"} {
+	for _, s := range []string{"smoke checks failed", "rolled back", "eduadmin-api", "eduadmin-web",
+		// Promoting what serves now (the deployment rolled back to) keeps the good code live.
+		"`vercel promote dpl_api_prev` for eduadmin-api", "`vercel promote dpl_web_prev` for eduadmin-web", "Promote",
+		// Undo Rollback would put the failed release back.
+		"Undo Rollback only if the failure was a false alarm: it puts the failed release back live"} {
 		if !strings.Contains(err.Error(), s) {
 			t.Errorf("error should contain %q: %v", s, err)
 		}
@@ -291,10 +323,106 @@ func TestWebDeployFailureRollsBackAPI(t *testing.T) {
 	if countPrefix(f.steps, "restore rewrite") != 1 {
 		t.Errorf("vercel.json must be restored after a failed web deploy: %v", f.steps)
 	}
-	for _, s := range []string{"eduadmin-api", "rolled back", "vercel promote"} {
+	for _, s := range []string{"eduadmin-api", "rolled back", "`vercel promote dpl_api_prev` for eduadmin-api"} {
 		if !strings.Contains(err.Error(), s) {
 			t.Errorf("error should contain %q: %v", s, err)
 		}
+	}
+}
+
+// noLiveWait makes confirmLive check once instead of polling for 30 seconds.
+func noLiveWait(t *testing.T) {
+	t.Helper()
+	wait, poll := stages.LiveWait, stages.LivePoll
+	stages.LiveWait, stages.LivePoll = 0, time.Millisecond
+	t.Cleanup(func() { stages.LiveWait, stages.LivePoll = wait, poll })
+}
+
+func TestAPINotLiveStopsBeforeWebAndRollsBackNothing(t *testing.T) {
+	noLiveWait(t)
+	f := newFake()
+	f.notLive = map[string]bool{"api": true}
+	err, _ := release(t, f)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, s := range []string{"eduadmin-api deployed but not live", "rolled back or alias assignment failed", "web project was not deployed"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("error should contain %q: %v", s, err)
+		}
+	}
+	// The alias never moved, so there is nothing to roll back.
+	if len(f.rollbacks) != 0 || countPrefix(f.steps, "deploy web") != 0 || countPrefix(f.steps, "smoke") != 0 {
+		t.Fatalf("steps %v, rollbacks %v", f.steps, f.rollbacks)
+	}
+}
+
+func TestWebNotLiveRollsBackOnlyAPI(t *testing.T) {
+	noLiveWait(t)
+	f := newFake()
+	f.notLive = map[string]bool{"web": true}
+	err, _ := release(t, f)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "eduadmin-web deployed but not live") {
+		t.Errorf("got %v", err)
+	}
+	if strings.Join(f.rollbacks, ",") != "api dpl_api_prev" || countPrefix(f.steps, "smoke") != 0 {
+		t.Fatalf("steps %v, rollbacks %v (only what moved is rolled back)", f.steps, f.rollbacks)
+	}
+}
+
+func TestFirstReleaseNeedsAnAlias(t *testing.T) {
+	noLiveWait(t)
+	f := newFake()
+	f.prev = map[string]string{}
+	f.notLive = map[string]bool{"api": true}
+	err, _ := release(t, f)
+	if err == nil || !strings.Contains(err.Error(), "eduadmin-api deployed but not live: its production domain serves no deployment") {
+		t.Fatalf("got %v", err)
+	}
+
+	// With an alias on the new deployment, a first release goes through.
+	f = newFake()
+	f.prev = map[string]string{}
+	if err, _ := release(t, f); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLiveCheckErrorRollsBack(t *testing.T) {
+	noLiveWait(t)
+	f := newFake()
+	f.aliasErr = map[string]error{"web": errors.New("vercel: 500")}
+	err, _ := release(t, f)
+	if err == nil || !strings.Contains(err.Error(), "checking that eduadmin-web went live failed") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Join(f.rollbacks, ",") != "api dpl_api_prev,web dpl_web_prev" {
+		t.Fatalf("an unknown state is rolled back like a smoke failure, got %v", f.rollbacks)
+	}
+}
+
+func TestLiveCheckWaitsForAliasToMove(t *testing.T) {
+	wait, poll := stages.LiveWait, stages.LivePoll
+	stages.LiveWait, stages.LivePoll = 5*time.Second, time.Millisecond
+	t.Cleanup(func() { stages.LiveWait, stages.LivePoll = wait, poll })
+	f := newFake()
+	f.notLive = map[string]bool{"api": true}
+	checks := 0
+	f.onLiveCheck = func(l string) {
+		if l == "api" {
+			if checks++; checks == 3 {
+				delete(f.notLive, "api")
+			}
+		}
+	}
+	if err, _ := release(t, f); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 3 {
+		t.Fatalf("checked %d times, want 3", checks)
 	}
 }
 

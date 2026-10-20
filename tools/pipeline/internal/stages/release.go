@@ -41,10 +41,19 @@ type ReleaseDeps interface {
 	Rollback(ctx context.Context, projectID, deploymentID string) error
 }
 
-// undoHint is how to get out of a rolled-back state, for the error text.
-const undoHint = "Production domains stay on the rolled-back deployment, and new deployments won't go live, until the rollback is undone: " +
-	"once the problem is fixed, use Undo Rollback on the project's production deployment in the Vercel dashboard, " +
-	"or run `vercel promote <deployment-url-or-id>`, then run the release again"
+// clearHint is how to get out of the rolled-back state Release leaves behind,
+// for the error text. promote names what to promote (the deployments the
+// projects were rolled back to, which serve now).
+//
+// Promoting the deployment that serves now clears the state and keeps the good
+// code live. Undo Rollback would clear it too, but by putting the failed
+// release back, so it is only for a false alarm.
+func clearHint(promote string) string {
+	return "Production domains stay on the rolled-back deployment, and new deployments won't go live, until the rolled-back state is cleared. " +
+		"Once the problem is fixed, clear it by promoting the deployment that is serving now, which keeps the good code live: " +
+		promote + ", or in the Vercel dashboard open Deployments, then the current production deployment, then Promote. " +
+		"Then run the release again. Use Undo Rollback only if the failure was a false alarm: it puts the failed release back live"
+}
 
 // target is a project together with what to roll it back to.
 type target struct {
@@ -93,8 +102,9 @@ func Release(ctx context.Context, r *run.Runner, d ReleaseDeps) error {
 	}
 	if len(stuck) > 0 {
 		return fmt.Errorf("still rolled back from an earlier release: %s. A new deployment would not go live, so nothing was migrated or deployed. "+
-			"Check the live site, then undo the rollback: use Undo Rollback on the project's production deployment in the Vercel dashboard, "+
-			"or run `vercel promote <deployment-url-or-id>`. Then run the release again", strings.Join(stuck, ", "))
+			"Check the live site, then clear the rolled-back state by promoting the deployment that is serving now, which keeps the code that is live now: "+
+			"in the Vercel dashboard open Deployments, then the current production deployment, then Promote, or run `vercel promote <that deployment's URL or ID>`. "+
+			"Use Undo Rollback only if the rollback was a false alarm: it puts the failed release back live. Then run the release again", strings.Join(stuck, ", "))
 	}
 	apiT, webT := target{project: api}, target{project: web}
 	for _, t := range []*target{&apiT, &webT} {
@@ -144,6 +154,12 @@ func Release(ctx context.Context, r *run.Runner, d ReleaseDeps) error {
 		return fmt.Errorf("deploying %s failed: %w. The database is migrated; the web project was not deployed", api.Name, err)
 	}
 	printDeployed(r, api.Name, apiURL)
+	if moved, err := confirmLive(ctx, r, d, apiT); err != nil {
+		if moved {
+			return rollBack(ctx, r, d, err, apiT)
+		}
+		return fmt.Errorf("%w. The database is migrated; the web project was not deployed", err)
+	}
 
 	r.Stage("deploy web")
 	webURL, err := deployWeb(ctx, r, d, web, apiOrigin)
@@ -151,6 +167,12 @@ func Release(ctx context.Context, r *run.Runner, d ReleaseDeps) error {
 		return rollBack(ctx, r, d, fmt.Errorf("deploying %s failed: %w", web.Name, err), apiT)
 	}
 	printDeployed(r, web.Name, webURL)
+	if moved, err := confirmLive(ctx, r, d, webT); err != nil {
+		if moved {
+			return rollBack(ctx, r, d, err, apiT, webT)
+		}
+		return rollBack(ctx, r, d, err, apiT)
+	}
 
 	r.Stage("smoke")
 	if err := d.Smoke(ctx, webOrigin, apiOrigin); err != nil {
@@ -172,6 +194,50 @@ func ensure(ctx context.Context, r *run.Runner, d ReleaseDeps, spec vercel.Proje
 	}
 	r.Printf("project %s ready", p.Name)
 	return p, nil
+}
+
+// LiveWait bounds how long confirmLive waits for a project's production alias
+// to move to the new deployment, polling every LivePoll. The CLI normally
+// returns once the alias is assigned, so this only covers a lagging read.
+var (
+	LiveWait = 30 * time.Second
+	LivePoll = 3 * time.Second
+)
+
+// confirmLive checks that a deploy went live: the project's production alias
+// must now point at a deployment other than the one it served before (on a
+// first release, at some deployment). A project that is rolled back, or whose
+// alias assignment failed, keeps serving the old one even though the deploy
+// "succeeded". moved reports whether the alias left the old deployment, i.e.
+// whether there is anything to roll back.
+func confirmLive(ctx context.Context, r *run.Runner, d ReleaseDeps, t target) (moved bool, err error) {
+	deadline := time.Now().Add(LiveWait)
+	for {
+		cur, ok, err := d.PreviousProduction(ctx, t.project.ID)
+		if err != nil {
+			// The state is unknown: assume it moved, so it is rolled back.
+			return true, fmt.Errorf("checking that %s went live failed: %w", t.project.Name, err)
+		}
+		if ok && (!t.hasPrev || cur != t.prev) {
+			r.Printf("%s is live: production serves %s", t.project.Name, cur)
+			return true, nil
+		}
+		wait := time.Until(deadline)
+		if wait <= 0 {
+			still := "still serves the previous deployment"
+			if !ok {
+				still = "serves no deployment"
+			}
+			return false, fmt.Errorf("%s deployed but not live: its production domain %s. "+
+				"The project may be rolled back or alias assignment failed", t.project.Name, still)
+		}
+		select {
+		case <-ctx.Done():
+			// Cancelled mid-check: the state is unknown, so roll back as for an error.
+			return true, fmt.Errorf("checking that %s went live: %w", t.project.Name, ctx.Err())
+		case <-time.After(min(wait, LivePoll)):
+		}
+	}
 }
 
 // deployWeb writes the API origin into apps/web/vercel.json, deploys the web
@@ -198,7 +264,7 @@ func rollBack(ctx context.Context, r *run.Runner, d ReleaseDeps, cause error, ta
 	// or production is left half new and half old.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RollbackTimeout)
 	defer cancel()
-	var done, notes []string
+	var done, promote, notes []string
 	for _, t := range targets {
 		if !t.hasPrev {
 			notes = append(notes, fmt.Sprintf("%s has no earlier production deployment to roll back to (this was its first release), so it stays on the new deployment", t.project.Name))
@@ -210,6 +276,7 @@ func rollBack(ctx context.Context, r *run.Runner, d ReleaseDeps, cause error, ta
 		}
 		r.Printf("%s rolled back to %s", t.project.Name, t.prev)
 		done = append(done, fmt.Sprintf("%s to %s", t.project.Name, t.prev))
+		promote = append(promote, fmt.Sprintf("`vercel promote %s` for %s", t.prev, t.project.Name))
 	}
 	msg := cause.Error()
 	if len(done) > 0 {
@@ -219,7 +286,7 @@ func rollBack(ctx context.Context, r *run.Runner, d ReleaseDeps, cause error, ta
 		msg += ". " + n
 	}
 	if len(done) > 0 {
-		msg += ". " + undoHint
+		msg += ". " + clearHint("run "+strings.Join(promote, " and "))
 	}
 	return fmt.Errorf("%s", msg)
 }
