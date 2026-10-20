@@ -39,7 +39,7 @@ func main() {
 	// Register secrets before anything can print them.
 	r.Mask(run.MaskFromEnv(os.Environ())...)
 
-	err = dispatch(ctx, r, stage)
+	err = dispatch(ctx, r, stage, os.Args[2:])
 	r.Close()
 	stop()
 	if err != nil {
@@ -52,7 +52,10 @@ func main() {
 func validate(stage string, args []string) error {
 	switch stage {
 	case "check", "e2e", "setup":
-	case "release", "smoke":
+	case "smoke":
+		_, _, err := parseSmokeArgs(args)
+		return err
+	case "release":
 		return fmt.Errorf("not implemented yet")
 	default:
 		return fmt.Errorf("unknown stage (%s)", usage)
@@ -63,7 +66,7 @@ func validate(stage string, args []string) error {
 	return nil
 }
 
-func dispatch(ctx context.Context, r *run.Runner, stage string) error {
+func dispatch(ctx context.Context, r *run.Runner, stage string, args []string) error {
 	switch stage {
 	case "check":
 		return stages.Check(ctx, r)
@@ -71,6 +74,12 @@ func dispatch(ctx context.Context, r *run.Runner, stage string) error {
 		return stages.E2E(ctx, r, os.Getenv("DATABASE_URL"))
 	case "setup":
 		return runSetup(ctx, r, os.Stdout, os.Getenv, vercel.DefaultBase)
+	case "smoke":
+		web, api, err := parseSmokeArgs(args)
+		if err != nil {
+			return err
+		}
+		return runSmoke(ctx, r, os.Stdout, nil, web, api)
 	}
 	return nil
 }

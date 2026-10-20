@@ -11,8 +11,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/run"
+	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/smoke"
 )
 
 func TestStageErrorRedactsSecrets(t *testing.T) {
@@ -36,6 +38,14 @@ func TestValidate(t *testing.T) {
 	}{
 		{"check", nil, true}, {"e2e", nil, true}, {"setup", nil, true},
 		{"setup", []string{"x"}, false}, {"nope", nil, false}, {"release", nil, false},
+		{"smoke", nil, false},
+		{"smoke", []string{"--web", "https://w.example"}, false},
+		{"smoke", []string{"--web", "https://w.example", "--api", "https://a.example"}, true},
+		{"smoke", []string{"--api", "https://a.example", "--web", "https://w.example"}, true},
+		{"smoke", []string{"--web=https://w.example", "--api=https://a.example"}, true},
+		{"smoke", []string{"--web", "w.example", "--api", "https://a.example"}, false},
+		{"smoke", []string{"--web", "https://w.example", "--api", "https://a.example", "x"}, false},
+		{"smoke", []string{"--bogus"}, false},
 	} {
 		if err := validate(tc.stage, tc.args); (err == nil) != tc.ok {
 			t.Errorf("validate(%q, %v) = %v", tc.stage, tc.args, err)
@@ -134,4 +144,39 @@ func envPairs(m map[string]string) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+func TestRunSmokeRedactsAndReports(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+	var out bytes.Buffer
+	runner := run.New(t.TempDir(), &out)
+	runner.Mask("127.0.0.1")
+	smoke.Attempts, smoke.Wait = 1, 0
+	defer func() { smoke.Attempts, smoke.Wait = 3, 5*time.Second }()
+	err := runSmoke(context.Background(), runner, &out, nil, srv.URL, srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "smoke checks failed") {
+		t.Fatalf("got %v", err)
+	}
+	if !strings.Contains(out.String(), "FAIL web shell") {
+		t.Errorf("output: %s", out.String())
+	}
+}
+
+func TestRunSmokePrintsNoOKWhenDown(t *testing.T) {
+	// A server that is down: every check fails, nothing prints "ok".
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close()
+	var out bytes.Buffer
+	smoke.Attempts, smoke.Wait = 1, 0
+	defer func() { smoke.Attempts, smoke.Wait = 3, 5*time.Second }()
+	if err := runSmoke(context.Background(), run.New(t.TempDir(), &out), &out, nil, url, url); err == nil {
+		t.Fatal("expected failure")
+	}
+	if strings.Contains(out.String(), "ok   ") {
+		t.Errorf("output: %s", out.String())
+	}
 }
