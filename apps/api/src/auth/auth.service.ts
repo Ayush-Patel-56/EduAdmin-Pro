@@ -11,6 +11,7 @@ import * as argon2 from 'argon2';
 import { linkFacultyProfile } from '../academic/faculty-link.js';
 import { Prisma, type User } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { avatarUrlOf } from './avatar.service.js';
 import type {
   AdminSignupDto,
   LoginDto,
@@ -212,6 +213,7 @@ export class AuthService {
           include: { school: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'asc' },
         },
+        avatar: { select: { updatedAt: true } },
       },
     });
     return {
@@ -220,6 +222,7 @@ export class AuthService {
       fullName: user.fullName,
       accountType: user.accountType,
       emailVerified: user.emailVerified,
+      avatarUrl: avatarUrlOf(user),
       preferences: toPreferences(user),
       activeSchoolId,
       memberships: user.memberships.map((m) => ({

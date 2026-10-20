@@ -1,18 +1,22 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Bell, BellOff, HelpCircle, LogOut, Menu, Settings, X, type LucideIcon } from 'lucide-react'
+import { HelpCircle, LogOut, Menu, Settings, X, type LucideIcon } from 'lucide-react'
 import { useDismiss } from '@/components/ui/useDismiss'
 import { useLogout } from '@/features/auth/session'
 import { preferencesOf, type AccentTheme, type Me } from '@/features/auth/types'
 import { GlobalSearch, type RemoteSearch, type SearchItem } from './GlobalSearch'
 import { HelpCenterDialog } from './HelpCenterDialog'
+import { Avatar } from './Avatar'
+import { NotificationsMenu } from './NotificationsMenu'
 import { PreferencesDialog } from './PreferencesDialog'
+import { ProfilePictureDialog } from './ProfilePictureDialog'
 
 export type NavItem = { path: string; label: string; icon: LucideIcon }
 
 export type ProfileMenuActions = {
   close: () => void
   openPreferences: () => void
+  openProfilePicture: () => void
 }
 
 type PortalShellProps = {
@@ -38,7 +42,7 @@ type PortalShellProps = {
   children: ReactNode
 }
 
-type Dialog = 'help' | 'preferences' | null
+type Dialog = 'help' | 'preferences' | 'picture' | null
 
 /** Sidebar + top bar layout shared by the admin dashboard and the faculty portal. */
 export function PortalShell({
@@ -63,6 +67,7 @@ export function PortalShell({
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   const closeDialog = useCallback(() => setDialog(null), [])
   const openPreferences = useCallback(() => setDialog('preferences'), [])
+  const openProfilePicture = useCallback(() => setDialog('picture'), [])
   useDismiss(menuRef, menuOpen, closeMenu)
   const initial = me.fullName.trim().charAt(0).toUpperCase()
   const accent = (preferencesOf(me).accentTheme ?? defaultAccent).toLowerCase()
@@ -174,11 +179,11 @@ export function PortalShell({
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 aria-label="Account menu"
-                className={`flex size-9 items-center justify-center rounded-full text-sm font-semibold text-white ring-offset-2 transition hover:ring-2 hover:ring-slate-200 focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:outline-none ${avatarClassName}`}
+                className="flex size-9 items-center justify-center rounded-full ring-offset-2 transition hover:ring-2 hover:ring-slate-200 focus-visible:ring-2 focus-visible:ring-indigo-300 focus-visible:outline-none"
               >
-                {initial}
+                <Avatar me={me} className={`size-9 rounded-full text-sm ${avatarClassName}`} />
               </button>
-              {menuOpen && renderProfileMenu({ close: closeMenu, openPreferences })}
+              {menuOpen && renderProfileMenu({ close: closeMenu, openPreferences, openProfilePicture })}
             </div>
           </div>
         </header>
@@ -190,6 +195,7 @@ export function PortalShell({
       {dialog === 'preferences' && (
         <PreferencesDialog me={me} defaultAccent={defaultAccent} roleLabel={roleLabel} onClose={closeDialog} />
       )}
+      {dialog === 'picture' && <ProfilePictureDialog me={me} onClose={closeDialog} />}
     </div>
   )
 }
@@ -199,42 +205,5 @@ function HeaderButton({ icon: Icon, label, onClick }: { icon: LucideIcon; label:
     <button type="button" aria-label={label} title={label} onClick={onClick} className="text-slate-500 hover:text-slate-800">
       <Icon className="size-5" />
     </button>
-  )
-}
-
-/** Bell dropdown. Nothing publishes notifications yet, so it shows the empty state. */
-function NotificationsMenu() {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  const close = useCallback(() => setOpen(false), [])
-  useDismiss(ref, open, close)
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Notifications"
-        title="Notifications"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="flex text-slate-500 hover:text-slate-800"
-      >
-        <Bell className="size-5" />
-      </button>
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Notifications"
-          className="absolute top-full right-0 z-40 mt-3 w-[min(300px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_50px_-12px_rgba(15,23,42,0.25)]"
-        >
-          <p className="border-b border-slate-100 px-4 py-3 text-sm font-bold text-slate-900">Notifications</p>
-          <div className="flex flex-col items-center px-4 py-8 text-center">
-            <BellOff className="size-6 text-slate-300" />
-            <p className="mt-2 text-sm text-slate-500">No notifications yet</p>
-          </div>
-        </div>
-      )}
-    </div>
   )
 }

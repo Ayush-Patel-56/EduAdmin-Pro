@@ -8,7 +8,6 @@ import {
   GraduationCap,
   Loader2,
   MessageSquare,
-  MoreVertical,
   Pencil,
   Trash2,
   Upload,
@@ -19,6 +18,7 @@ import { todayIst } from '@/lib/dates'
 import { downloadFile, toCsv } from '@/lib/spreadsheet'
 import { ConfirmDialog, ErrorBanner } from '@/components/ui/form'
 import { useDismiss } from '@/components/ui/useDismiss'
+import { FloatingMenu } from '@/components/ui/FloatingMenu'
 import { FACULTY_STATUS_LABELS, type Faculty, type FacultyStatus } from '@/features/academic/api'
 import { COUNSELING_STATUS_LABELS, COUNSELING_TYPE_LABELS, type CounselingStatus, type CounselingType } from '@/features/counseling/api'
 import { useDirectory, useInvalidateFaculty, usePortalOverview, type DirectoryRow, type FacultyDetail } from '@/features/faculty/api'
@@ -53,28 +53,13 @@ function Kpi({ icon: Icon, label, value }: { icon: typeof UserRound; label: stri
 
 function Card({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
         <h2 className="text-base font-bold text-slate-900">{title}</h2>
         {action}
       </div>
       {children}
     </section>
-  )
-}
-
-function Menu({ label, children }: { label: string; children: (close: () => void) => ReactNode }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  const close = useCallback(() => setOpen(false), [])
-  useDismiss(ref, open, close)
-  return (
-    <div ref={ref} className="relative">
-      <button type="button" aria-label={label} aria-expanded={open} onClick={() => setOpen((o) => !o)} className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
-        <MoreVertical className="size-4" />
-      </button>
-      {open && <div role="menu" className="absolute right-0 z-20 mt-1 w-40 rounded-xl border border-slate-200 bg-white py-1 shadow-lg">{children(close)}</div>}
-    </div>
   )
 }
 
@@ -151,7 +136,7 @@ export function TeacherPortalPage() {
         <Kpi icon={MessageSquare} label="Counseling Sessions Logged" value={k?.counselingSessions} />
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_400px]">
+      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Card
           title="Faculty Directory"
           action={
@@ -217,7 +202,7 @@ export function TeacherPortalPage() {
                         {busy === f.id ? (
                           <Loader2 className="ml-auto size-4 animate-spin text-slate-400" />
                         ) : (
-                          <Menu label={`Actions for ${f.name}`}>
+                          <FloatingMenu label={`Actions for ${f.name}`}>
                             {(close) => (
                               <>
                                 <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); openProfile(f.id) }}><UserRound className="size-4" /> Profile</button>
@@ -226,7 +211,7 @@ export function TeacherPortalPage() {
                                 <button type="button" className={`${menuItem} text-red-600`} onClick={() => { close(); setDeleting(f) }}><Trash2 className="size-4" /> Delete</button>
                               </>
                             )}
-                          </Menu>
+                          </FloatingMenu>
                         )}
                       </td>
                     </tr>
@@ -268,14 +253,14 @@ export function TeacherPortalPage() {
           <Card
             title="Recent Counseling Logs"
             action={
-              <Menu label="Counseling options">
+              <FloatingMenu label="Counseling options">
                 {(close) => (
                   <>
                     <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); navigate('/management/counseling') }}>Open Counseling</button>
                     <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); setUploads('assignments') }}>View assignments</button>
                   </>
                 )}
-              </Menu>
+              </FloatingMenu>
             }
           >
             {!overview.data ? (

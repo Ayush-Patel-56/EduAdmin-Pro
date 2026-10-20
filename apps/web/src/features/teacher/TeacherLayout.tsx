@@ -40,13 +40,14 @@ export function TeacherLayout() {
       nav={teacherNav}
       extraPages={teacherExtraSections}
       avatarClassName="bg-ink"
-      renderProfileMenu={({ close, openPreferences }) => (
+      renderProfileMenu={({ close, openPreferences, openProfilePicture }) => (
         <ProfileMenu
           me={me}
           schoolName={schoolName}
           onSwitchSchool={openSwitchSchool}
           onPreferences={openPreferences}
           onMyProfile={openMyProfile}
+          onProfilePicture={openProfilePicture}
           onClose={close}
         />
       )}

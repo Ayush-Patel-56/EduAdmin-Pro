@@ -133,7 +133,7 @@ describe('SyllabusService.import: honest counts when another import wins a race'
     },
     $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
   } as unknown as PrismaService;
-  const syllabus = new SyllabusService(prisma);
+  const syllabus = new SyllabusService(prisma, { syllabusChanged: vi.fn() } as never);
   const dto = {
     dryRun: false,
     defaults: { batchId: 'b1', subject: 'Physics' },

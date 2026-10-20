@@ -218,9 +218,10 @@ model User {
   emailVerified      Boolean      @default(false)
   adminInviteCodeId  String? // which admin invite code created this account
   // Account Preferences
-  emailNotifications Boolean      @default(true) // report digest emails
+  emailNotifications Boolean      @default(false) // the daily report digest: off until the user turns it on (#54)
   syllabusUpdates    Boolean      @default(true) // syllabus coverage alerts
   accentTheme        AccentTheme?
+  avatarUrl          String? // a profile picture hosted online (https); an uploaded one (UserAvatar) takes precedence
   createdAt          DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime     @updatedAt @db.Timestamptz(3)
 
@@ -233,6 +234,9 @@ model User {
   facultyProfiles    Faculty[]
   counselingSessions CounselingSession[]
   markedOccurrences  ClassOccurrence[]
+  avatar             UserAvatar?
+  notifications      Notification[]
+  emailDigests       EmailDigest[]
 }
 
 // Opaque login sessions. Only a SHA-256 hash of the cookie token is stored,
@@ -345,6 +349,7 @@ model School {
   dailyRatings    DailyRating[]
   studentMarks    StudentMark[]
   progressReports ProgressReport[]
+  notifications   Notification[]
 }
 
 // Role lives on the membership, not the user: an admin can belong to many
@@ -1837,4 +1842,59 @@ model ProgressReport {
 
   @@unique([studentId, academicYear, term])
   @@index([schoolId, academicYear, term])
+}
+
+// Account settings (PRD 3.x: profile picture, Account Preferences).
+
+// A profile picture uploaded by the user: a small image (resized in the
+// browser, at most 256 KB) kept with the account rather than in a school's
+// file storage, as an account spans schools. Shown only to the user.
+model UserAvatar {
+  userId      String   @id
+  contentType String // image/jpeg, image/png or image/webp (checked against the bytes)
+  data        Bytes
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum NotificationKind {
+  SYLLABUS_UPDATE // a chapter's syllabus status changed (Account Preferences: Syllabus Updates)
+}
+
+// An in-app notification (the bell) for one user about one school. Created
+// only for users whose preferences ask for that kind; read while the user is
+// still an active member of the school.
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  schoolId  String
+  kind      NotificationKind
+  title     String
+  body      String
+  link      String? // a path in the user's portal
+  readAt    DateTime?        @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([schoolId])
+}
+
+// The daily report digest emailed to a user for one day (Account
+// Preferences: Email Notifications): one row per user and day, claimed before
+// each attempt, so a digest is sent once however many API instances run the
+// job, and a failing one is tried at most DIGEST_MAX_ATTEMPTS times.
+model EmailDigest {
+  userId    String
+  day       DateTime  @db.Date // the IST day the digest covers
+  attempts  Int       @default(1) // 1-10, checked by the database
+  claimedAt DateTime  @default(now()) @db.Timestamptz(3) // the latest attempt began
+  sentAt    DateTime? @db.Timestamptz(3) // sent (or nothing to send); null while failing
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, day])
 }

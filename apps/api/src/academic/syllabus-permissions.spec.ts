@@ -36,8 +36,11 @@ describe('SyllabusService: who may touch which batch', () => {
     },
     school: { findUniqueOrThrow: vi.fn() },
     program: { findFirst: vi.fn() },
+    // A change reads the status before it under a row lock, in a transaction run against these mocks.
+    $queryRaw: vi.fn().mockResolvedValue([{ status: 'NOT_STARTED' }]),
+    $transaction: vi.fn((run: (tx: unknown) => unknown) => run(prisma)),
   } as unknown as PrismaService;
-  const syllabus = new SyllabusService(prisma);
+  const syllabus = new SyllabusService(prisma, { syllabusChanged: vi.fn() } as never);
   const teacherScope = [MINE];
 
   beforeEach(() => {

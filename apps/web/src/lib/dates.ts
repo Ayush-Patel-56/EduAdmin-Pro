@@ -9,3 +9,12 @@ export function academicYearIst(startMonth: number, now = new Date()): string {
   const start = month >= startMonth ? year : year - 1
   return `${start}-${start + 1}`
 }
+
+/** "5 min ago", "3 h ago", "2 Oct". */
+export function timeAgo(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000))
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`
+  if (s < 86_400) return `${Math.floor(s / 3600)} h ago`
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }).format(new Date(iso))
+}

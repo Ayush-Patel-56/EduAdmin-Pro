@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { academicYearIst, todayIst } from './dates'
+import { academicYearIst, todayIst, timeAgo } from './dates'
 
 describe('todayIst', () => {
   it('is already the next day just after midnight IST (still the old day in UTC)', () => {
@@ -25,5 +25,16 @@ describe('academicYearIst', () => {
   })
   it('handles a January start', () => {
     expect(academicYearIst(1, new Date('2026-12-31T19:00:00Z'))).toBe('2027-2028')
+  })
+})
+
+describe('timeAgo', () => {
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  it('reads as just now, minutes, hours, then the IST day', () => {
+    expect(timeAgo('2026-10-20T11:59:30Z', now)).toBe('just now')
+    expect(timeAgo('2026-10-20T11:55:00Z', now)).toBe('5 min ago')
+    expect(timeAgo('2026-10-20T09:00:00Z', now)).toBe('3 h ago')
+    // 20:00 UTC on 18 Oct is already 19 Oct in India.
+    expect(timeAgo('2026-10-18T20:00:00Z', now)).toBe('19 Oct')
   })
 })

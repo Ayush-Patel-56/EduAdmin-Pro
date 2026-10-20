@@ -27,6 +27,8 @@ export type Me = {
   fullName: string
   accountType: AccountType
   emailVerified: boolean
+  /** The profile picture (an uploaded one, served by the API, or a link); null shows the initial. */
+  avatarUrl?: string | null
   /** Absent when talking to an API that predates Account Preferences. */
   preferences?: Preferences
   activeSchoolId: string | null
@@ -39,7 +41,7 @@ export const adminSchools = (me: Me) =>
   me.memberships.filter((m) => m.role === 'ADMIN' && m.status === 'ACTIVE')
 
 export const DEFAULT_PREFERENCES: Preferences = {
-  emailNotifications: true,
+  emailNotifications: false,
   syllabusUpdates: true,
   accentTheme: null,
 }

@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check } from 'lucide-react'
+import { Check, Loader2, Mail } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { Dialog } from '@/components/ui/Dialog'
 import { FormError } from '@/features/auth/AuthInput'
 import { meQueryKey } from '@/features/auth/session'
 import { preferencesOf, type AccentTheme, type Me, type Preferences } from '@/features/auth/types'
+import { Avatar } from './Avatar'
 
 const ACCENTS: { value: AccentTheme; label: string; swatch: string }[] = [
   { value: 'INDIGO', label: 'Indigo', swatch: 'bg-[#4f46e5]' },
@@ -28,7 +29,17 @@ export function PreferencesDialog({ me, defaultAccent, roleLabel, onClose }: Pre
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const accent = values.accentTheme ?? defaultAccent
-  const initial = me.fullName.trim().charAt(0).toUpperCase()
+  const [digest, setDigest] = useState<{ busy: boolean; message: string | null; error: boolean }>({ busy: false, message: null, error: false })
+
+  async function sendDigest() {
+    setDigest({ busy: true, message: null, error: false })
+    try {
+      const out = await api<{ to: string }>('/notifications/digest/send', { method: 'POST' })
+      setDigest({ busy: false, message: `Today's digest is on its way to ${out.to}.`, error: false })
+    } catch (err) {
+      setDigest({ busy: false, message: err instanceof ApiError ? err.message : 'Unable to reach the server', error: true })
+    }
+  }
 
   async function save() {
     setError(null)
@@ -50,9 +61,7 @@ export function PreferencesDialog({ me, defaultAccent, roleLabel, onClose }: Pre
     <Dialog title="Account Preferences" description="Notifications and appearance for your account" onClose={onClose}>
       <div className="space-y-6 px-6 py-5">
         <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-brand-600 text-sm font-semibold text-white">
-            {initial}
-          </span>
+          <Avatar me={me} className="size-11 shrink-0 rounded-full bg-brand-600 text-sm" />
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-900">{me.fullName}</p>
             <p className="truncate text-xs text-slate-500">{me.email}</p>
@@ -67,16 +76,27 @@ export function PreferencesDialog({ me, defaultAccent, roleLabel, onClose }: Pre
           <div className="mt-3 divide-y divide-slate-100 rounded-xl border border-slate-200">
             <Toggle
               label="Email Notifications"
-              hint="Daily report digest by email"
+              hint={me.emailVerified ? 'Daily report digest by email, at 7 PM (India time). Off until you turn it on.' : 'Daily report digest by email, at 7 PM (India time). Verify your email address to receive it.'}
               checked={values.emailNotifications}
               onChange={(v) => setValues((p) => ({ ...p, emailNotifications: v }))}
             />
             <Toggle
               label="Syllabus Updates"
-              hint="Alerts when syllabus coverage changes"
+              hint="Alerts in the bell when a chapter's syllabus status changes"
               checked={values.syllabusUpdates}
               onChange={(v) => setValues((p) => ({ ...p, syllabusUpdates: v }))}
             />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <button
+              type="button"
+              onClick={() => void sendDigest()}
+              disabled={digest.busy || !me.emailVerified}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+            >
+              {digest.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Mail className="size-3.5" />} Email me today's digest now
+            </button>
+            {digest.message && <span className={`text-[11px] ${digest.error ? 'text-red-600' : 'text-emerald-700'}`}>{digest.message}</span>}
           </div>
         </fieldset>
 

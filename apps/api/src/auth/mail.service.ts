@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import nodemailer, { type Transporter } from 'nodemailer';
 
 export type VerificationEmail = { to: string; name: string; code: string; ttlMinutes: number };
+export type Email = { to: string; subject: string; text: string; html: string };
 
 /**
  * Sends email over SMTP (e.g. Gmail with an App Password). When SMTP isn't
@@ -35,6 +36,15 @@ export class MailService {
       }
       this.logger.warn('SMTP not configured: verification codes will be logged, not emailed');
     }
+  }
+
+  /** Any other email (e.g. the daily report digest). Without SMTP, only who it was for and what about is logged. */
+  async send({ to, subject, text, html }: Email): Promise<void> {
+    if (!this.transporter) {
+      this.logger.log(`Email to ${to}: ${subject}`);
+      return;
+    }
+    await this.transporter.sendMail({ from: this.from, to, subject, text, html });
   }
 
   async sendVerificationCode({ to, name, code, ttlMinutes }: VerificationEmail): Promise<void> {

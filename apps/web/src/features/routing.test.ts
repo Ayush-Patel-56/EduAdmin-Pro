@@ -54,6 +54,6 @@ describe('preferencesOf (older API without preferences)', () => {
 
   it('fills any missing field from the defaults', () => {
     const partial = { preferences: { accentTheme: 'BLUE' } } as Parameters<typeof preferencesOf>[0]
-    expect(preferencesOf(partial)).toEqual({ emailNotifications: true, syllabusUpdates: true, accentTheme: 'BLUE' })
+    expect(preferencesOf(partial)).toEqual({ emailNotifications: false, syllabusUpdates: true, accentTheme: 'BLUE' })
   })
 })

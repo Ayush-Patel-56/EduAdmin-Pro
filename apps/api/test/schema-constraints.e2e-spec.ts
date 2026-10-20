@@ -40,7 +40,7 @@ describe('school-tied foreign keys keep their SET NULL column list (e2e)', () =>
   });
 });
 
-/** CHECKs from the student reports migration (HLD 8.3: rating levels, report-import rules). */
+/** CHECKs Prisma can't express: the student reports (HLD 8.3: rating levels, report-import rules) and profile pictures. */
 describe('student report CHECK constraints (e2e)', () => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
 
@@ -54,6 +54,9 @@ describe('student report CHECK constraints (e2e)', () => {
     ['StudentMark_attendance_check', 'CHECK (((attendance IS NULL) OR ((attendance >= (0)::numeric) AND (attendance <= (100)::numeric))))'],
     ['StudentMark_year_check', 'CHECK ((("academicYear" >= 2000) AND ("academicYear" <= 2100)))'],
     ['ProgressReport_year_check', 'CHECK ((("academicYear" >= 2000) AND ("academicYear" <= 2100)))'],
+    ['UserAvatar_image_check', "CHECK (((\"contentType\" = ANY (ARRAY['image/jpeg'::text, 'image/png'::text, 'image/webp'::text])) AND ((octet_length(data) >= 1) AND (octet_length(data) <= 262144))))"],
+    ['User_avatarUrl_check', "CHECK (((\"avatarUrl\" IS NULL) OR ((\"avatarUrl\" ~~ 'https://%'::text) AND (length(\"avatarUrl\") <= 500))))"],
+    ['EmailDigest_attempts_check', 'CHECK (((attempts >= 1) AND (attempts <= 10)))'],
   ])('%s', async (name, definition) => {
     const [row] = await prisma.$queryRaw<{ def: string }[]>`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = ${name}`;
     expect(row?.def).toBe(definition);

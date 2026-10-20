@@ -292,6 +292,51 @@ New enums, three new tables and two nullable columns on `Assignment`, in a trans
 - Clear All Data removes ratings, marks and remarks with the rest of the academic data.
 - If the migration times out behind a long query on `Assignment`, mark it `--rolled-back` and deploy again.
 
+## Account settings (`20261020090000_account_settings`)
+
+New tables and one nullable column, in a transaction with `lock_timeout = 10s`. Nothing to backfill or check before deploying.
+
+- **Profile picture.** Any account can paste an https link (`User.avatarUrl`) or upload a picture.
+  - The browser crops an upload to a square and resizes it to 256 px before sending.
+  - It's kept in `UserAvatar`: one row per account, at most 256 KB, JPEG, PNG or WebP. A CHECK holds the type and size, and the bytes are checked against the type.
+  - It's served only to its owner, at `GET /api/auth/avatar`, as its stored type (`nosniff`) and with `Cache-Control: no-store`, so a shared computer keeps no copy after sign-out.
+  - It's kept with the account, not in a school's R2 storage, because an account spans schools.
+- **Syllabus Updates.** These show as in-app notifications (the bell, `Notification`).
+  - When a chapter's syllabus status changes (a card moved, an edit or an import), the school's admins and the batch's active teachers who keep the preference on are told.
+  - The person who made the change is never told.
+  - A user reads a school's notifications only while they're an active member of it (and, as a teacher, while their faculty profile isn't inactive; on leave still counts).
+  - A status is read under a row lock before each change, so two identical moves at once notify once.
+  - Read notifications older than 60 days are pruned.
+  - Clear All Data removes a school's notifications.
+- **Email Notifications.** This is the daily report digest.
+  - It's **opt-in**: off for every account until its owner turns it on (see `20261020100000_digest_opt_in`).
+  - From `DIGEST_HOUR_IST` (default 19, i.e. 7 PM India time), the API emails each account that turned it on.
+  - An admin gets each of their schools' daily teacher reports for the day: how many came in, late or flagged, and who hasn't reported.
+  - A teacher gets their own reports for the day and any that are flagged.
+  - Digests go only to **verified** addresses, so school data never reaches an address nobody confirmed.
+  - `EmailDigest` records one row per account and day, claimed before each attempt. Several API instances send each digest once.
+  - A failed send is retried on a later tick (every 10 minutes), at most 3 times a day. A run stops after 5 failed sends in a row (a spent mailbox quota, say) and leaves the rest to the next tick.
+  - `DIGEST_ENABLED=false` turns it off. Without SMTP settings (development), digests are logged, not sent.
+- The `ALTER TABLE "User"` (the new column and its CHECK) takes a brief exclusive lock on `User`. If the migration times out behind a long transaction, mark it `--rolled-back` and deploy again:
+
+  ```bash
+  pnpm --filter api exec prisma migrate resolve --rolled-back 20261020090000_account_settings
+  pnpm --filter api exec prisma migrate deploy
+  ```
+
+## Digest opt-in (`20261020100000_digest_opt_in`)
+
+In a transaction with `lock_timeout = 10s`.
+
+- `User.emailNotifications` now defaults to **false**, and the migration sets it to false for **every existing account**, so no one gets the daily digest they never asked for. Users who want it turn it on in Preferences. Tell admins before deploying if any relied on it.
+- `EmailDigest` gains `attempts` (1–10, checked by the database) and `claimedAt`, and `sentAt` becomes nullable (null while a digest is failing). Existing rows count as sent, one attempt.
+- The `UPDATE` on `User` takes row locks on every account. If it times out behind a long transaction, mark it `--rolled-back` and deploy again:
+
+  ```bash
+  pnpm --filter api exec prisma migrate resolve --rolled-back 20261020100000_digest_opt_in
+  pnpm --filter api exec prisma migrate deploy
+  ```
+
 ## File storage (Cloudflare R2)
 
 Uploaded files (student photos now) are private. The browser uploads straight to the bucket with a short-lived signed URL, the API then checks the size and the file's real type before using it, and every download is a signed URL valid for 15 minutes.
