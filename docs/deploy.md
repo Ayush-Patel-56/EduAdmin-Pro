@@ -317,6 +317,12 @@ New tables and one nullable column, in a transaction with `lock_timeout = 10s`. 
   - `EmailDigest` records one row per account and day, claimed before each attempt. Several API instances send each digest once.
   - A failed send is retried on a later tick (every 10 minutes), at most 3 times a day. A run stops after 5 failed sends in a row (a spent mailbox quota, say) and leaves the rest to the next tick.
   - `DIGEST_ENABLED=false` turns it off. Without SMTP settings (development), digests are logged, not sent.
+- The `ALTER TABLE "User"` (the new column and its CHECK) takes a brief exclusive lock on `User`. If the migration times out behind a long transaction, mark it `--rolled-back` and deploy again:
+
+  ```bash
+  pnpm --filter api exec prisma migrate resolve --rolled-back 20261020090000_account_settings
+  pnpm --filter api exec prisma migrate deploy
+  ```
 
 ## Digest opt-in (`20261020100000_digest_opt_in`)
 

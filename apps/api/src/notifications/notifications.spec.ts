@@ -238,6 +238,31 @@ describe('DigestService: the daily report digest', () => {
     expect(mail.send).toHaveBeenCalledTimes(5);
   });
 
+  it('a success resets the failures-in-a-row count: 4 failed, 1 sent, 4 failed does not stop the run', async () => {
+    const { prisma, mail, service } = build();
+    prisma.user.findMany.mockResolvedValue(Array.from({ length: 9 }, (_, i) => ({ id: `u${i}`, email: `u${i}@x.test` })));
+    prisma.user.findUnique.mockResolvedValue(admin);
+    prisma.emailDigest.create.mockResolvedValue({});
+    mail.send.mockImplementation(async (e: { to: string }) => {
+      if (e.to !== 'u4@x.test') throw new Error('quota');
+    });
+    await expect(service.sendDue(new Date('2026-10-20T14:00:00Z'))).resolves.toBe(1);
+    expect(mail.send).toHaveBeenCalledTimes(9);
+  });
+
+  it('"email me now" with daily digests off says it was asked for, not that the setting is on', async () => {
+    const { prisma, mail, service } = build();
+    prisma.user.findUnique.mockResolvedValue({ fullName: 'Asha', memberships: [{ role: 'ADMIN', school: { id: 's1', name: 'Test School' } }], facultyProfiles: [] });
+    prisma.user.findUniqueOrThrow.mockResolvedValueOnce({ email: 'a@x.test', emailVerified: true, emailNotifications: false });
+    await service.sendNow('u1');
+    expect(mail.send.mock.calls[0][0].text).toContain('You asked for this digest from Account Preferences. Daily digests are off');
+    expect(mail.send.mock.calls[0][0].text).not.toContain('Email Notifications is on');
+    expect(mail.send.mock.calls[0][0].html).toContain('You asked for this digest');
+    prisma.user.findUniqueOrThrow.mockResolvedValueOnce({ email: 'a@x.test', emailVerified: true, emailNotifications: true });
+    await service.sendNow('u1');
+    expect(mail.send.mock.calls[1][0].text).toContain('You get this because Email Notifications is on in Account Preferences.');
+  });
+
   it('"email me now" goes only to a verified address', async () => {
     const { prisma, service } = build();
     prisma.user.findUniqueOrThrow.mockResolvedValue({ email: 'a@x.test', emailVerified: false });

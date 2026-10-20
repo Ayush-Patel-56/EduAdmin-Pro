@@ -63,8 +63,6 @@ function Card({ title, action, children }: { title: string; action?: ReactNode; 
   )
 }
 
-const Menu = FloatingMenu
-
 const menuItem = 'flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50'
 
 export function TeacherPortalPage() {
@@ -204,7 +202,7 @@ export function TeacherPortalPage() {
                         {busy === f.id ? (
                           <Loader2 className="ml-auto size-4 animate-spin text-slate-400" />
                         ) : (
-                          <Menu label={`Actions for ${f.name}`}>
+                          <FloatingMenu label={`Actions for ${f.name}`}>
                             {(close) => (
                               <>
                                 <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); openProfile(f.id) }}><UserRound className="size-4" /> Profile</button>
@@ -213,7 +211,7 @@ export function TeacherPortalPage() {
                                 <button type="button" className={`${menuItem} text-red-600`} onClick={() => { close(); setDeleting(f) }}><Trash2 className="size-4" /> Delete</button>
                               </>
                             )}
-                          </Menu>
+                          </FloatingMenu>
                         )}
                       </td>
                     </tr>
@@ -255,14 +253,14 @@ export function TeacherPortalPage() {
           <Card
             title="Recent Counseling Logs"
             action={
-              <Menu label="Counseling options">
+              <FloatingMenu label="Counseling options">
                 {(close) => (
                   <>
                     <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); navigate('/management/counseling') }}>Open Counseling</button>
                     <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); setUploads('assignments') }}>View assignments</button>
                   </>
                 )}
-              </Menu>
+              </FloatingMenu>
             }
           >
             {!overview.data ? (

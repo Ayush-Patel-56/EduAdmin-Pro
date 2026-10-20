@@ -159,11 +159,12 @@ export class DigestService {
   async sendNow(userId: string, now = Date.now()) {
     const recent = (this.sentNow.get(userId) ?? []).filter((t) => now - t < 3_600_000);
     if (recent.length >= SEND_NOW_PER_HOUR) throw new HttpException(`You can send yourself the digest ${SEND_NOW_PER_HOUR} times an hour; try again later`, HttpStatus.TOO_MANY_REQUESTS);
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true, emailVerified: true } });
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true, emailVerified: true, emailNotifications: true } });
     if (!user.emailVerified) throw new BadRequestException('Verify your email address first: digests go only to a verified address');
     const digest = await this.build(userId, istToday());
     if (!digest) throw new BadRequestException("There's nothing for a digest yet: join a school as an admin, or get assigned to a batch");
-    const email = compose(user.email, digest);
+    // Asked for now while daily digests are off: the footer says so, not that the setting is on.
+    const email = compose(user.email, digest, { requestedWhileOff: !user.emailNotifications });
     await this.mail.send(email);
     this.sentNow.set(userId, [...recent, now]);
     return { sent: true, to: user.email, subject: email.subject };
@@ -171,7 +172,7 @@ export class DigestService {
 }
 
 /** The digest as an email: plain text and simple HTML. */
-export function compose(to: string, d: Digest): Email {
+export function compose(to: string, d: Digest, opts: { requestedWhileOff?: boolean } = {}): Email {
   const when = dayLabel(new Date(`${d.day}T00:00:00Z`));
   const line = (r: Report) => `${r.teacherName} · ${r.batch.name} · ${r.subject} · ${r.late ? 'Late' : 'On time'}${r.flaggedAt ? ' · Flagged' : ''}`;
   const text: string[] = [`Hi ${d.name},`, '', `Your daily report digest for ${when}.`];
@@ -208,8 +209,11 @@ export function compose(to: string, d: Digest): Email {
       html.push(`<p style="margin:0 0 4px;color:#be123c">Flagged by an admin:</p><ul style="margin:0 0 10px;padding-left:18px;color:#334155">${flags.map((f) => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`);
     }
   }
-  text.push('', 'You get this because Email Notifications is on in Account Preferences.');
-  html.push(`<p style="margin:28px 0 0;font-size:12px;color:#94a3b8">You get this because Email Notifications is on in Account Preferences.</p>`);
+  const footer = opts.requestedWhileOff
+    ? 'You asked for this digest from Account Preferences. Daily digests are off; turn on Email Notifications there to get one every evening.'
+    : 'You get this because Email Notifications is on in Account Preferences.';
+  text.push('', footer);
+  html.push(`<p style="margin:28px 0 0;font-size:12px;color:#94a3b8">${escapeHtml(footer)}</p>`);
   return {
     to,
     subject: `Daily report digest · ${when}`,

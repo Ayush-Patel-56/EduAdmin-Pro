@@ -56,6 +56,7 @@ describe('student report CHECK constraints (e2e)', () => {
     ['ProgressReport_year_check', 'CHECK ((("academicYear" >= 2000) AND ("academicYear" <= 2100)))'],
     ['UserAvatar_image_check', "CHECK (((\"contentType\" = ANY (ARRAY['image/jpeg'::text, 'image/png'::text, 'image/webp'::text])) AND ((octet_length(data) >= 1) AND (octet_length(data) <= 262144))))"],
     ['User_avatarUrl_check', "CHECK (((\"avatarUrl\" IS NULL) OR ((\"avatarUrl\" ~~ 'https://%'::text) AND (length(\"avatarUrl\") <= 500))))"],
+    ['EmailDigest_attempts_check', 'CHECK (((attempts >= 1) AND (attempts <= 10)))'],
   ])('%s', async (name, definition) => {
     const [row] = await prisma.$queryRaw<{ def: string }[]>`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = ${name}`;
     expect(row?.def).toBe(definition);
