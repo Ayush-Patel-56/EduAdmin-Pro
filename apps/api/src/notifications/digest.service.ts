@@ -3,6 +3,7 @@ import { MailService, type Email } from '../auth/mail.service.js';
 import { istToday, toIsoDate } from '../common/dates.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { RateLimitService } from '../rate-limit/rate-limit.service.js';
 
 /** Reports listed in one school's section of a digest (the counts cover all of them). */
 export const DIGEST_LIST_LIMIT = 15;
@@ -35,12 +36,11 @@ const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', 
 @Injectable()
 export class DigestService {
   private readonly logger = new Logger(DigestService.name);
-  /** When each account last asked for "email me now" (per API instance; it only ever mails their own address). */
-  private readonly sentNow = new Map<string, number[]>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
+    private readonly rateLimit: RateLimitService,
   ) {}
 
   /** What one user's digest for a day holds; null when there is nothing they oversee or teach. */
@@ -156,17 +156,17 @@ export class DigestService {
   }
 
   /** "Email me today's digest now", from Account Preferences: to the user's own (verified) address. */
-  async sendNow(userId: string, now = Date.now()) {
-    const recent = (this.sentNow.get(userId) ?? []).filter((t) => now - t < 3_600_000);
-    if (recent.length >= SEND_NOW_PER_HOUR) throw new HttpException(`You can send yourself the digest ${SEND_NOW_PER_HOUR} times an hour; try again later`, HttpStatus.TOO_MANY_REQUESTS);
+  async sendNow(userId: string) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true, emailVerified: true, emailNotifications: true } });
     if (!user.emailVerified) throw new BadRequestException('Verify your email address first: digests go only to a verified address');
     const digest = await this.build(userId, istToday());
     if (!digest) throw new BadRequestException("There's nothing for a digest yet: join a school as an admin, or get assigned to a batch");
+    // Counted in the database, so the limit holds across API instances; after the checks above, so a request that sends nothing doesn't use one up.
+    const { allowed } = await this.rateLimit.hit(`send-now:${userId}`, 3_600_000, SEND_NOW_PER_HOUR);
+    if (!allowed) throw new HttpException(`You can send yourself the digest ${SEND_NOW_PER_HOUR} times an hour; try again later`, HttpStatus.TOO_MANY_REQUESTS);
     // Asked for now while daily digests are off: the footer says so, not that the setting is on.
     const email = compose(user.email, digest, { requestedWhileOff: !user.emailNotifications });
     await this.mail.send(email);
-    this.sentNow.set(userId, [...recent, now]);
     return { sent: true, to: user.email, subject: email.subject };
   }
 }

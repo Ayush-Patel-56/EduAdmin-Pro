@@ -21,12 +21,14 @@ import {
   UpdatePreferencesDto,
   VerifyEmailDto,
 } from './auth.dto.js';
+import { durableThrottle } from '../rate-limit/hybrid-throttler.storage.js';
 import { AuthService, SESSION_TTL_MS } from './auth.service.js';
 import { EmailVerificationService } from './email-verification.service.js';
 import { Auth, type AuthContext, SESSION_COOKIE, SessionGuard } from './session.guard.js';
 
-// Tighter limit on endpoints that check passwords or codes, to slow brute force.
-const STRICT = { default: { limit: 10, ttl: 60_000 } };
+// Tighter limit on endpoints that check passwords or codes, to slow brute
+// force: per instance in memory, and across all instances in Postgres.
+const STRICT = { default: { limit: 10, ttl: 60_000 }, ...durableThrottle(10, 60_000) };
 
 @Controller('auth')
 export class AuthController {
@@ -105,7 +107,7 @@ export class AuthController {
 
   @Post('resend-verification')
   @HttpCode(200)
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Throttle({ default: { limit: 3, ttl: 60_000 }, ...durableThrottle(3, 60_000) })
   async resendVerification(@Body() dto: ResendVerificationDto) {
     await this.verification.resend(dto.email);
     return { message: 'If that account needs verifying, a new code is on its way.' };

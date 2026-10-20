@@ -1,8 +1,9 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, HttpException, NotFoundException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { MailService } from '../auth/mail.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import type { RateLimitService } from '../rate-limit/rate-limit.service.js';
 import { SyllabusService } from '../academic/syllabus.service.js';
 import { DigestScheduler } from './digest.scheduler.js';
 import { DigestService, compose, type Digest } from './digest.service.js';
@@ -138,7 +139,9 @@ describe('DigestService: the daily report digest', () => {
   const build = () => {
     const prisma = prismaMock();
     const mail = { send: vi.fn() };
-    return { prisma, mail, service: new DigestService(prisma as unknown as PrismaService, mail as unknown as MailService) };
+    // Allowed unless a test says otherwise (the real count is in Postgres).
+    const rateLimit = { hit: vi.fn().mockResolvedValue({ hits: 1, allowed: true, resetAt: new Date() }) };
+    return { prisma, mail, rateLimit, service: new DigestService(prisma as unknown as PrismaService, mail as unknown as MailService, rateLimit as unknown as RateLimitService) };
   };
 
   it("an admin's digest: each school's reports, late and flagged, and who hasn't reported", async () => {
@@ -269,17 +272,39 @@ describe('DigestService: the daily report digest', () => {
     await expect(service.sendNow('u1')).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('"email me now": only to the account’s own address, 3 times an hour per account', async () => {
+  it('"email me now": only to the account’s own address', async () => {
     const { prisma, mail, service } = build();
     prisma.user.findUniqueOrThrow.mockResolvedValue({ email: 'a@x.test', emailVerified: true });
     prisma.user.findUnique.mockResolvedValue({ fullName: 'Asha', memberships: [{ role: 'ADMIN', school: { id: 's1', name: 'Test School' } }], facultyProfiles: [] });
-    const t = Date.now();
-    for (const dt of [0, 1, 2]) await expect(service.sendNow('u1', t + dt)).resolves.toMatchObject({ sent: true, to: 'a@x.test' });
-    await expect(service.sendNow('u1', t + 3)).rejects.toThrow('3 times an hour');
-    // Another account isn't held back by this one; an hour later it can send again.
-    await expect(service.sendNow('u2', t + 4)).resolves.toMatchObject({ sent: true });
-    await expect(service.sendNow('u1', t + 3_600_001)).resolves.toMatchObject({ sent: true });
+    await expect(service.sendNow('u1')).resolves.toMatchObject({ sent: true, to: 'a@x.test' });
     expect(mail.send.mock.calls.every((c) => c[0].to === 'a@x.test')).toBe(true);
+  });
+
+  it('the 4th send in an hour is refused, counted in the database, per account', async () => {
+    const { prisma, mail, rateLimit, service } = build();
+    prisma.user.findUniqueOrThrow.mockResolvedValue({ email: 'a@x.test', emailVerified: true });
+    prisma.user.findUnique.mockResolvedValue({ fullName: 'Asha', memberships: [{ role: 'ADMIN', school: { id: 's1', name: 'Test School' } }], facultyProfiles: [] });
+    rateLimit.hit.mockResolvedValueOnce({ hits: 1, allowed: true, resetAt: new Date() }).mockResolvedValueOnce({ hits: 2, allowed: true, resetAt: new Date() }).mockResolvedValueOnce({ hits: 3, allowed: true, resetAt: new Date() }).mockResolvedValueOnce({ hits: 4, allowed: false, resetAt: new Date() });
+    for (let i = 0; i < 3; i++) await expect(service.sendNow('u1')).resolves.toMatchObject({ sent: true });
+    const refused = await service.sendNow('u1').catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(HttpException);
+    expect((refused as HttpException).getStatus()).toBe(429);
+    expect((refused as HttpException).message).toContain('3 times an hour');
+    expect(rateLimit.hit).toHaveBeenLastCalledWith('send-now:u1', 3_600_000, 3);
+    expect(mail.send).toHaveBeenCalledTimes(3);
+    // Another account has its own count.
+    await expect(service.sendNow('u2')).resolves.toMatchObject({ sent: true });
+    expect(rateLimit.hit).toHaveBeenLastCalledWith('send-now:u2', 3_600_000, 3);
+  });
+
+  it('a send that is refused before mailing (unverified, nothing to send) does not use up a send', async () => {
+    const { prisma, rateLimit, service } = build();
+    prisma.user.findUniqueOrThrow.mockResolvedValue({ email: 'a@x.test', emailVerified: false });
+    await expect(service.sendNow('u1')).rejects.toBeInstanceOf(BadRequestException);
+    prisma.user.findUniqueOrThrow.mockResolvedValue({ email: 'a@x.test', emailVerified: true });
+    prisma.user.findUnique.mockResolvedValue({ fullName: 'Asha', memberships: [], facultyProfiles: [] });
+    await expect(service.sendNow('u1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(rateLimit.hit).not.toHaveBeenCalled();
   });
 
   it('the email escapes what people typed', () => {

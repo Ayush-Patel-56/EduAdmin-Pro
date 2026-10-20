@@ -1898,3 +1898,13 @@ model EmailDigest {
 
   @@id([userId, day])
 }
+
+// Request counts for limits that must hold across API instances (login,
+// verification codes, "email me now"); a fixed window per key.
+model RateLimit {
+  key     String   @id
+  hits    Int // 1 or more, checked by the database
+  resetAt DateTime @db.Timestamptz(3) // the window ends; the next hit starts a new one
+
+  @@index([resetAt])
+}
