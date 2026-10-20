@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -148,8 +149,10 @@ func (r *Runner) Close() {
 }
 
 // Cmd runs name with args in dir (relative to the repo root; "" is the root).
-// env entries ("KEY=value") are added to the parent environment for the child
-// only. Combined stdout and stderr stream to the runner's output, masked.
+// The child inherits the parent environment minus its secrets (see
+// childEnv); env entries ("KEY=value") are added for the child only, and are
+// the only way a secret reaches it. Combined stdout and stderr stream to the
+// runner's output, masked.
 // On failure the error names the command but never its arguments or env.
 func (r *Runner) Cmd(ctx context.Context, dir string, env []string, name string, args ...string) error {
 	w := newLineMasker(r)
@@ -203,9 +206,43 @@ func (r *Runner) command(ctx context.Context, dir string, env []string, name str
 			cmd.Dir = filepath.Join(r.root, dir)
 		}
 	}
-	// A later duplicate key wins, so env overrides the parent's values.
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = childEnv(os.Environ(), env)
+	// Once the child exits (or ctx is cancelled and it is killed), stop waiting
+	// for a grandchild that still holds the output pipe, so a stray process
+	// can't stall shutdown or a rollback.
+	cmd.WaitDelay = WaitDelay
 	return cmd
+}
+
+// WaitDelay bounds how long a finished or killed command's output may keep
+// flowing from processes it left behind.
+var WaitDelay = 10 * time.Second
+
+// childEnv is the environment for a child process: parent with every secret
+// removed (keys matching isSecretKey: PROD_*, VERCEL_TOKEN, CRON_SECRET, any
+// *_TOKEN, *_SECRET, *_KEY, *_PASS), then extra. Each call passes the secrets
+// it needs in extra, so a production secret never reaches a process that
+// didn't ask for it (an npm install script, a test, a build). A later
+// duplicate key wins, so extra overrides what is left of the parent.
+func childEnv(parent, extra []string) []string {
+	out := make([]string, 0, len(parent)+len(extra))
+	for _, kv := range parent {
+		key, _, _ := strings.Cut(kv, "=")
+		if isSecretKey(key) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, extra...)
+}
+
+// isSecretKey reports whether an environment variable's name marks it as a
+// secret. Names are compared case-insensitively (Windows environment names are).
+func isSecretKey(key string) bool {
+	key = strings.ToUpper(key)
+	return strings.HasSuffix(key, "_TOKEN") || strings.HasSuffix(key, "_KEY") ||
+		strings.HasSuffix(key, "_SECRET") || strings.HasSuffix(key, "_PASS") ||
+		strings.HasPrefix(key, "PROD_")
 }
 
 func (r *Runner) run(cmd *exec.Cmd, name string) error {
@@ -229,10 +266,7 @@ func MaskFromEnv(environ []string) []string {
 		if !ok || value == "" {
 			continue
 		}
-		key = strings.ToUpper(key)
-		if strings.HasSuffix(key, "_TOKEN") || strings.HasSuffix(key, "_KEY") ||
-			strings.HasSuffix(key, "_SECRET") || strings.HasSuffix(key, "_PASS") ||
-			strings.HasPrefix(key, "PROD_") || hasDatabaseScheme(value) {
+		if isSecretKey(key) || hasDatabaseScheme(value) {
 			out = append(out, value)
 		}
 	}

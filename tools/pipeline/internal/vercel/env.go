@@ -64,6 +64,9 @@ var digitsOnly = regexp.MustCompile(`^\d+$`)
 // APIEnv builds the API project's production environment from the secrets in
 // getenv and the web project's origin. It fails listing every missing secret.
 // DIRECT_URL is deliberately absent: the running API only uses DATABASE_URL.
+// Two optional, non-secret settings come from getenv too: TRUST_PROXY (the
+// proxy hop count, default 1) and DIGEST_ENABLED ("true" or "false", default
+// "true"; false stops the digest emails, which the cron would otherwise send).
 func APIEnv(getenv func(string) string, webOrigin string) (map[string]string, error) {
 	var missing []string
 	for _, k := range secretSources {
@@ -85,6 +88,13 @@ func APIEnv(getenv func(string) string, webOrigin string) (map[string]string, er
 	if !digitsOnly.MatchString(trust) {
 		return nil, fmt.Errorf("TRUST_PROXY must be the number of proxy hops, e.g. 1")
 	}
+	digest := strings.TrimSpace(getenv("DIGEST_ENABLED"))
+	if digest == "" {
+		digest = "true"
+	}
+	if digest != "true" && digest != "false" {
+		return nil, fmt.Errorf("DIGEST_ENABLED must be true or false")
+	}
 
 	return map[string]string{
 		"NODE_ENV":                   "production",
@@ -101,7 +111,7 @@ func APIEnv(getenv func(string) string, webOrigin string) (map[string]string, er
 		"R2_ACCESS_KEY_ID":           getenv("PROD_R2_ACCESS_KEY_ID"),
 		"R2_SECRET_ACCESS_KEY":       getenv("PROD_R2_SECRET_ACCESS_KEY"),
 		"R2_BUCKET":                  getenv("PROD_R2_BUCKET"),
-		"DIGEST_ENABLED":             "true",
+		"DIGEST_ENABLED":             digest,
 		"DIGEST_HOUR_IST":            "19",
 		"CRON_SECRET":                getenv("CRON_SECRET"),
 	}, nil

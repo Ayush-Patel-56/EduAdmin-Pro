@@ -19,6 +19,11 @@ func TestHelperProcess(t *testing.T) {
 		return
 	}
 	fmt.Fprintln(os.Stdout, os.Getenv("HELPER_STDOUT"))
+	// HELPER_ENV_KEYS lists variables to report as set or unset (never their values).
+	for _, k := range strings.Fields(os.Getenv("HELPER_ENV_KEYS")) {
+		_, ok := os.LookupEnv(k)
+		fmt.Fprintf(os.Stdout, "%s=%v\n", k, ok)
+	}
 	fmt.Fprint(os.Stderr, os.Getenv("HELPER_STDERR"))
 	code := 0
 	fmt.Sscanf(os.Getenv("HELPER_EXIT"), "%d", &code)
@@ -193,6 +198,51 @@ func TestExecHookReceivesCommandWithEnvAndDir(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("TZ not in child env")
+	}
+}
+
+func TestCmdChildDoesNotInheritSecrets(t *testing.T) {
+	t.Setenv("PROD_X", "prod-x-value")
+	t.Setenv("VERCEL_TOKEN", "parent-token")
+	t.Setenv("CRON_SECRET", "cron-value")
+	t.Setenv("SOME_API_KEY", "key-value")
+	t.Setenv("SMTP_PASS", "pass-value")
+	t.Setenv("PIPELINE_PLAIN", "plain")
+	var buf bytes.Buffer
+	r := run.New(t.TempDir(), &buf)
+	keys := "PROD_X VERCEL_TOKEN CRON_SECRET SOME_API_KEY SMTP_PASS PIPELINE_PLAIN PATH PROD_PASSED"
+	if err := helper(r, "HELPER_ENV_KEYS="+keys, "PROD_PASSED=explicit"); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"PROD_X=false", "VERCEL_TOKEN=false", "CRON_SECRET=false", "SOME_API_KEY=false", "SMTP_PASS=false",
+		"PIPELINE_PLAIN=true", "PATH=true", "PROD_PASSED=true",
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("child env: want %s, got %q", want, out)
+		}
+	}
+
+	// A secret the call passes explicitly does reach the child.
+	buf.Reset()
+	if err := helper(r, "HELPER_ENV_KEYS=VERCEL_TOKEN", "VERCEL_TOKEN=explicit-token"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "VERCEL_TOKEN=true\n") {
+		t.Errorf("an explicitly passed VERCEL_TOKEN must reach the child, got %q", buf.String())
+	}
+}
+
+func TestCommandSetsWaitDelay(t *testing.T) {
+	r := run.New(t.TempDir(), &bytes.Buffer{})
+	var got *exec.Cmd
+	r.Exec = func(cmd *exec.Cmd) error { got = cmd; return nil }
+	if err := r.Cmd(context.Background(), "", nil, "pnpm", "lint"); err != nil {
+		t.Fatal(err)
+	}
+	if got.WaitDelay <= 0 || got.WaitDelay != run.WaitDelay {
+		t.Fatalf("WaitDelay = %v, want %v so a grandchild holding the pipe can't stall the pipeline", got.WaitDelay, run.WaitDelay)
 	}
 }
 

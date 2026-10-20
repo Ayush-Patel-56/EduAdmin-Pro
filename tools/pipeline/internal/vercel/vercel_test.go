@@ -317,6 +317,26 @@ func TestAPIEnvTrustProxyFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestAPIEnvDigestEnabledFromEnvironment(t *testing.T) {
+	m := fullEnv()
+	for _, tc := range []struct{ in, want string }{{"", "true"}, {"true", "true"}, {"false", "false"}, {" false ", "false"}} {
+		m["DIGEST_ENABLED"] = tc.in
+		env, err := vercel.APIEnv(envOf(m), "https://w.vercel.app")
+		if err != nil {
+			t.Fatalf("DIGEST_ENABLED=%q: %v", tc.in, err)
+		}
+		if env["DIGEST_ENABLED"] != tc.want {
+			t.Errorf("DIGEST_ENABLED=%q gave %q, want %q", tc.in, env["DIGEST_ENABLED"], tc.want)
+		}
+	}
+	for _, bad := range []string{"no", "False", "0", "off"} {
+		m["DIGEST_ENABLED"] = bad
+		if _, err := vercel.APIEnv(envOf(m), "https://w.vercel.app"); err == nil {
+			t.Errorf("DIGEST_ENABLED=%q must be refused: the API only treats exactly \"false\" as off", bad)
+		}
+	}
+}
+
 func TestAPIEnvNeedsWebOrigin(t *testing.T) {
 	if _, err := vercel.APIEnv(envOf(fullEnv()), ""); err == nil {
 		t.Fatal("expected an error for an empty web origin")

@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +29,19 @@ func TestStageErrorRedactsSecrets(t *testing.T) {
 	}
 	if got != "pipeline: setup: GET https://x/?token=***: 500" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestShutdownSignalsIncludeSIGTERM(t *testing.T) {
+	// GitHub Actions cancels a run with SIGTERM; it must cancel the stage
+	// (so a release rolls back) rather than kill the pipeline outright.
+	var interrupt, term bool
+	for _, s := range shutdownSignals {
+		interrupt = interrupt || s == os.Interrupt
+		term = term || s == syscall.SIGTERM
+	}
+	if !interrupt || !term {
+		t.Fatalf("shutdownSignals = %v, want os.Interrupt and SIGTERM", shutdownSignals)
 	}
 }
 

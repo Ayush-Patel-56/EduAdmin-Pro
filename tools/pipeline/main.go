@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/run"
 	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/stages"
@@ -36,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals...)
 	r := run.New(root, os.Stdout)
 	// Register secrets before anything can print them.
 	r.Mask(run.MaskFromEnv(os.Environ())...)
@@ -49,6 +50,11 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// shutdownSignals cancel the stage's context: Ctrl-C locally, and SIGTERM,
+// which GitHub Actions sends when a run is cancelled. A cancelled release
+// still rolls back what it deployed.
+var shutdownSignals = []os.Signal{os.Interrupt, syscall.SIGTERM}
 
 // validate rejects an unknown or unfinished stage and stray arguments.
 func validate(stage string, args []string) error {
