@@ -7,7 +7,117 @@
 - The new migrations are additive. `School.adminInviteCode` has a database default, so the *previous* API can keep creating schools between the migration and the API deploy (no "back to back" window is needed).
 - The web app tolerates an API that predates a feature (for example `/auth/me` without `preferences`), but an old web build against a *newer* API is not guaranteed, so deploy the web last.
 
-Run migrations with `pnpm --filter api exec prisma migrate deploy` over the **direct** (non-pooled) connection (`DIRECT_URL`). Never run `prisma migrate dev` against production.
+The release pipeline runs migrations (see [Deploying on Vercel](#deploying-on-vercel)), over the **direct** (non-pooled) connection. Never run `prisma migrate dev` against production.
+
+## Deploying on Vercel
+
+Merging a pull request into `main` puts the change on the live site. Nobody deploys by hand. The pipeline is a Go program in `tools/pipeline`; GitHub Actions only starts it and hands it secrets. The design is in `docs/superpowers/specs/2026-10-20-vercel-deployment-pipeline-design.md`.
+
+### Projects
+
+Two Vercel projects are built from this repo:
+
+| Project | Root | What it is |
+|---|---|---|
+| `eduadmin-api` | `apps/api` | NestJS as a Vercel Function (Fluid compute), region `sin1` (Singapore, next to the Neon database), Node 22. The daily-digest cron is in `apps/api/vercel.json`. |
+| `eduadmin-web` | `apps/web` | The static Vite build. `apps/web/vercel.json` serves `index.html` for page URLs and rewrites `/api/*` to the API project. |
+
+- **The browser only talks to the web address.** Login cookies are `sameSite: lax`, and `*.vercel.app` is a public suffix, so two `vercel.app` hosts would count as different sites and the cookie would never be sent. The web project forwards `/api/*` to the API, so both look like one site.
+- **Vercel's own Git deploys are off** for both projects. Only the pipeline deploys, so a PR branch is never built with production settings. The pipeline writes the API's address into the web build; it is not in git.
+- **Environment variables are written by the pipeline**, as Sensitive (write-only) values, on every release. GitHub is the single source of truth: do not edit them in the Vercel dashboard (the next release overwrites them).
+- **Files stay on Cloudflare R2** (bucket `eduadmin-prod`), not Vercel Blob.
+
+### GitHub `production` environment and secrets
+
+All production secrets live in one GitHub Environment named `production`. Only the release and setup jobs use it. Pull request jobs get no secrets at all, because they run the PR's own code and this repository is public (its Actions logs are public too).
+
+1. In GitHub open the repository's **Settings → Environments → New environment**, and name it `production`.
+2. Under **Deployment branches and tags** choose **Selected branches and tags** and add `main`. A job on any other branch can then never read these secrets.
+3. Under **Environment secrets** add each of these:
+
+   | Secret | Value |
+   |---|---|
+   | `VERCEL_TOKEN` | A token from Vercel (Account Settings → Tokens), scoped to your team. |
+   | `VERCEL_ORG_ID` | The team ID from Vercel (Settings → General). On a Hobby account this is your personal team's ID. |
+   | `PROD_DATABASE_URL` | The Neon **pooled** connection string for `eduadmin-prod`. The running API uses it. |
+   | `PROD_DIRECT_URL` | The Neon **direct** (non-pooled) connection string. Only migrations use it. |
+   | `PROD_SMTP_USER` | The Gmail address that sends mail. |
+   | `PROD_SMTP_PASS` | A Gmail app password made for production. |
+   | `PROD_MAIL_FROM` | The From header, e.g. `EduAdmin Pro <you@gmail.com>`. |
+   | `PROD_R2_ACCOUNT_ID`, `PROD_R2_ACCESS_KEY_ID`, `PROD_R2_SECRET_ACCESS_KEY`, `PROD_R2_BUCKET` | From the R2 API token for `eduadmin-prod` (Object Read & Write on that bucket only). |
+   | `CRON_SECRET` | A long random string, e.g. the output of `openssl rand -hex 32`. Vercel Cron sends it as a bearer token, and the digest endpoint refuses requests without it. |
+
+4. Optional: under **Environment variables** (not secrets) add `TRUST_PROXY` to override the number of proxy hops. Leave it unset for the default of `1` (see [TRUST_PROXY](#trust_proxy)).
+5. **Delete the old secrets.** Remove any repository-level copies of the secrets above (Settings → Secrets and variables → Actions), so only the `production` environment holds them. Delete **`NEON_API_KEY`** and **`NEON_PROJECT_ID`** there too: they were only for per-PR previews, which are not used. That Neon key can reach every Neon project, so also **revoke it in the Neon console** (Account settings → API keys). Deleting it in GitHub does not disable it.
+6. Run **Actions → Setup Vercel → Run workflow** once. It creates or updates both Vercel projects (root directory, framework, region, Node 22, Git deploys off) and writes the API's environment. It is safe to run again, for example after you change a secret. It prints the project names and the web address, never a value.
+7. Recommended: add a branch protection rule for `main` that requires the `Typecheck, lint, test, build` and `API e2e (Postgres)` checks, so a red PR cannot be merged.
+
+### What a PR runs, and what a merge runs
+
+- **A pull request** (`.github/workflows/pr.yml`) runs two jobs with a read-only token and no secrets: `check` (typecheck, lint, unit tests, build, and `go vet`, `gofmt` and `go test` for the pipeline) and `e2e` (a throwaway Postgres 17 service: every migration from empty, the API e2e tests, and a check that the migrations match `schema.prisma`). Nothing is deployed. Fork and Dependabot PRs behave the same.
+- **A merge to `main`** (`.github/workflows/release.yml`) runs `check` and `e2e` again on the merged commit, then the `release` job (environment `production`, one release at a time, never cancelled part-way):
+  1. Refuses to continue if either project is still rolled back from an earlier release (see below).
+  2. Warns about `DROP` or `RENAME` in a new migration.
+  3. Runs `prisma migrate deploy` over `PROD_DIRECT_URL`. The old deployment keeps serving meanwhile. If it fails, nothing is deployed.
+  4. Writes the API's environment, then deploys the API, then the web.
+  5. Runs read-only smoke tests against the live site: the app shell and its assets, the SPA fallback, `/api/health` through the rewrite, `/api/auth/me` answering 401 without a cookie, security headers, CORS refusing an unknown origin, the client address the API sees (`TRUST_PROXY`), and the digest endpoint answering 401 without the secret. They create no data.
+  6. If the web deploy or the smoke tests fail, rolls both projects back and fails the run.
+- **Dependabot** (`.github/dependabot.yml`) opens weekly PRs for GitHub Actions, the Go module and npm packages. Actions are pinned to full commit SHAs, so a moved tag cannot change what runs.
+
+### Expand/contract rule
+
+The database is not rolled back, and the previous deployment keeps running during a migration and after a rollback. So **a release only adds**: new tables, nullable or defaulted columns, new indexes. A drop or rename ships one release later, after no deployed code uses the old name. The pipeline warns when a new migration contains `DROP` or `RENAME`; treat the warning as a question: has the previous release stopped using this?
+
+### Rollback and undoing it
+
+If the web deploy or the smoke tests fail (or the run is cancelled while releasing), the pipeline rolls back both projects to the production deployments that were live before, and says so in the run. The database stays as migrated, which the rule above makes safe.
+
+A rolled-back project **stays on the old deployment, and new deployments do not go live, until you undo it**:
+
+- In Vercel open the project (`eduadmin-api`, `eduadmin-web`) → **Deployments**, and use the **Undo Rollback** button on the production deployment, or
+- run `vercel promote <deployment-url-or-id>` for the deployment you want live.
+
+Do this for each rolled-back project once the problem is fixed, then merge the fix. A release refuses to start while a project is still rolled back, with a message saying so.
+
+To roll back by hand later, use **Instant Rollback** in the Vercel dashboard (on Hobby, only to the previous production deployment).
+
+### First admin
+
+The production database starts empty, so after the first successful release nobody can sign up yet. Create the first invite code **on your own computer**, against `PROD_DIRECT_URL` from your password manager. No CI job creates or prints invite codes, because Actions logs are public.
+
+```bash
+# Git Bash / macOS / Linux
+DATABASE_URL='<PROD_DIRECT_URL>' pnpm --filter api invite:create -- "Ayush" --max-uses 1 --days 1
+```
+
+```powershell
+# PowerShell
+$env:DATABASE_URL = '<PROD_DIRECT_URL>'
+pnpm --filter api invite:create -- "Ayush" --max-uses 1 --days 1
+Remove-Item Env:DATABASE_URL
+```
+
+The code appears only in your terminal. Sign up with it at the live site; it is used up after one signup and expires after a day.
+
+### R2 CORS with the production web origin
+
+Once the production web address exists (the Setup Vercel run prints it, and it is the `eduadmin-web` domain in Vercel), add it to the bucket's CORS rule so the browser can upload and show files. The rule is in [File storage](#file-storage-cloudflare-r2): put `https://<your web origin>` in `AllowedOrigins`, with `PUT` and `GET`. If the web address ever changes (a custom domain), change this rule and `WEB_ORIGIN` together; the next release writes `WEB_ORIGIN`.
+
+### TRUST_PROXY
+
+`TRUST_PROXY` is the number of proxies the API trusts when it reads the caller's address from `X-Forwarded-For`. Too low and every user shares one address (per-user rate limits break); too high and a forged header is believed. The default is `1`. The smoke test checks it on every release: it calls `/api/health/ip` through the web address twice, with different forged `X-Forwarded-For` values, and requires both answers to be the same public address that is neither forged value. If it fails, the release is rolled back; set the `TRUST_PROXY` variable in the `production` environment to the right count, run **Setup Vercel**, and merge again.
+
+### Hobby limits and what changes on Pro
+
+| | Hobby (now) | Pro (later) |
+|---|---|---|
+| Terms | Personal, **non-commercial** use only | Required before schools pay |
+| Digest cron | Three daily entries (14:00, 15:00, 16:00 UTC); each fires somewhere within its hour | One entry every 10 minutes from 19:00 IST, on the minute |
+| Rollback | Only to the immediately previous production deployment | Any earlier production deployment |
+| Function region | One region (`sin1`), which is all we need | Same |
+
+- **On Hobby the daily digest goes out between about 19:30 and 22:30 IST.** The last cron entry runs at 16:00 UTC (21:30 IST), so a `DIGEST_HOUR_IST` later than 21 would never send. The pipeline sets it to 19.
+- On Pro, change `apps/api/vercel.json` to one entry, `*/10 13-18 * * *` (UTC). Nothing else changes.
 
 ## Before the invite-code migration (`20261011210000_admin_invite_and_email_index`)
 
@@ -310,12 +420,12 @@ New tables and one nullable column, in a transaction with `lock_timeout = 10s`. 
   - Clear All Data removes a school's notifications.
 - **Email Notifications.** This is the daily report digest.
   - It's **opt-in**: off for every account until its owner turns it on (see `20261020100000_digest_opt_in`).
-  - From `DIGEST_HOUR_IST` (default 19, i.e. 7 PM India time), the API emails each account that turned it on.
+  - Once `DIGEST_HOUR_IST` (default 19, i.e. 7 PM India time) has passed, the API emails each account that turned it on. On Vercel Hobby the daily crons fire between about 19:30 and 22:30 IST (see "Hobby limits and what changes on Pro" above); locally the in-process scheduler sends from the digest hour.
   - An admin gets each of their schools' daily teacher reports for the day: how many came in, late or flagged, and who hasn't reported.
   - A teacher gets their own reports for the day and any that are flagged.
   - Digests go only to **verified** addresses, so school data never reaches an address nobody confirmed.
   - `EmailDigest` records one row per account and day, claimed before each attempt. Several API instances send each digest once.
-  - A failed send is retried on a later tick (every 10 minutes), at most 3 times a day. A run stops after 5 failed sends in a row (a spent mailbox quota, say) and leaves the rest to the next tick.
+  - A failed send is retried on a later run (every 10 minutes locally; the next cron entry on Vercel), at most 3 times a day. A run stops after 5 failed sends in a row (a spent mailbox quota, say) and leaves the rest to the next tick.
   - `DIGEST_ENABLED=false` turns it off. Without SMTP settings (development), digests are logged, not sent.
 - The `ALTER TABLE "User"` (the new column and its CHECK) takes a brief exclusive lock on `User`. If the migration times out behind a long transaction, mark it `--rolled-back` and deploy again:
 
@@ -388,4 +498,4 @@ See `apps/api/.env.example`. Production refuses to start without `WEB_ORIGIN` an
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request (Node 22): install → typecheck → lint → unit tests → build, plus an API e2e job against a throwaway Postgres service container with all migrations applied from scratch. Node 20 isn't supported (the API tests crash a vitest worker).
+Three workflows in `.github/workflows` start the Go pipeline; see [Deploying on Vercel](#deploying-on-vercel). `pr.yml` runs on every pull request (Node 22): install → `pipeline check` (typecheck, lint, unit tests, build) and, in a second job, `pipeline e2e` against a throwaway Postgres 17 service with all migrations applied from scratch. `release.yml` runs the same checks on every push to `main`, then releases. `setup.yml` is manual. Node 20 isn't supported (the API tests crash a vitest worker).
