@@ -226,3 +226,34 @@ func TestMaskEmitsAddMaskOnGitHubActions(t *testing.T) {
 		t.Fatalf("got %q", buf.String())
 	}
 }
+
+func TestTeeStreamsMaskedAndReturnsBothStreams(t *testing.T) {
+	var buf bytes.Buffer
+	r := run.New(t.TempDir(), &buf)
+	r.Mask("hunter2-secret")
+	out, err := r.Tee(context.Background(), "", []string{"GO_WANT_HELPER_PROCESS=1",
+		"HELPER_STDOUT=out hunter2-secret", "HELPER_STDERR=lock timeout\n", "HELPER_EXIT=1"},
+		os.Args[0], "-test.run=^TestHelperProcess$")
+	if err == nil {
+		t.Fatal("expected the exit status as an error")
+	}
+	if !strings.Contains(out, "out hunter2-secret") || !strings.Contains(out, "lock timeout") {
+		t.Fatalf("Tee should return stdout and stderr, got %q", out)
+	}
+	if strings.Contains(buf.String(), "hunter2-secret") || !strings.Contains(buf.String(), "out ***") {
+		t.Fatalf("streamed output not masked: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "lock timeout") {
+		t.Fatalf("stderr should stream too: %q", buf.String())
+	}
+}
+
+func TestPrintfMasks(t *testing.T) {
+	var buf bytes.Buffer
+	r := run.New(t.TempDir(), &buf)
+	r.Mask("hunter2-secret")
+	r.Printf("value %s and %d", "hunter2-secret", 3)
+	if buf.String() != "value *** and 3\n" {
+		t.Fatalf("got %q", buf.String())
+	}
+}

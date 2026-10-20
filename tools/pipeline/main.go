@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -39,7 +41,7 @@ func main() {
 	// Register secrets before anything can print them.
 	r.Mask(run.MaskFromEnv(os.Environ())...)
 
-	err = dispatch(ctx, r, stage, os.Args[2:])
+	err = dispatch(ctx, r, root, stage, os.Args[2:])
 	r.Close()
 	stop()
 	if err != nil {
@@ -56,7 +58,8 @@ func validate(stage string, args []string) error {
 		_, _, err := parseSmokeArgs(args)
 		return err
 	case "release":
-		return fmt.Errorf("not implemented yet")
+		_, err := parseReleaseArgs(args)
+		return err
 	default:
 		return fmt.Errorf("unknown stage (%s)", usage)
 	}
@@ -66,7 +69,7 @@ func validate(stage string, args []string) error {
 	return nil
 }
 
-func dispatch(ctx context.Context, r *run.Runner, stage string, args []string) error {
+func dispatch(ctx context.Context, r *run.Runner, root, stage string, args []string) error {
 	switch stage {
 	case "check":
 		return stages.Check(ctx, r)
@@ -80,6 +83,8 @@ func dispatch(ctx context.Context, r *run.Runner, stage string, args []string) e
 			return err
 		}
 		return runSmoke(ctx, r, os.Stdout, nil, web, api)
+	case "release":
+		return runRelease(ctx, r, root, os.Getenv, args, vercel.DefaultBase)
 	}
 	return nil
 }
@@ -97,4 +102,43 @@ func repoRoot() (string, error) {
 		return "", fmt.Errorf("finding the repo root with git: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// parseReleaseArgs reads the only release flag, --allow-local.
+func parseReleaseArgs(args []string) (allowLocal bool, err error) {
+	fs := flag.NewFlagSet("release", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&allowLocal, "allow-local", false, "release from somewhere other than main on GitHub Actions")
+	if err := fs.Parse(args); err != nil {
+		return false, fmt.Errorf("%v (usage: release [--allow-local])", err)
+	}
+	if fs.NArg() > 0 {
+		return false, fmt.Errorf("unexpected arguments (usage: release [--allow-local])")
+	}
+	return allowLocal, nil
+}
+
+// checkReleaseRef refuses a release that isn't running for main, so one can't
+// be started from a branch by mistake.
+func checkReleaseRef(ref string, allowLocal bool) error {
+	if ref == "refs/heads/main" || allowLocal {
+		return nil
+	}
+	return fmt.Errorf("refusing to release: GITHUB_REF is not refs/heads/main. Releases run from main on GitHub Actions; to release from this machine on purpose, pass --allow-local")
+}
+
+// runRelease checks it may run, then ships the checkout to production.
+func runRelease(ctx context.Context, r *run.Runner, root string, getenv func(string) string, args []string, apiBase string) error {
+	allowLocal, err := parseReleaseArgs(args)
+	if err != nil {
+		return err
+	}
+	if err := checkReleaseRef(getenv("GITHUB_REF"), allowLocal); err != nil {
+		return err
+	}
+	live, err := stages.NewLive(r, root, getenv, apiBase)
+	if err != nil {
+		return err
+	}
+	return stages.Release(ctx, r, live)
 }

@@ -37,7 +37,9 @@ func TestValidate(t *testing.T) {
 		ok    bool
 	}{
 		{"check", nil, true}, {"e2e", nil, true}, {"setup", nil, true},
-		{"setup", []string{"x"}, false}, {"nope", nil, false}, {"release", nil, false},
+		{"setup", []string{"x"}, false}, {"nope", nil, false},
+		{"release", nil, true}, {"release", []string{"--allow-local"}, true},
+		{"release", []string{"x"}, false}, {"release", []string{"--allow-local", "x"}, false},
 		{"smoke", nil, false},
 		{"smoke", []string{"--web", "https://w.example"}, false},
 		{"smoke", []string{"--web", "https://w.example", "--api", "https://a.example"}, true},
@@ -86,6 +88,8 @@ func TestRunSetup(t *testing.T) {
 			io.WriteString(w, `{}`)
 		case r.Method == "GET" && r.URL.Path == "/v9/projects/prj_web/domains":
 			io.WriteString(w, `{"domains":[{"name":"eduadmin-web.vercel.app"}]}`)
+		case r.Method == "GET" && r.URL.Path == "/v9/projects/prj_api/domains":
+			io.WriteString(w, `{"domains":[{"name":"eduadmin-api.vercel.app"}]}`)
 		case r.Method == "POST" && r.URL.Path == "/v10/projects/prj_api/env":
 			var b struct{ Key, Value string }
 			json.Unmarshal(raw, &b)
@@ -177,6 +181,93 @@ func TestRunSmokePrintsNoOKWhenDown(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 	if strings.Contains(out.String(), "ok   ") {
+		t.Errorf("output: %s", out.String())
+	}
+}
+
+func TestReleaseRefusesOutsideMain(t *testing.T) {
+	for _, tc := range []struct {
+		ref        string
+		allowLocal bool
+		ok         bool
+	}{
+		{"refs/heads/main", false, true},
+		{"", false, false},
+		{"refs/heads/deploy-pipeline", false, false},
+		{"refs/heads/main-old", false, false},
+		{"refs/pull/12/merge", false, false},
+		{"", true, true},
+		{"refs/heads/feature", true, true},
+	} {
+		err := checkReleaseRef(tc.ref, tc.allowLocal)
+		if (err == nil) != tc.ok {
+			t.Errorf("checkReleaseRef(%q, %v) = %v", tc.ref, tc.allowLocal, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "--allow-local") {
+			t.Errorf("the refusal should say how to run it locally: %v", err)
+		}
+	}
+}
+
+func TestRunReleaseRefusesBeforeAnyRequest(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer srv.Close()
+	env := setupEnv()
+	env["GITHUB_REF"] = "refs/heads/feature"
+	err := runRelease(context.Background(), run.New(t.TempDir(), &bytes.Buffer{}), t.TempDir(),
+		func(k string) string { return env[k] }, nil, srv.URL)
+	if err == nil || hits != 0 {
+		t.Fatalf("err = %v, requests = %d", err, hits)
+	}
+}
+
+func TestRunSetupAddsMissingDomain(t *testing.T) {
+	var mu sync.Mutex
+	var added []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/v9/projects/eduadmin-api":
+			io.WriteString(w, `{"id":"prj_api","name":"eduadmin-api"}`)
+		case r.Method == "GET" && r.URL.Path == "/v9/projects/eduadmin-web":
+			io.WriteString(w, `{"id":"prj_web","name":"eduadmin-web"}`)
+		case r.Method == "PATCH":
+			io.WriteString(w, `{}`)
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/domains"):
+			proj := strings.Split(r.URL.Path, "/")[3]
+			name := strings.TrimPrefix(proj, "prj_")
+			for _, a := range added {
+				if a == "eduadmin-"+name+".vercel.app" {
+					io.WriteString(w, `{"domains":[{"name":"`+a+`"}]}`)
+					return
+				}
+			}
+			io.WriteString(w, `{"domains":[]}`)
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/domains"):
+			var b struct{ Name string }
+			json.Unmarshal(raw, &b)
+			added = append(added, b.Name)
+			io.WriteString(w, `{}`)
+		case r.Method == "POST" && r.URL.Path == "/v10/projects/prj_api/env":
+			io.WriteString(w, `{"failed":[]}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(500)
+		}
+	}))
+	defer srv.Close()
+	env := setupEnv()
+	var out bytes.Buffer
+	if err := runSetup(context.Background(), run.New(t.TempDir(), &out), &out, func(k string) string { return env[k] }, srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(added, ",") != "eduadmin-api.vercel.app,eduadmin-web.vercel.app" {
+		t.Fatalf("added = %v", added)
+	}
+	if !strings.Contains(out.String(), "web origin https://eduadmin-web.vercel.app") {
 		t.Errorf("output: %s", out.String())
 	}
 }

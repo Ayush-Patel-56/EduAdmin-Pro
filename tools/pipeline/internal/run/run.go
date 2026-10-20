@@ -174,6 +174,26 @@ func (r *Runner) Output(ctx context.Context, dir string, env []string, name stri
 	return stdout.String(), err
 }
 
+// Tee runs the command like Cmd (combined output streams to the log, masked)
+// and also returns that combined output, so the caller can look for a known
+// failure in it. The returned text is not masked: it is for the caller, not
+// the log.
+func (r *Runner) Tee(ctx context.Context, dir string, env []string, name string, args ...string) (string, error) {
+	w := newLineMasker(r)
+	defer w.flush()
+	var all syncBuffer
+	cmd := r.command(ctx, dir, env, name, args)
+	cmd.Stdout = io.MultiWriter(w, &all)
+	cmd.Stderr = io.MultiWriter(w, &all)
+	err := r.run(cmd, name)
+	return all.String(), err
+}
+
+// Printf prints one line (a newline is added) through the masker.
+func (r *Runner) Printf(format string, a ...any) {
+	io.WriteString(r.out, r.mask(strings.TrimRight(fmt.Sprintf(format, a...), "\n"))+"\n")
+}
+
 func (r *Runner) command(ctx context.Context, dir string, env []string, name string, args []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = r.root
@@ -229,6 +249,25 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.w.Write(p)
+}
+
+// syncBuffer is a bytes.Buffer safe for the concurrent stdout and stderr
+// writers of one command.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // lineMasker buffers child output into lines and writes each one masked, so a

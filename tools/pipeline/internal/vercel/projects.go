@@ -68,6 +68,40 @@ func (c *Client) EnsureProject(ctx context.Context, spec ProjectSpec) (Project, 
 // domain. A project can have several (a team-scoped alias as well as its
 // name); the shortest is the project's own, and the choice is stable.
 func (c *Client) ProductionOrigin(ctx context.Context, projectID string) (string, error) {
+	names, err := c.vercelAppDomains(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	if len(names) == 0 {
+		return "", fmt.Errorf("vercel: project %s has no production *.vercel.app domain yet", projectID)
+	}
+	return "https://" + names[0], nil
+}
+
+// EnsureDomain gives the project its <name>.vercel.app production domain if it
+// has no *.vercel.app production domain yet. A project that has never been
+// deployed has none, and the first release needs both origins before it
+// deploys anything.
+func (c *Client) EnsureDomain(ctx context.Context, projectID, name string) error {
+	names, err := c.vercelAppDomains(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if len(names) > 0 {
+		return nil
+	}
+	domain := name + ".vercel.app"
+	err = c.do(ctx, "POST", "/v10/projects/"+url.PathEscape(projectID)+"/domains", nil,
+		map[string]any{"name": domain}, nil)
+	if err != nil {
+		return fmt.Errorf("vercel refused to add %s to project %s, probably because another Vercel account has that name; rename the project (ProjectSpec in tools/pipeline/internal/vercel/projects.go) and run setup again: %w", domain, name, err)
+	}
+	return nil
+}
+
+// vercelAppDomains lists the project's production *.vercel.app domains that
+// are not redirects, shortest first, then alphabetically.
+func (c *Client) vercelAppDomains(ctx context.Context, projectID string) ([]string, error) {
 	var resp struct {
 		Domains []struct {
 			Name     string `json:"name"`
@@ -76,7 +110,7 @@ func (c *Client) ProductionOrigin(ctx context.Context, projectID string) (string
 	}
 	q := url.Values{"production": {"true"}, "limit": {"100"}}
 	if err := c.do(ctx, "GET", "/v9/projects/"+url.PathEscape(projectID)+"/domains", q, nil, &resp); err != nil {
-		return "", err
+		return nil, err
 	}
 	var names []string
 	for _, d := range resp.Domains {
@@ -84,14 +118,11 @@ func (c *Client) ProductionOrigin(ctx context.Context, projectID string) (string
 			names = append(names, d.Name)
 		}
 	}
-	if len(names) == 0 {
-		return "", fmt.Errorf("vercel: project %s has no production *.vercel.app domain yet", projectID)
-	}
 	sort.Slice(names, func(i, j int) bool {
 		if len(names[i]) != len(names[j]) {
 			return len(names[i]) < len(names[j])
 		}
 		return names[i] < names[j]
 	})
-	return "https://" + names[0], nil
+	return names, nil
 }

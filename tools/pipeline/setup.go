@@ -40,6 +40,14 @@ func runSetup(ctx context.Context, r *run.Runner, out io.Writer, getenv func(str
 	}
 	fmt.Fprintf(out, "project %s ready\n", web.Name)
 
+	// A project that has never been deployed has no *.vercel.app domain yet,
+	// and the API's WEB_ORIGIN needs the web one now.
+	for _, p := range []vercel.Project{api, web} {
+		if err := c.EnsureDomain(ctx, p.ID, p.Name); err != nil {
+			return err
+		}
+	}
+
 	webOrigin, err := c.ProductionOrigin(ctx, web.ID)
 	if err != nil {
 		return err
