@@ -29,11 +29,11 @@ export class AvatarLinkDto {
 export class AvatarController {
   constructor(private readonly avatars: AvatarService) {}
 
-  /** The uploaded picture, cached privately (its URL changes with each upload). */
+  /** The uploaded picture; never stored by the browser, so a shared computer keeps nothing after sign-out (#54). */
   @Get()
   async read(@Auth() auth: AuthContext, @Res() res: Response) {
     const { contentType, data } = await this.avatars.read(auth.userId);
-    res.set({ 'Content-Type': contentType, 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
+    res.set({ 'Content-Type': contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
     res.send(data);
   }
 

@@ -41,7 +41,7 @@ export const adminSchools = (me: Me) =>
   me.memberships.filter((m) => m.role === 'ADMIN' && m.status === 'ACTIVE')
 
 export const DEFAULT_PREFERENCES: Preferences = {
-  emailNotifications: true,
+  emailNotifications: false,
   syllabusUpdates: true,
   accentTheme: null,
 }

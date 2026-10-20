@@ -8,6 +8,12 @@ import { PrismaService } from '../prisma/prisma.service.js';
 export const DIGEST_LIST_LIMIT = 15;
 /** "Email me now": this many per account per hour (each goes only to the account's own address). */
 export const SEND_NOW_PER_HOUR = 3;
+/** A digest that fails to send is tried at most this many times in its day (#54). */
+export const DIGEST_MAX_ATTEMPTS = 3;
+/** A claim older than this is free to retry (its instance stopped, or the send failed). */
+const CLAIM_TTL_MS = 5 * 60_000;
+/** A run stops after this many failed sends in a row (e.g. the mailbox's daily quota is spent). */
+export const DIGEST_STOP_AFTER_FAILURES = 5;
 
 type Report = { teacherName: string; batch: { name: string }; subject: string; late: boolean; flaggedAt: Date | null; flagReason: string | null; reportDate: Date };
 
@@ -44,7 +50,8 @@ export class DigestService {
       select: {
         fullName: true,
         memberships: { where: { status: 'ACTIVE' }, select: { role: true, school: { select: { id: true, name: true } } }, orderBy: { createdAt: 'asc' } },
-        facultyProfiles: { where: { status: 'ACTIVE' }, select: { id: true, schoolId: true, _count: { select: { batchAssignments: true } } } },
+        // A teacher on leave still gets theirs (as with alerts); an inactive profile doesn't.
+        facultyProfiles: { where: { status: { not: 'INACTIVE' } }, select: { id: true, schoolId: true, _count: { select: { batchAssignments: true } } } },
       },
     });
     if (!user) return null;
@@ -82,36 +89,69 @@ export class DigestService {
   }
 
   /**
-   * Sends the day's digests that are due: once per user and day (the
-   * EmailDigest row is claimed before sending, so several API instances never
-   * send twice; a failed send releases it to be tried again).
+   * Sends the day's digests that are due, to users who turned Email
+   * Notifications on. Each user's day is claimed before each attempt, so
+   * several API instances never send twice. A failed send is tried again on a
+   * later tick, at most DIGEST_MAX_ATTEMPTS times; a run stops after
+   * DIGEST_STOP_AFTER_FAILURES failures in a row (the mailbox's quota is
+   * likely spent), leaving the rest to the next tick.
    */
   async sendDue(now = new Date()) {
     const day = istToday(now);
     const users = await this.prisma.user.findMany({
-      where: { emailNotifications: true, emailVerified: true, memberships: { some: { status: 'ACTIVE' } }, emailDigests: { none: { day } } },
+      where: {
+        emailNotifications: true,
+        emailVerified: true,
+        memberships: { some: { status: 'ACTIVE' } },
+        emailDigests: { none: { day, OR: [{ sentAt: { not: null } }, { attempts: { gte: DIGEST_MAX_ATTEMPTS } }] } },
+      },
       select: { id: true, email: true },
     });
     let sent = 0;
+    let failedInARow = 0;
     for (const u of users) {
-      try {
-        await this.prisma.emailDigest.create({ data: { userId: u.id, day } });
-      } catch (err) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') continue; // another instance has it
-        throw err;
-      }
+      const attempt = await this.claim(u.id, day, now);
+      if (!attempt) continue;
       try {
         const digest = await this.build(u.id, day);
-        if (digest) {
-          await this.mail.send(compose(u.email, digest));
-          sent++;
-        }
+        if (digest) await this.mail.send(compose(u.email, digest));
+        // Sent, or nothing to send: either way the day is done.
+        await this.prisma.emailDigest.update({ where: { userId_day: { userId: u.id, day } }, data: { sentAt: new Date() } });
+        if (digest) sent++;
+        failedInARow = 0;
       } catch (err) {
-        this.logger.warn(`Digest for ${u.id} failed: ${(err as Error).message}`);
-        await this.prisma.emailDigest.deleteMany({ where: { userId: u.id, day } });
+        failedInARow++;
+        const last = attempt >= DIGEST_MAX_ATTEMPTS;
+        this.logger.warn(`Digest for ${u.id} failed (attempt ${attempt} of ${DIGEST_MAX_ATTEMPTS}${last ? ', giving up for today' : ''}): ${(err as Error).message}`);
+        if (failedInARow >= DIGEST_STOP_AFTER_FAILURES) {
+          this.logger.warn(`Stopping this digest run after ${failedInARow} failed sends in a row`);
+          break;
+        }
       }
     }
     return sent;
+  }
+
+  /**
+   * Claims a user's digest day for one attempt: the first attempt creates the
+   * row; a retry takes a row that isn't sent, has attempts left and whose last
+   * claim has gone stale. Returns the attempt number, or null when someone
+   * else has it (or it is done).
+   */
+  private async claim(userId: string, day: Date, now: Date): Promise<number | null> {
+    try {
+      await this.prisma.emailDigest.create({ data: { userId, day, attempts: 1, claimedAt: now } });
+      return 1;
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
+    }
+    const { count } = await this.prisma.emailDigest.updateMany({
+      where: { userId, day, sentAt: null, attempts: { lt: DIGEST_MAX_ATTEMPTS }, claimedAt: { lt: new Date(now.getTime() - CLAIM_TTL_MS) } },
+      data: { attempts: { increment: 1 }, claimedAt: now },
+    });
+    if (!count) return null;
+    const row = await this.prisma.emailDigest.findUniqueOrThrow({ where: { userId_day: { userId, day } }, select: { attempts: true } });
+    return row.attempts;
   }
 
   /** "Email me today's digest now", from Account Preferences: to the user's own (verified) address. */

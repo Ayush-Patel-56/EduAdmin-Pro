@@ -76,7 +76,7 @@ export function PreferencesDialog({ me, defaultAccent, roleLabel, onClose }: Pre
           <div className="mt-3 divide-y divide-slate-100 rounded-xl border border-slate-200">
             <Toggle
               label="Email Notifications"
-              hint={me.emailVerified ? 'Daily report digest by email, at 7 PM (India time)' : 'Daily report digest by email, at 7 PM (India time). Verify your email address to receive it.'}
+              hint={me.emailVerified ? 'Daily report digest by email, at 7 PM (India time). Off until you turn it on.' : 'Daily report digest by email, at 7 PM (India time). Verify your email address to receive it.'}
               checked={values.emailNotifications}
               onChange={(v) => setValues((p) => ({ ...p, emailNotifications: v }))}
             />

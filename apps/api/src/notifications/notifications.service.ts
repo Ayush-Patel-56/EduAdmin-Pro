@@ -23,7 +23,11 @@ export class NotificationsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** The user's newest notifications, from schools they are still an active member of, with the unread count. */
+  /**
+   * The user's newest notifications, from schools they are still an active
+   * member of (and, as a teacher, still have an active profile in), with the
+   * unread count.
+   */
   async list(userId: string) {
     const schoolIds = await this.activeSchools(userId);
     const where = { userId, schoolId: { in: schoolIds } };
@@ -112,7 +116,11 @@ export class NotificationsService {
   }
 
   private async activeSchools(userId: string) {
-    const memberships = await this.prisma.schoolMembership.findMany({ where: { userId, status: 'ACTIVE' }, select: { schoolId: true } });
-    return memberships.map((m) => m.schoolId);
+    const [memberships, profiles] = await Promise.all([
+      this.prisma.schoolMembership.findMany({ where: { userId, status: 'ACTIVE' }, select: { schoolId: true, role: true } }),
+      this.prisma.faculty.findMany({ where: { userId, status: { not: 'INACTIVE' } }, select: { schoolId: true } }),
+    ]);
+    const teaching = new Set(profiles.map((p) => p.schoolId));
+    return memberships.filter((m) => m.role === 'ADMIN' || teaching.has(m.schoolId)).map((m) => m.schoolId);
   }
 }

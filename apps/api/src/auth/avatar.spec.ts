@@ -3,7 +3,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import { AvatarLinkDto, AvatarUploadDto } from './avatar.controller.js';
+import { AvatarController, AvatarLinkDto, AvatarUploadDto } from './avatar.controller.js';
 import { AVATAR_MAX_BYTES, AvatarService, avatarUrlOf, parseImageDataUrl, sniffImage } from './avatar.service.js';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
@@ -14,6 +14,8 @@ const dataUrl = (type: string, bytes: Buffer) => `data:${type};base64,${bytes.to
 describe('profile picture: what is accepted', () => {
   it('knows an image by its bytes, not its name', () => {
     expect([sniffImage(PNG), sniffImage(JPEG), sniffImage(WEBP), sniffImage(Buffer.from('GIF89a'))]).toEqual(['image/png', 'image/jpeg', 'image/webp', null]);
+    // Any RIFF file isn't a WebP: a WAV or AVI has RIFF too.
+    expect(sniffImage(Buffer.concat([Buffer.from('RIFF'), Buffer.from([1, 0, 0, 0]), Buffer.from('WAVEfmt ')]))).toBeNull();
   });
 
   it('takes a JPEG, PNG or WebP data URL whose bytes match its type, up to 256 KB', () => {
@@ -40,6 +42,17 @@ describe('profile picture: what is accepted', () => {
     expect(avatarUrlOf({ avatarUrl: 'https://x.example/a.png', avatar: { updatedAt: new Date(1700000000000) } })).toBe('/api/auth/avatar?v=1700000000000');
     expect(avatarUrlOf({ avatarUrl: 'https://x.example/a.png', avatar: null })).toBe('https://x.example/a.png');
     expect(avatarUrlOf({ avatarUrl: null, avatar: null })).toBeNull();
+  });
+});
+
+describe('AvatarController: serving the picture', () => {
+  it('as its stored type, never sniffed into something else, and never kept in the browser cache', async () => {
+    const service = { read: vi.fn().mockResolvedValue({ contentType: 'image/png', data: PNG }) };
+    const res = { set: vi.fn(), send: vi.fn() };
+    await new AvatarController(service as unknown as AvatarService).read({ userId: 'u1', sessionId: 's', activeSchoolId: null }, res as never);
+    expect(service.read).toHaveBeenCalledWith('u1');
+    expect(res.set.mock.calls[0][0]).toEqual({ 'Content-Type': 'image/png', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
+    expect(res.send).toHaveBeenCalledWith(PNG);
   });
 });
 

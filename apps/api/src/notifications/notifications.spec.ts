@@ -16,21 +16,26 @@ function prismaMock() {
     batch: { findMany: vi.fn().mockResolvedValue([]) },
     dailyReport: { findMany: vi.fn().mockResolvedValue([]) },
     faculty: { findMany: vi.fn().mockResolvedValue([]) },
-    emailDigest: { create: vi.fn(), deleteMany: vi.fn() },
+    emailDigest: { create: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findUniqueOrThrow: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
     syllabusItem: { findFirst: vi.fn(), update: vi.fn() },
+    $queryRaw: vi.fn(),
+    $transaction: vi.fn(),
   };
 }
 
 describe('NotificationsService: the bell', () => {
-  it("lists only the caller's notifications from schools they are still active in", async () => {
+  it("lists only the caller's notifications from schools they are still active in (as a teacher, with an active profile)", async () => {
     const prisma = prismaMock();
-    prisma.schoolMembership.findMany.mockResolvedValue([{ schoolId: 's1' }]);
+    prisma.schoolMembership.findMany.mockResolvedValue([{ schoolId: 's1', role: 'ADMIN' }, { schoolId: 's2', role: 'TEACHER' }, { schoolId: 's3', role: 'TEACHER' }]);
+    // Their profile in s3 is inactive: its alerts are out of reach, as its pages are (#54).
+    prisma.faculty.findMany.mockResolvedValue([{ schoolId: 's2' }]);
     prisma.notification.count.mockResolvedValue(2);
     const service = new NotificationsService(prisma as unknown as PrismaService);
     await expect(service.list('u1')).resolves.toMatchObject({ unread: 2, items: [] });
     expect(prisma.schoolMembership.findMany.mock.calls[0][0].where).toEqual({ userId: 'u1', status: 'ACTIVE' });
-    expect(prisma.notification.findMany.mock.calls[0][0].where).toEqual({ userId: 'u1', schoolId: { in: ['s1'] } });
-    expect(prisma.notification.count.mock.calls[0][0].where).toEqual({ userId: 'u1', schoolId: { in: ['s1'] }, readAt: null });
+    expect(prisma.faculty.findMany.mock.calls[0][0].where).toEqual({ userId: 'u1', status: { not: 'INACTIVE' } });
+    expect(prisma.notification.findMany.mock.calls[0][0].where).toEqual({ userId: 'u1', schoolId: { in: ['s1', 's2'] } });
+    expect(prisma.notification.count.mock.calls[0][0].where).toEqual({ userId: 'u1', schoolId: { in: ['s1', 's2'] }, readAt: null });
   });
 
   it("marks read only the caller's own; someone else's (or none) is a 404", async () => {
@@ -91,17 +96,38 @@ describe('NotificationsService: the bell', () => {
 describe('SyllabusService: who hears of a status change', () => {
   const item = { id: 'i1', batchId: 'b1', subject: 'Physics', title: 'Heat', status: 'COMPLETED', estimatedHours: null, targetDates: null, remarks: null, updatedAt: new Date() };
 
-  it('moving a card tells people only when its status really changed', async () => {
+  const setup = () => {
     const prisma = prismaMock();
-    const notify = { syllabusChanged: vi.fn() };
-    const service = new SyllabusService(prisma as unknown as PrismaService, notify as unknown as NotificationsService);
+    prisma.$transaction.mockImplementation((run: (tx: unknown) => unknown) => run(prisma));
     prisma.syllabusItem.findFirst.mockResolvedValue({ batchId: 'b1', status: 'IN_PROGRESS' });
     prisma.syllabusItem.update.mockResolvedValue(item);
+    const notify = { syllabusChanged: vi.fn() };
+    return { prisma, notify, service: new SyllabusService(prisma as unknown as PrismaService, notify as unknown as NotificationsService) };
+  };
+
+  it('moving a card tells people only when its status really changed, read under a row lock', async () => {
+    const { prisma, notify, service } = setup();
+    prisma.$queryRaw.mockResolvedValueOnce([{ status: 'IN_PROGRESS' }]);
     await service.setStatus('s1', null, 'u1', 'i1', 'COMPLETED');
     expect(notify.syllabusChanged).toHaveBeenCalledWith('s1', 'u1', [item]);
-    prisma.syllabusItem.findFirst.mockResolvedValue({ batchId: 'b1', status: 'COMPLETED' });
+    const lock = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join('?');
+    expect(lock).toContain('FOR UPDATE');
+    // A second identical move (or one that raced the first) sees it already Completed: nothing new.
+    prisma.$queryRaw.mockResolvedValueOnce([{ status: 'COMPLETED' }]);
     await service.setStatus('s1', null, 'u1', 'i1', 'COMPLETED');
     expect(notify.syllabusChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('an edit that keeps the status tells no one; one that changes it does', async () => {
+    const { prisma, notify, service } = setup();
+    const dto = { batchId: 'b1', subject: 'Physics', title: 'Heat (renamed)', status: 'COMPLETED' } as never;
+    prisma.$queryRaw.mockResolvedValueOnce([{ status: 'COMPLETED' }]);
+    Object.assign(prisma, { batch: { ...prisma.batch, findFirst: vi.fn().mockResolvedValue({ id: 'b1' }) } });
+    await service.update('s1', null, 'u1', 'i1', dto);
+    expect(notify.syllabusChanged).not.toHaveBeenCalled();
+    prisma.$queryRaw.mockResolvedValueOnce([{ status: 'IN_PROGRESS' }]);
+    await service.update('s1', null, 'u1', 'i1', dto);
+    expect(notify.syllabusChanged).toHaveBeenCalledWith('s1', 'u1', [item]);
   });
 });
 
@@ -125,6 +151,10 @@ describe('DigestService: the daily report digest', () => {
     // Only this school's reports for the day; only active staff with a batch count as expected to report.
     expect(prisma.dailyReport.findMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', reportDate: day });
     expect(prisma.faculty.findMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', status: 'ACTIVE', batchAssignments: { some: {} } });
+    // Only schools they are still an active member of; a teacher on leave still gets theirs, an inactive one doesn't.
+    const select = prisma.user.findUnique.mock.calls[0][0].select;
+    expect(select.memberships.where).toEqual({ status: 'ACTIVE' });
+    expect(select.facultyProfiles.where).toEqual({ status: { not: 'INACTIVE' } });
   });
 
   it("a teacher's digest: their own reports and flags, in their school only; nothing to oversee or teach is no digest", async () => {
@@ -139,21 +169,56 @@ describe('DigestService: the daily report digest', () => {
     await expect(service.build('u2', day)).resolves.toBeNull();
   });
 
-  it('sends each due digest once: only to verified addresses that keep Email Notifications on, the day claimed first', async () => {
+  const unique = () => new Prisma.PrismaClientKnownRequestError('Unique', { code: 'P2002', clientVersion: '7' });
+  const admin = { fullName: 'Asha', memberships: [{ role: 'ADMIN', school: { id: 's1', name: 'Test School' } }], facultyProfiles: [] };
+
+  it('sends each due digest once: only to users who turned it on, with a verified address; the day claimed first', async () => {
     const { prisma, mail, service } = build();
     prisma.user.findMany.mockResolvedValue([{ id: 'u1', email: 'a@x.test' }, { id: 'u2', email: 'b@x.test' }, { id: 'u3', email: 'c@x.test' }]);
-    prisma.emailDigest.create
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Unique', { code: 'P2002', clientVersion: '7' }))
-      .mockResolvedValueOnce({});
-    prisma.user.findUnique.mockResolvedValue({ fullName: 'Asha', memberships: [{ role: 'ADMIN', school: { id: 's1', name: 'Test School' } }], facultyProfiles: [] });
+    // u2's day is held by another instance (its claim is fresh, so the retry claim takes nothing).
+    prisma.emailDigest.create.mockResolvedValueOnce({}).mockRejectedValueOnce(unique()).mockResolvedValueOnce({});
+    prisma.user.findUnique.mockResolvedValue(admin);
     mail.send.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('SMTP down'));
-    await expect(service.sendDue(new Date('2026-10-20T14:00:00Z'))).resolves.toBe(1);
-    const where = prisma.user.findMany.mock.calls[0][0].where;
-    expect(where).toEqual({ emailNotifications: true, emailVerified: true, memberships: { some: { status: 'ACTIVE' } }, emailDigests: { none: { day } } });
-    // u2 belongs to another instance; u3's failed send gives its day back to try again.
+    const now = new Date('2026-10-20T14:00:00Z');
+    await expect(service.sendDue(now)).resolves.toBe(1);
+    expect(prisma.user.findMany.mock.calls[0][0].where).toEqual({
+      emailNotifications: true,
+      emailVerified: true,
+      memberships: { some: { status: 'ACTIVE' } },
+      emailDigests: { none: { day, OR: [{ sentAt: { not: null } }, { attempts: { gte: 3 } }] } },
+    });
     expect(mail.send.mock.calls.map((c) => c[0].to)).toEqual(['a@x.test', 'c@x.test']);
-    expect(prisma.emailDigest.deleteMany.mock.calls[0][0]).toEqual({ where: { userId: 'u3', day } });
+    // Sent: the day is done. Failed (u3): the claim stays, for a retry on a later tick.
+    expect(prisma.emailDigest.update.mock.calls.map((c) => c[0].where)).toEqual([{ userId_day: { userId: 'u1', day } }]);
+    expect(prisma.emailDigest.updateMany.mock.calls[0][0]).toEqual({
+      where: { userId: 'u2', day, sentAt: null, attempts: { lt: 3 }, claimedAt: { lt: new Date(now.getTime() - 5 * 60_000) } },
+      data: { attempts: { increment: 1 }, claimedAt: now },
+    });
+    expect(prisma.emailDigest.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('a failed digest is retried on a later tick, up to 3 attempts', async () => {
+    const { prisma, mail, service } = build();
+    prisma.user.findMany.mockResolvedValue([{ id: 'u1', email: 'a@x.test' }]);
+    prisma.user.findUnique.mockResolvedValue(admin);
+    prisma.emailDigest.create.mockRejectedValue(unique());
+    // The stale claim is retaken: attempt 3, which fails too (the last one).
+    prisma.emailDigest.updateMany.mockResolvedValueOnce({ count: 1 });
+    prisma.emailDigest.findUniqueOrThrow.mockResolvedValueOnce({ attempts: 3 });
+    mail.send.mockRejectedValue(new Error('quota'));
+    await expect(service.sendDue(new Date('2026-10-20T15:00:00Z'))).resolves.toBe(0);
+    expect(mail.send).toHaveBeenCalledTimes(1);
+    expect(prisma.emailDigest.update).not.toHaveBeenCalled();
+  });
+
+  it('a run stops after 5 failed sends in a row (e.g. a spent mailbox quota)', async () => {
+    const { prisma, mail, service } = build();
+    prisma.user.findMany.mockResolvedValue(Array.from({ length: 8 }, (_, i) => ({ id: `u${i}`, email: `u${i}@x.test` })));
+    prisma.user.findUnique.mockResolvedValue(admin);
+    prisma.emailDigest.create.mockResolvedValue({});
+    mail.send.mockRejectedValue(new Error('quota'));
+    await service.sendDue(new Date('2026-10-20T14:00:00Z'));
+    expect(mail.send).toHaveBeenCalledTimes(5);
   });
 
   it('"email me now" goes only to a verified address', async () => {

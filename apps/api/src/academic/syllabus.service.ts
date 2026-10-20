@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { SyllabusStatus } from '../generated/prisma/client.js';
+import { Prisma, type SyllabusStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { SyllabusImportDto, SyllabusItemDto } from './academic.dto.js';
 import { SUBJECTS } from './academic-options.js';
@@ -93,18 +93,20 @@ export class SyllabusService {
     itemId: string,
     dto: SyllabusItemDto,
   ) {
-    const before = await this.find(schoolId, scope, itemId);
+    await this.find(schoolId, scope, itemId);
     await this.assertBatch(schoolId, scope, dto.batchId);
-    const item = await duplicateAsConflict(
+    const { before, item } = await duplicateAsConflict(
       () =>
-        this.prisma.syllabusItem.update({
-          where: { id: itemId },
-          data: { ...fields(dto), updatedById: userId },
-          select: itemSelect,
-        }),
+        this.tracked(schoolId, itemId, (tx) =>
+          tx.syllabusItem.update({
+            where: { id: itemId },
+            data: { ...fields(dto), updatedById: userId },
+            select: itemSelect,
+          }),
+        ),
       CHAPTER_EXISTS,
     );
-    if (item.status !== before.status) await this.notifications.syllabusChanged(schoolId, userId, [item]);
+    if (item.status !== before) await this.notifications.syllabusChanged(schoolId, userId, [item]);
     return item;
   }
 
@@ -116,14 +118,30 @@ export class SyllabusService {
     itemId: string,
     status: SyllabusStatus,
   ) {
-    const before = await this.find(schoolId, scope, itemId);
-    const item = await this.prisma.syllabusItem.update({
-      where: { id: itemId },
-      data: { status, updatedById: userId },
-      select: itemSelect,
-    });
-    if (status !== before.status) await this.notifications.syllabusChanged(schoolId, userId, [item]);
+    await this.find(schoolId, scope, itemId);
+    const { before, item } = await this.tracked(schoolId, itemId, (tx) =>
+      tx.syllabusItem.update({
+        where: { id: itemId },
+        data: { status, updatedById: userId },
+        select: itemSelect,
+      }),
+    );
+    if (status !== before) await this.notifications.syllabusChanged(schoolId, userId, [item]);
     return item;
+  }
+
+  /**
+   * A change to one chapter, with its status before it read under a row lock:
+   * of two identical moves at once, only the first sees a change (so only one
+   * notification goes out).
+   */
+  private tracked<T>(schoolId: string, itemId: string, write: (tx: Prisma.TransactionClient) => Promise<T>) {
+    return this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<{ status: SyllabusStatus }[]>`SELECT "status"::text AS "status" FROM "SyllabusItem" WHERE "id" = ${itemId} AND "schoolId" = ${schoolId} FOR UPDATE`;
+      if (!row) throw new NotFoundException('Chapter not found');
+      const item = await write(tx);
+      return { before: row.status, item };
+    });
   }
 
   async remove(schoolId: string, scope: BatchScope, itemId: string) {

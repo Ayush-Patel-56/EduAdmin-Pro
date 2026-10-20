@@ -218,7 +218,7 @@ model User {
   emailVerified      Boolean      @default(false)
   adminInviteCodeId  String? // which admin invite code created this account
   // Account Preferences
-  emailNotifications Boolean      @default(true) // report digest emails
+  emailNotifications Boolean      @default(false) // the daily report digest: off until the user turns it on (#54)
   syllabusUpdates    Boolean      @default(true) // syllabus coverage alerts
   accentTheme        AccentTheme?
   avatarUrl          String? // a profile picture hosted online (https); an uploaded one (UserAvatar) takes precedence
@@ -1884,12 +1884,15 @@ model Notification {
 }
 
 // The daily report digest emailed to a user for one day (Account
-// Preferences: Email Notifications): one row per user and day, so a digest is
-// sent once however many API instances run the job.
+// Preferences: Email Notifications): one row per user and day, claimed before
+// each attempt, so a digest is sent once however many API instances run the
+// job, and a failing one is tried at most DIGEST_MAX_ATTEMPTS times.
 model EmailDigest {
-  userId String
-  day    DateTime @db.Date // the IST day the digest covers
-  sentAt DateTime @default(now()) @db.Timestamptz(3)
+  userId    String
+  day       DateTime  @db.Date // the IST day the digest covers
+  attempts  Int       @default(1) // 1-10, checked by the database
+  claimedAt DateTime  @default(now()) @db.Timestamptz(3) // the latest attempt began
+  sentAt    DateTime? @db.Timestamptz(3) // sent (or nothing to send); null while failing
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

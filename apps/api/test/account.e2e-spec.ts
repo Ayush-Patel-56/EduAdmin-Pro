@@ -6,12 +6,15 @@ import type { MailService } from '../src/auth/mail.service.js';
 import { AvatarService } from '../src/auth/avatar.service.js';
 import { DigestService } from '../src/notifications/digest.service.js';
 import { NotificationsService } from '../src/notifications/notifications.service.js';
+import { SyllabusService } from '../src/academic/syllabus.service.js';
+import type { SyllabusImportDto } from '../src/academic/academic.dto.js';
 
 /**
  * Account settings on a real database: an uploaded picture's bytes round
  * trip; syllabus updates reach the right people (admins, the batch's active
  * teachers who keep them on, never the actor or another school); the digest
- * reads one school's day.
+ * reads one school's day, goes only to those who turned it on, and a failing
+ * one is retried a bounded number of times.
  */
 describe('account settings on the database (e2e)', () => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
@@ -66,7 +69,13 @@ describe('account settings on the database (e2e)', () => {
     });
   });
 
+  // A day no real digest covers, so the runs below touch no one else's.
+  const digestDay = new Date('2099-03-10T00:00:00Z');
+  const digestNow = new Date('2099-03-10T14:00:00Z');
+  const ours = () => [ids.admin, ids.actor, ids.teacher, ids.off, ids.stranger];
+
   afterAll(async () => {
+    await prisma.emailDigest.deleteMany({ where: { day: digestDay } });
     await prisma.school.deleteMany({ where: { id: { in: [ids.school, ids.other] } } });
     await prisma.user.deleteMany({ where: { id: { in: [ids.admin, ids.actor, ids.teacher, ids.off, ids.stranger] } } });
     await prisma.$disconnect();
@@ -100,6 +109,75 @@ describe('account settings on the database (e2e)', () => {
     await notifications.syllabusChanged(ids.school, ids.actor, [{ batchId: ids.batch2, subject: 'Physics', title: 'Optics', status: 'IN_PROGRESS' }]);
     expect(await prisma.notification.count({ where: { userId: ids.teacher } })).toBe(1);
     expect(await prisma.notification.count({ where: { userId: ids.off } })).toBe(0);
+    // A teacher made inactive no longer reads the school's alerts (and gets no new ones); a teacher on leave still does.
+    await prisma.faculty.update({ where: { id: ids.f2 }, data: { status: 'INACTIVE' } });
+    expect(await notifications.list(ids.teacher)).toEqual({ unread: 0, items: [] });
+    await prisma.faculty.update({ where: { id: ids.f2 }, data: { status: 'ON_LEAVE' } });
+    expect((await notifications.list(ids.teacher)).unread).toBe(1);
+    await prisma.faculty.update({ where: { id: ids.f2 }, data: { status: 'ACTIVE' } });
+  });
+
+  it('an import tells people only of chapters whose status it really changed', async () => {
+    const notify = { syllabusChanged: vi.fn() };
+    const syllabus = new SyllabusService(db, notify as unknown as NotificationsService);
+    const run = (rows: object[]) =>
+      syllabus.import(ids.school, null, ids.admin, { dryRun: false, defaults: { batchId: ids.batch, subject: 'Physics' }, rows } as unknown as SyllabusImportDto);
+    await run([{ title: 'Waves', status: 'In Progress' }, { title: 'Sound' }, { title: 'Light', status: 'Not Started' }]);
+    // New chapters: only one that starts beyond Not Started is news.
+    expect(notify.syllabusChanged.mock.calls[0][2]).toEqual([expect.objectContaining({ title: 'Waves', status: 'IN_PROGRESS' })]);
+    // Again with the same statuses (and Sound still blank): nothing to tell.
+    await run([{ title: 'Waves', status: 'In Progress' }, { title: 'Sound' }, { title: 'Light', status: 'Not Started' }]);
+    expect(notify.syllabusChanged.mock.calls[1][2]).toEqual([]);
+    await run([{ title: 'Waves', status: 'Completed' }, { title: 'Light', status: 'Not Started' }]);
+    expect(notify.syllabusChanged.mock.calls[2][2]).toEqual([expect.objectContaining({ title: 'Waves', status: 'COMPLETED' })]);
+    await prisma.syllabusItem.deleteMany({ where: { schoolId: ids.school } });
+  });
+
+  it('two identical moves at once tell people once', async () => {
+    const notify = { syllabusChanged: vi.fn() };
+    const syllabus = new SyllabusService(db, notify as unknown as NotificationsService);
+    const item = await prisma.syllabusItem.create({ data: { schoolId: ids.school, batchId: ids.batch, subject: 'Physics', title: 'Gravitation', status: 'IN_PROGRESS' } });
+    await Promise.all([syllabus.setStatus(ids.school, null, ids.admin, item.id, 'COMPLETED'), syllabus.setStatus(ids.school, null, ids.admin, item.id, 'COMPLETED')]);
+    expect(notify.syllabusChanged).toHaveBeenCalledTimes(1);
+    await prisma.syllabusItem.delete({ where: { id: item.id } });
+  });
+
+  it('the digest is off until a user turns it on', async () => {
+    // Accounts made without a choice (all of ours) start with it off.
+    const flags = await prisma.user.findMany({ where: { id: { in: ours() } }, select: { emailNotifications: true } });
+    expect(flags.map((f) => f.emailNotifications)).toEqual(ours().map(() => false));
+    const mail = { send: vi.fn().mockResolvedValue(undefined) };
+    const digests = new DigestService(db, mail as unknown as MailService);
+    await digests.sendDue(digestNow);
+    const sentTo = () => mail.send.mock.calls.map((c) => (c[0] as { to: string }).to).filter((to) => to.includes(ids.school.slice(0, 8)));
+    expect(sentTo()).toEqual([]);
+    await prisma.user.update({ where: { id: ids.admin }, data: { emailNotifications: true } });
+    await digests.sendDue(digestNow);
+    expect(sentTo()).toEqual([expect.stringMatching(/^admin-/)]);
+    expect(await prisma.emailDigest.findUnique({ where: { userId_day: { userId: ids.admin, day: digestDay } } })).toMatchObject({ attempts: 1, sentAt: expect.any(Date) });
+    // Sent: never again that day.
+    await digests.sendDue(new Date(digestNow.getTime() + 3_600_000));
+    expect(sentTo()).toHaveLength(1);
+  });
+
+  it('a failing digest is retried on later ticks, at most 3 times, never while a claim is fresh', async () => {
+    await prisma.user.update({ where: { id: ids.stranger }, data: { emailNotifications: true } });
+    const mail = { send: vi.fn((m: { to: string }) => (m.to.startsWith('stranger-') ? Promise.reject(new Error('SMTP down')) : Promise.resolve())) };
+    const digests = new DigestService(db, mail as unknown as MailService);
+    const tries = () => mail.send.mock.calls.filter((c) => (c[0] as { to: string }).to.startsWith(`stranger-${ids.school.slice(0, 8)}`)).length;
+    const row = () => prisma.emailDigest.findUnique({ where: { userId_day: { userId: ids.stranger, day: digestDay } } });
+    const minutes = (m: number) => new Date(digestNow.getTime() + m * 60_000);
+    await digests.sendDue(minutes(0));
+    expect([tries(), await row()]).toEqual([1, expect.objectContaining({ attempts: 1, sentAt: null })]);
+    await digests.sendDue(minutes(2)); // the claim is still fresh
+    expect(tries()).toBe(1);
+    await digests.sendDue(minutes(10));
+    await digests.sendDue(minutes(20));
+    expect([tries(), (await row())?.attempts]).toEqual([3, 3]);
+    await digests.sendDue(minutes(30));
+    await digests.sendDue(minutes(40));
+    expect(tries()).toBe(3);
+    await prisma.user.updateMany({ where: { id: { in: [ids.admin, ids.stranger] } }, data: { emailNotifications: false } });
   });
 
   it("the digest reads one school's day: reports, late, and who hasn't reported", async () => {
