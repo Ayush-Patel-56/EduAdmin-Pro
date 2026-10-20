@@ -70,7 +70,8 @@ export type StudentReport = {
     byType: (Breakdown & { type: string })[]
     byDifficulty: (Breakdown & { difficulty: string })[]
   }
-  topics: { strong: TopicStrength[]; average: TopicStrength[]; weak: TopicStrength[] }
+  /** Each band lists at most 25 (strongest, middle and weakest first); `counts` has how many each band holds. Older APIs send no counts. */
+  topics: { strong: TopicStrength[]; average: TopicStrength[]; weak: TopicStrength[]; counts?: { strong: number; average: number; weak: number } }
   mistakes: {
     incorrect: number
     partial: number
@@ -102,7 +103,8 @@ export type StudentReport = {
       meetings: number
       parentAttended: number
       parentAttendanceRate: number | null
-      notes: { date: string; teacherName: string; parentName: string | null; parentAttended: boolean; discussion: string; actionItems: string | null; followUpDate: string | null }[]
+      /** `teacherLeft`: the teacher who logged it has since left (absent from older APIs). */
+      notes: { date: string; teacherName: string; teacherLeft?: boolean; parentName: string | null; parentAttended: boolean; discussion: string; actionItems: string | null; followUpDate: string | null }[]
     }
   }
   coverage: { tests: number; answers: number; gradedAssignments: number; ratings: number; classes: number; ptmNotes: number }

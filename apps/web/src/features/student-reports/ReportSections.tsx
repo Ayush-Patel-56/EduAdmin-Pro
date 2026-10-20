@@ -118,7 +118,7 @@ export function TopicsSection({ r }: { r: StudentReport }) {
         {(['STRONG', 'AVERAGE', 'WEAK'] as const).map((band) => {
           const list = band === 'STRONG' ? r.topics.strong : band === 'AVERAGE' ? r.topics.average : r.topics.weak
           return (
-            <Card key={band} title={BAND_LABELS[band]} sub={`${list.length} topic${list.length === 1 ? '' : 's'}`}>
+            <Card key={band} title={BAND_LABELS[band]} sub={bandCount(list.length, r.topics.counts?.[band === 'STRONG' ? 'strong' : band === 'AVERAGE' ? 'average' : 'weak'])}>
               {list.length === 0 ? <p className="text-xs text-slate-400">None</p> : <ul className="space-y-3">{list.map((t) => <TopicRow key={`${t.subject}|${t.topic}`} t={t} />)}</ul>}
             </Card>
           )
@@ -281,6 +281,7 @@ export function FeedbackSection({ r }: { r: StudentReport }) {
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                   <span className="font-semibold text-slate-700">{dayLabel(n.date)}</span>
                   <span>{n.teacherName}</span>
+                  {n.teacherLeft && <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-600">Teacher has left</span>}
                   {n.parentName && <span>with {n.parentName}</span>}
                   <span className={`rounded px-1.5 py-0.5 font-bold ${n.parentAttended ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{n.parentAttended ? 'Parent attended' : 'Parent absent'}</span>
                 </div>
@@ -304,4 +305,10 @@ function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: Re
       {sub && <div className="mt-1 text-[11px] text-slate-500">{sub}</div>}
     </div>
   )
+}
+
+/** "12 topics", or "Showing 25 of 40 topics" when the band was capped. */
+function bandCount(shown: number, total = shown) {
+  if (total > shown) return `Showing ${shown} of ${total} topics`
+  return `${total} topic${total === 1 ? '' : 's'}`
 }

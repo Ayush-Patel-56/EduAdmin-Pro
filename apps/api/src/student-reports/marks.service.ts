@@ -562,13 +562,15 @@ const clean = (v: string | undefined) => (v ?? '').trim().replace(/\s+/g, ' ');
 const nameKey = looseText;
 
 /**
- * The same person: the full name as on the roster, ignoring letter case,
- * Latin accents, spacing and punctuation ("Mary-Jane D'Souza" = "mary jane d
- * souza"); a first name alone isn't enough (#50).
+ * The same person: the full name as on the roster, in any word order
+ * ("Mehta Aarav" = "Aarav Mehta", #53), ignoring letter case, Latin accents,
+ * spacing and punctuation ("Mary-Jane D'Souza" = "mary jane d souza"). A
+ * first name alone, initials, or a missing or extra name aren't enough (#50).
  */
 export function sameName(rosterName: string, sheetName: string): boolean {
-  const a = nameKey(rosterName);
-  return !!a && a === nameKey(sheetName);
+  const words = (s: string) => nameKey(s).split(' ').filter(Boolean).sort().join(' ');
+  const a = words(rosterName);
+  return !!a && a === words(sheetName);
 }
 
 /** A number cell: blank is null; up to two decimals; "92%" reads as 92 where a percentage is allowed. */

@@ -21,6 +21,8 @@ import type { StudentSearchQuery } from './student-reports.dto.js';
 export const SEARCH_LIMIT = 20;
 /** Recent incorrect answers, PTM notes and ratings listed on the report. */
 export const RECENT_LIMIT = 20;
+/** Topics listed in each strength band (strongest, middle and weakest first); the counts cover them all (#53). */
+export const TOPICS_PER_BAND = 25;
 /** Tests of one student in a year that the report reads (far above any real timetable). */
 const TESTS_LIMIT = 500;
 
@@ -80,6 +82,9 @@ export class StudentReportService {
     const dayRange = { gte: ctx.fromDate, lt: ctx.toDate };
     // Ratings count only from teachers still active in the school (#50): not an inactive or deleted profile.
     const ratingWhere = { ...s, date: dayRange, faculty: { status: { not: 'INACTIVE' as const } } };
+    // PTM notes are records of meetings that happened: every one counts, and admins see them all, a departed
+    // teacher's labelled as such (#55). A teacher's own report lists only the notes they wrote.
+    const ptmWhere = { ...s, meetingDate: dayRange };
     // A teacher reads only the ratings and PTM notes they wrote; the totals and averages are everyone's (#50).
     const ownOnly = isTeacher(actor) ? { facultyId: actor.scope.facultyId ?? '' } : {};
 
@@ -109,10 +114,10 @@ export class StudentReportService {
         JOIN "Test" t ON t."id" = a."testId" AND t."schoolId" = a."schoolId"
         WHERE a."schoolId" = ${actor.schoolId} AND r."studentId" = ${studentId} AND r."present"
           AND t."status" = 'SCHEDULED' AND t."startsAt" >= ${ctx.fromInstant} AND t."startsAt" < ${ctx.toInstant}
-        GROUP BY q."subject", regexp_replace(lower(btrim(q."topic")), '[[:space:]]+', ' ', 'g')`,
+        GROUP BY q."subject", lower(btrim(q."topic"))`,
       this.prisma.assignmentSubmission.findMany({
         where: { ...s, score: { not: null }, assignment: { dueAt: { gte: ctx.fromInstant, lt: ctx.toInstant } } },
-        select: { score: true, assignment: { select: { subject: true, chapter: true, topic: true, totalMarks: true } } },
+        select: { score: true, assignment: { select: { subject: true, chapter: true, topic: true, totalMarks: true, dueAt: true } } },
         take: TESTS_LIMIT * 2,
       }),
       this.prisma.testAnswer.findMany({
@@ -136,11 +141,11 @@ export class StudentReportService {
         take: RECENT_LIMIT,
       }),
       this.prisma.attendanceRecord.groupBy({ by: ['status'], where: { ...s, occurrence: { date: dayRange } }, _count: { _all: true } }),
-      this.prisma.ptmNote.count({ where: { ...s, meetingDate: dayRange } }),
-      this.prisma.ptmNote.count({ where: { ...s, meetingDate: dayRange, parentAttended: true } }),
+      this.prisma.ptmNote.count({ where: ptmWhere }),
+      this.prisma.ptmNote.count({ where: { ...ptmWhere, parentAttended: true } }),
       this.prisma.ptmNote.findMany({
-        where: { ...s, meetingDate: dayRange, ...ownOnly },
-        select: { meetingDate: true, teacherName: true, parentName: true, parentAttended: true, discussion: true, actionItems: true, followUpDate: true },
+        where: { ...ptmWhere, ...ownOnly },
+        select: { meetingDate: true, teacherName: true, parentName: true, parentAttended: true, discussion: true, actionItems: true, followUpDate: true, faculty: { select: { status: true } } },
         orderBy: [{ meetingDate: 'desc' }, { createdAt: 'desc' }],
         take: RECENT_LIMIT,
       }),
@@ -197,7 +202,7 @@ export class StudentReportService {
     // Strength vs Weakness: test answers and graded assignments, by topic.
     const topics = topicStrength(
       testTopics.map((t): TestTopic => ({ subject: t.subject, chapter: t.chapter, topic: t.topic, latest: t.latest, questions: t.questions, awarded: Number(t.awarded), possible: t.possible })),
-      assignments.map((a): AssignmentTopic => ({ subject: a.assignment.subject, chapter: a.assignment.chapter, topic: a.assignment.topic, score: Number(a.score), total: a.assignment.totalMarks })),
+      assignments.map((a): AssignmentTopic => ({ subject: a.assignment.subject, chapter: a.assignment.chapter, topic: a.assignment.topic, latest: a.assignment.dueAt, score: Number(a.score), total: a.assignment.totalMarks })),
     );
 
     // Teacher Feedback: ratings, attendance, PTM notes.
@@ -287,9 +292,11 @@ export class StudentReportService {
         byDifficulty: groupBy('difficulty'),
       },
       topics: {
-        strong: topics.filter((t) => t.band === 'STRONG'),
-        average: topics.filter((t) => t.band === 'AVERAGE'),
-        weak: topics.filter((t) => t.band === 'WEAK').reverse(),
+        strong: topics.filter((t) => t.band === 'STRONG').slice(0, TOPICS_PER_BAND),
+        average: topics.filter((t) => t.band === 'AVERAGE').slice(0, TOPICS_PER_BAND),
+        weak: topics.filter((t) => t.band === 'WEAK').reverse().slice(0, TOPICS_PER_BAND),
+        /** How many topics each band has (the lists show at most TOPICS_PER_BAND). */
+        counts: { strong: topics.filter((t) => t.band === 'STRONG').length, average: topics.filter((t) => t.band === 'AVERAGE').length, weak: topics.filter((t) => t.band === 'WEAK').length },
       },
       mistakes: {
         incorrect: outcomeTotal('INCORRECT'),
@@ -325,6 +332,8 @@ export class StudentReportService {
           notes: ptm.map((n) => ({
             date: toIsoDate(n.meetingDate),
             teacherName: n.teacherName,
+            /** The teacher has since left: their profile is inactive or was deleted. */
+            teacherLeft: !n.faculty || n.faculty.status === 'INACTIVE',
             parentName: n.parentName,
             parentAttended: n.parentAttended,
             discussion: n.discussion,

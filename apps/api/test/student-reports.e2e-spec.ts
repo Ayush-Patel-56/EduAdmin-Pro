@@ -287,12 +287,67 @@ describe('student reports on the database (e2e)', () => {
     expect(r.feedback.ptm).toMatchObject({ meetings: 2, parentAttended: 1, parentAttendanceRate: 50 });
     expect(r.feedback.ptm.notes.map((n) => n.discussion)).toEqual(['Mine']);
     expect((await reports.report(admin, r1)).feedback.ptm.notes.map((n) => n.discussion).sort()).toEqual(['Mine', 'Theirs']);
+    // On leave isn't gone: his note isn't marked as from a teacher who has left.
+    await prisma.faculty.update({ where: { id: other }, data: { status: 'ON_LEAVE' } });
+    r = await reports.report(admin, r1);
+    expect(r.feedback.ptm.notes.map((n) => [n.discussion, n.teacherLeft]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([['Mine', false], ['Theirs', false]]);
     // Mr Sen leaves: his rating no longer counts, for anyone.
     await prisma.faculty.update({ where: { id: other }, data: { status: 'INACTIVE' } });
     r = await reports.report(admin, r1);
     expect(r.feedback.ratings).toMatchObject({ count: 1, days: 1, score: 5 });
     expect(r.feedback.recentRatings.map((x) => x.raterName)).toEqual(['Ms Rao']);
     expect(r.summary.behaviourScore).toBe(5);
+    // His PTM note is a record of a meeting that happened (#55): it still counts, and the admin still reads it, marked as his who has left.
+    expect(r.feedback.ptm).toMatchObject({ meetings: 2, parentAttended: 1, parentAttendanceRate: 50 });
+    expect(r.feedback.ptm.notes.map((n) => [n.discussion, n.teacherLeft]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([['Mine', false], ['Theirs', true]]);
+    expect(r.summary.ptmMeetings).toBe(2);
+    // The same once his profile is deleted (the note keeps his name).
+    await prisma.faculty.delete({ where: { id: other } });
+    r = await reports.report(admin, r1);
+    expect(r.feedback.ptm.notes.map((n) => [n.discussion, n.teacherName, n.teacherLeft]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([['Mine', 'Ms Rao', false], ['Theirs', 'Mr Sen', true]]);
+    expect(r.feedback.ptm.meetings).toBe(2);
+  }, 60_000);
+
+  it("names a topic spelled two ways as on the latest paper, and caps each strength band (#53)", async () => {
+    const [b9, r1] = [id(), id()];
+    await prisma.batch.create({ data: { id: b9, schoolId: ids.school, programId: ids.program, name: 'B9', startDate: new Date('2026-04-01T00:00:00Z') } });
+    await prisma.student.create({ data: { id: r1, schoolId: ids.school, fullName: 'Zoe Lal', rollNumber: 'Y01', batchId: b9, status: 'ACTIVE' } });
+    // An older paper says "Gauss Law" (with 29 other topics, all right); a newer one "Gauss's Law.".
+    // (Gauss is all right too, so it is among the strong topics.)
+    const paper = async (startsAt: Date, topics: string[]) => {
+      const t = id();
+      await prisma.test.create({ data: { id: t, schoolId: ids.school, title: 'P', type: 'DPP', subject: 'Physics', batchId: b9, startsAt, endsAt: new Date(startsAt.getTime() + 3_600_000), durationMinutes: 60, totalMarks: topics.length, createdByName: 'Report Admin' } });
+      const qids = topics.map(() => id());
+      await prisma.testQuestion.createMany({ data: topics.map((topic, i) => ({ id: qids[i], schoolId: ids.school, testId: t, position: i + 1, subject: 'Physics', topic, difficulty: 'EASY' as const, type: 'INTEGER' as const, text: `Q${i + 1}`, correctAnswer: '1', marks: 1 })) });
+      await tests.saveResults(admin, t, { summaryOnly: true, results: [{ studentId: r1, present: true, answers: qids.map((q) => ({ testQuestionId: q, response: '1' })) }] } as never);
+      return t;
+    };
+    const t1 = await paper(new Date(Date.now() - 48 * 3_600_000), ['Gauss Law', ...Array.from({ length: 29 }, (_, i) => `Strong ${i + 1}`)]);
+    const t2 = await paper(new Date(Date.now() - 4 * 3_600_000), ["Gauss's Law."]);
+    const r = await reports.report(admin, r1);
+    expect(r.topics.counts).toEqual({ strong: 30, average: 0, weak: 0 });
+    expect(r.topics.strong).toHaveLength(25);
+    const gauss = [...r.topics.strong, ...r.topics.average, ...r.topics.weak].find((x) => x.topic.toLowerCase().startsWith('gauss'));
+    expect(gauss).toMatchObject({ topic: "Gauss's Law.", test: { questions: 2 } });
+    // "Gauss Law" again on the newest paper: its latest use is now the newest, so it names the topic.
+    const t3 = await paper(new Date(Date.now() - 2 * 3_600_000), ['Gauss Law']);
+    const again = (await reports.report(admin, r1)).topics.strong.find((x) => x.topic.toLowerCase().startsWith('gauss'));
+    expect(again).toMatchObject({ topic: 'Gauss Law', test: { questions: 3 } });
+    // 30 weak topics at 0-40% (six at each level) and 30 average ones at 60%: each band lists 25, the weakest first.
+    const t4 = id();
+    const scored = [...Array.from({ length: 30 }, (_, i) => [`Weak ${i + 1}`, Math.floor(i / 6)] as const), ...Array.from({ length: 30 }, (_, i) => [`Average ${i + 1}`, 6] as const)];
+    const at = new Date(Date.now() - 3_600_000);
+    await prisma.test.create({ data: { id: t4, schoolId: ids.school, title: 'Scored', type: 'DPP', subject: 'Physics', batchId: b9, startsAt: at, endsAt: new Date(at.getTime() + 3_600_000), durationMinutes: 60, totalMarks: scored.length * 10, createdByName: 'Report Admin' } });
+    const sq = scored.map(() => id());
+    await prisma.testQuestion.createMany({ data: scored.map(([topic], i) => ({ id: sq[i], schoolId: ids.school, testId: t4, position: i + 1, subject: 'Physics', topic, difficulty: 'EASY' as const, type: 'SUBJECTIVE' as const, text: `S${i + 1}`, marks: 10 })) });
+    await tests.saveResults(admin, t4, { summaryOnly: true, results: [{ studentId: r1, present: true, answers: scored.map(([, m], i) => ({ testQuestionId: sq[i], marksAwarded: m })) }] } as never);
+    const bands = (await reports.report(admin, r1)).topics;
+    expect(bands.counts).toEqual({ strong: 30, average: 30, weak: 30 });
+    expect([bands.strong.length, bands.average.length, bands.weak.length]).toEqual([25, 25, 25]);
+    // The weakest first: all six at 0% are listed (a cut taken before the weakest-first order would keep only one).
+    expect(bands.weak.filter((x) => x.percent === 0)).toHaveLength(6);
+    expect(bands.weak.map((x) => x.percent)).toEqual(bands.weak.map((x) => x.percent).sort((a, b) => a - b));
+    await prisma.testResult.deleteMany({ where: { testId: { in: [t1, t2, t3, t4] } } });
   }, 60_000);
 
   it('Mistake Analysis reads the most missed spellings first, so more topics than its cap never hide the misses (#52)', async () => {
