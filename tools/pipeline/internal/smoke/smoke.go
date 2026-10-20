@@ -6,10 +6,14 @@ package smoke
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -27,8 +31,10 @@ var (
 	Timeout  = 15 * time.Second
 )
 
+// forgedIPs are sent as X-Forwarded-For, one per call of the client ip check.
+var forgedIPs = []string{"203.0.113.7", "198.51.100.23"}
+
 const (
-	forgedIP   = "203.0.113.7"
 	evilOrigin = "https://evil.example"
 	maxBody    = 2 << 20 // reading more than this from any response is pointless
 )
@@ -72,14 +78,19 @@ var checks = []check{
 }
 
 // Run executes every check against webOrigin (which proxies /api/* to the API)
-// and apiOrigin (hit directly for the cron check). A nil client gets a plain
-// one with no cookie jar.
+// and apiOrigin (hit directly for the cron check). The client is copied, never
+// modified: the copy follows no redirects (a 3xx must not let another host
+// answer for the site under test) and keeps no cookies. A nil client gets a
+// plain one.
 func Run(ctx context.Context, client *http.Client, webOrigin, apiOrigin string) []Result {
-	if client == nil {
-		client = &http.Client{}
+	c := http.Client{}
+	if client != nil {
+		c = *client
 	}
+	c.Jar = nil
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	s := &site{
-		client: client,
+		client: &c,
 		web:    strings.TrimRight(webOrigin, "/"),
 		api:    strings.TrimRight(apiOrigin, "/"),
 	}
@@ -131,19 +142,54 @@ func (s *site) get(ctx context.Context, rawURL string, headers map[string]string
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		// The *url.Error text repeats the URL; keep just the cause.
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			err = ue.Err
-		}
-		return nil, fmt.Errorf("request failed: %v", err)
+		return nil, fmt.Errorf("request failed: %s", transportClass(err))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		return nil, fmt.Errorf("reading response: %v", err)
+		return nil, fmt.Errorf("reading response: %s", transportClass(err))
 	}
 	return &response{status: resp.StatusCode, header: resp.Header, body: body}, nil
+}
+
+// transportClass reduces a transport failure to a coarse class. Go's own error
+// text carries the remote address ("dial tcp 76.76.21.21:443: ..."), and CI
+// logs must never show an address.
+func transportClass(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	text := strings.ToLower(err.Error())
+	var (
+		dns     *net.DNSError
+		netErr  net.Error
+		verify  *tls.CertificateVerificationError
+		record  tls.RecordHeaderError
+		alert   tls.AlertError
+		unknown x509.UnknownAuthorityError
+		host    x509.HostnameError
+		invalid x509.CertificateInvalidError
+	)
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	case errors.As(err, &dns):
+		return "DNS lookup failed"
+	case errors.As(err, &verify), errors.As(err, &record), errors.As(err, &alert),
+		errors.As(err, &unknown), errors.As(err, &host), errors.As(err, &invalid),
+		strings.Contains(text, "tls:"), strings.Contains(text, "x509:"):
+		return "TLS error"
+	case strings.Contains(text, "connection refused"), strings.Contains(text, "actively refused"):
+		return "connection refused"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		strings.Contains(text, "connection reset"), strings.Contains(text, "forcibly closed"),
+		strings.Contains(text, "broken pipe"):
+		return "connection reset"
+	}
+	return "request failed"
 }
 
 func expectStatus(path string, r *response, want int) error {
@@ -224,14 +270,32 @@ func (s *site) apiReady(ctx context.Context) error {
 	return nil
 }
 
-// authRefuses: a request with no session cookie is turned away.
+// expectRefusal requires the app's own 401, not just any 401 (a platform
+// protection wall answers 401 with HTML): status 401, a JSON content type and
+// a body whose statusCode is 401, as NestJS's UnauthorizedException sends. The
+// body is never echoed.
+func expectRefusal(path string, r *response) error {
+	if err := expectStatus(path, r, http.StatusUnauthorized); err != nil {
+		return err
+	}
+	mt, _, _ := mime.ParseMediaType(r.header.Get("Content-Type"))
+	var body struct {
+		StatusCode int `json:"statusCode"`
+	}
+	if mt != "application/json" || json.Unmarshal(r.body, &body) != nil || body.StatusCode != http.StatusUnauthorized {
+		return fmt.Errorf("%s: 401 is not the app's JSON refusal", path)
+	}
+	return nil
+}
+
+// authRefuses: a request with no session cookie is turned away by the app.
 func (s *site) authRefuses(ctx context.Context) error {
 	const path = "/api/auth/me"
 	r, err := s.get(ctx, s.web+path, nil)
 	if err != nil {
 		return err
 	}
-	return expectStatus(path, r, http.StatusUnauthorized)
+	return expectRefusal(path, r)
 }
 
 // securityHeaders: helmet's headers survive the rewrite.
@@ -266,14 +330,49 @@ func (s *site) cors(ctx context.Context) error {
 	return nil
 }
 
-// clientIP: the API sees the real client address, not a loopback or private
-// proxy hop, a forged X-Forwarded-For, or a value that changes between calls.
+// Ranges that are never a caller's public address, beyond what netip's own
+// predicates cover.
+var nonPublic = func() []netip.Prefix {
+	var out []netip.Prefix
+	for _, p := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "198.18.0.0/15", "240.0.0.0/4",
+		"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32",
+	} {
+		out = append(out, netip.MustParsePrefix(p))
+	}
+	return out
+}()
+
+// notPublicReason returns why addr cannot be a real public client address, or
+// "" if it can. It never includes the address.
+func notPublicReason(addr netip.Addr) string {
+	addr = addr.Unmap()
+	if addr.IsLoopback() {
+		return "loopback"
+	}
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() {
+		return "private or not routable"
+	}
+	for _, p := range nonPublic {
+		if p.Contains(addr) {
+			return "private or not routable"
+		}
+	}
+	return ""
+}
+
+// clientIP: the API sees the real client address. Two calls carry different
+// forged X-Forwarded-For values; both must answer with the same public address
+// that is neither forged value (a header echoed back, or a proxy hop).
 func (s *site) clientIP(ctx context.Context) error {
 	const path = "/api/health/ip"
-	forged := netip.MustParseAddr(forgedIP)
+	var forged []netip.Addr
+	for _, f := range forgedIPs {
+		forged = append(forged, netip.MustParseAddr(f))
+	}
 	var first netip.Addr
-	for i := 0; i < 2; i++ {
-		r, err := s.get(ctx, s.web+path, map[string]string{"X-Forwarded-For": forgedIP})
+	for i, xff := range forgedIPs {
+		r, err := s.get(ctx, s.web+path, map[string]string{"X-Forwarded-For": xff})
 		if err != nil {
 			return err
 		}
@@ -294,13 +393,13 @@ func (s *site) clientIP(ctx context.Context) error {
 			return fmt.Errorf("%s: ip is not an address", path)
 		}
 		addr = addr.Unmap()
-		switch {
-		case addr == forged:
-			return fmt.Errorf("%s: ip matched the forged X-Forwarded-For", path)
-		case addr.IsLoopback():
-			return fmt.Errorf("%s: ip is loopback", path)
-		case addr.IsPrivate(), addr.IsLinkLocalUnicast(), addr.IsUnspecified():
-			return fmt.Errorf("%s: ip is private or not routable", path)
+		for _, f := range forged {
+			if addr == f {
+				return fmt.Errorf("%s: ip matched a forged X-Forwarded-For", path)
+			}
+		}
+		if why := notPublicReason(addr); why != "" {
+			return fmt.Errorf("%s: ip is %s", path, why)
 		}
 		if i == 0 {
 			first = addr
@@ -319,5 +418,5 @@ func (s *site) cronLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return expectStatus(path, r, http.StatusUnauthorized)
+	return expectRefusal(path, r)
 }
