@@ -79,10 +79,17 @@ func TestRolledBack(t *testing.T) {
 		body string
 		want bool
 	}{
-		{`{"id":"prj_1","lastRollbackTarget":null}`, false},
+		{`{"id":"prj_1","lastAliasRequest":{"type":"rollback","jobStatus":"succeeded","fromDeploymentId":"dpl_b","toDeploymentId":"dpl_a","requestedAt":1}}`, true},
+		{`{"id":"prj_1","lastAliasRequest":{"type":"rollback","jobStatus":"in-progress"}}`, true},
+		{`{"id":"prj_1","lastAliasRequest":{"type":"rollback","jobStatus":"pending"}}`, true},
+		{`{"id":"prj_1","lastAliasRequest":{"type":"rollback","jobStatus":"failed"}}`, false},
+		{`{"id":"prj_1","lastAliasRequest":{"type":"rollback","jobStatus":"skipped"}}`, false},
+		{`{"id":"prj_1","lastAliasRequest":{"type":"promote","jobStatus":"succeeded"}}`, false},
+		{`{"id":"prj_1","lastAliasRequest":null}`, false},
 		{`{"id":"prj_1"}`, false},
-		{`{"id":"prj_1","lastRollbackTarget":{}}`, true},
-		{`{"id":"prj_1","lastRollbackTarget":{"fromDeploymentId":"dpl_b","toDeploymentId":"dpl_a"}}`, true},
+		// lastRollbackTarget is ignored either way.
+		{`{"id":"prj_1","lastRollbackTarget":{},"lastAliasRequest":{"type":"promote","jobStatus":"succeeded"}}`, false},
+		{`{"id":"prj_1","lastRollbackTarget":null,"lastAliasRequest":{"type":"rollback","jobStatus":"succeeded"}}`, true},
 	} {
 		c, reqs := fakeVercel(t, func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, tc.body)
@@ -261,10 +268,15 @@ func TestDeployTakesLastURLLine(t *testing.T) {
 	}
 }
 
-func TestDeployErrorsWithoutURL(t *testing.T) {
-	r, _, _ := deployRunner("nothing useful\n", "")
-	if _, err := vercel.Deploy(context.Background(), r, "p", "o", "tok-1234"); err == nil {
-		t.Fatal("no URL on stdout must be an error")
+func TestDeployWithoutURLStillSucceeds(t *testing.T) {
+	// The CLI exited 0, so the deployment exists: a missing URL is a warning.
+	r, _, out := deployRunner("nothing useful\n", "")
+	url, err := vercel.Deploy(context.Background(), r, "p", "o", "tok-1234")
+	if err != nil || url != "" {
+		t.Fatalf("got %q %v", url, err)
+	}
+	if !strings.Contains(out.String(), "::warning::") || !strings.Contains(out.String(), "URL") {
+		t.Fatalf("expected a warning, output: %q", out.String())
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/run"
 	"github.com/Ayush-Patel-56/EduAdmin-Pro/tools/pipeline/internal/smoke"
@@ -30,7 +31,8 @@ type ReleaseDeps interface {
 	Migrate(ctx context.Context) (output string, err error)
 	SyncEnv(ctx context.Context, projectID string, vars map[string]string) error
 	// Deploy builds and deploys the project to production, returning the
-	// deployment's URL.
+	// deployment's URL for the log ("" if it could not be read; success
+	// is the error being nil).
 	Deploy(ctx context.Context, projectID string) (url string, err error)
 	// WriteRewrite points the web project's /api rewrite at apiOrigin. restore
 	// puts apps/web/vercel.json back as it was.
@@ -141,14 +143,14 @@ func Release(ctx context.Context, r *run.Runner, d ReleaseDeps) error {
 	if err != nil {
 		return fmt.Errorf("deploying %s failed: %w. The database is migrated; the web project was not deployed", api.Name, err)
 	}
-	r.Printf("%s deployed: %s", api.Name, apiURL)
+	printDeployed(r, api.Name, apiURL)
 
 	r.Stage("deploy web")
 	webURL, err := deployWeb(ctx, r, d, web, apiOrigin)
 	if err != nil {
 		return rollBack(ctx, r, d, fmt.Errorf("deploying %s failed: %w", web.Name, err), apiT)
 	}
-	r.Printf("%s deployed: %s", web.Name, webURL)
+	printDeployed(r, web.Name, webURL)
 
 	r.Stage("smoke")
 	if err := d.Smoke(ctx, webOrigin, apiOrigin); err != nil {
@@ -192,6 +194,10 @@ func deployWeb(ctx context.Context, r *run.Runner, d ReleaseDeps, web vercel.Pro
 // returns cause with a plain account of the state production is now in.
 func rollBack(ctx context.Context, r *run.Runner, d ReleaseDeps, cause error, targets ...target) error {
 	r.Stage("rollback")
+	// A cancelled release (Ctrl-C, a cancelled workflow) must still roll back,
+	// or production is left half new and half old.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RollbackTimeout)
+	defer cancel()
 	var done, notes []string
 	for _, t := range targets {
 		if !t.hasPrev {
@@ -346,4 +352,18 @@ func (l *Live) Smoke(ctx context.Context, webOrigin, apiOrigin string) error {
 		return fmt.Errorf("%d of %d smoke checks failed", failed, len(results))
 	}
 	return nil
+}
+
+// RollbackTimeout bounds all the rollback calls of one failed release. They run
+// even when the release's own context was cancelled.
+var RollbackTimeout = 2 * time.Minute
+
+// printDeployed logs a finished deploy. The URL is informational: the CLI
+// exited 0, so the deployment exists even if its URL couldn't be read.
+func printDeployed(r *run.Runner, name, url string) {
+	if url == "" {
+		r.Printf("%s deployed (deployment URL not read)", name)
+		return
+	}
+	r.Printf("%s deployed: %s", name, url)
 }

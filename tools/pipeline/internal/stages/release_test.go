@@ -47,18 +47,21 @@ func TestRiskyStatements(t *testing.T) {
 // fakeDeps records the release's calls in order. Projects are named by their
 // short label ("api", "web") in the steps.
 type fakeDeps struct {
-	steps      []string
-	rolledBack map[string]bool
-	prev       map[string]string // label -> deployment; absent means none yet
-	pending    []stages.Migration
-	migrateOut string
-	migrateErr error
-	deployErr  map[string]error
-	rewriteErr error
-	smokeErr   error
-	rollbacks  []string // "label deployment"
-	smokeArgs  [2]string
-	rewriteTo  string
+	steps       []string
+	rolledBack  map[string]bool
+	prev        map[string]string // label -> deployment; absent means none yet
+	pending     []stages.Migration
+	migrateOut  string
+	migrateErr  error
+	deployErr   map[string]error
+	rewriteErr  error
+	smokeErr    error
+	rollbacks   []string // "label deployment"
+	smokeArgs   [2]string
+	rewriteTo   string
+	noURL       bool       // Deploy succeeds but returns no URL
+	onSmoke     func()     // runs when smoke starts
+	rollbackCtx []ctxState // the context each Rollback got, as it was then
 }
 
 func label(id string) string { return strings.TrimPrefix(id, "prj_") }
@@ -113,6 +116,9 @@ func (f *fakeDeps) Deploy(_ context.Context, id string) (string, error) {
 	if err := f.deployErr[label(id)]; err != nil {
 		return "", err
 	}
+	if f.noURL {
+		return "", nil
+	}
 	return "https://eduadmin-" + label(id) + "-abc.vercel.app", nil
 }
 
@@ -130,11 +136,16 @@ func (f *fakeDeps) WriteRewrite(apiOrigin string) (func() error, error) {
 
 func (f *fakeDeps) Smoke(_ context.Context, web, api string) error {
 	f.steps = append(f.steps, "smoke")
+	if f.onSmoke != nil {
+		f.onSmoke()
+	}
 	f.smokeArgs = [2]string{web, api}
 	return f.smokeErr
 }
 
-func (f *fakeDeps) Rollback(_ context.Context, id, deployment string) error {
+func (f *fakeDeps) Rollback(ctx context.Context, id, deployment string) error {
+	_, hasDeadline := ctx.Deadline()
+	f.rollbackCtx = append(f.rollbackCtx, ctxState{err: ctx.Err(), hasDeadline: hasDeadline})
 	f.steps = append(f.steps, "rollback "+label(id))
 	f.rollbacks = append(f.rollbacks, label(id)+" "+deployment)
 	return nil
@@ -509,4 +520,51 @@ func TestLiveWriteRewriteFailureLeavesFileAlone(t *testing.T) {
 	if string(b) != `{}` {
 		t.Fatalf("file changed: %s", b)
 	}
+}
+
+func TestRollbackSurvivesCancelledRelease(t *testing.T) {
+	f := newFake()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Ctrl-C (or a cancelled workflow) arrives during smoke, which then fails.
+	f.onSmoke = cancel
+	f.smokeErr = errors.New("smoke checks failed: context canceled")
+	err := stages.Release(ctx, run.New("/repo", &bytes.Buffer{}), f)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(f.rollbackCtx) != 2 {
+		t.Fatalf("want both projects rolled back, got %v", f.rollbacks)
+	}
+	for i, c := range f.rollbackCtx {
+		if c.err != nil {
+			t.Errorf("rollback %d got a cancelled context: %v", i, c.err)
+		}
+		if !c.hasDeadline {
+			t.Errorf("rollback %d context should be bounded by a timeout", i)
+		}
+	}
+	if !strings.Contains(err.Error(), "Rolled back") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestReleaseContinuesWhenDeployURLUnreadable(t *testing.T) {
+	f := newFake()
+	f.noURL = true
+	err, out := release(t, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countPrefix(f.steps, "smoke") != 1 || countPrefix(f.steps, "deploy web") != 1 || len(f.rollbacks) != 0 {
+		t.Fatalf("steps %v, rollbacks %v", f.steps, f.rollbacks)
+	}
+	if !strings.Contains(out, "eduadmin-api deployed (deployment URL not read)") {
+		t.Errorf("output: %s", out)
+	}
+}
+
+type ctxState struct {
+	err         error
+	hasDeadline bool
 }

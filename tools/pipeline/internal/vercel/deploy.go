@@ -2,7 +2,6 @@ package vercel
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -18,7 +17,8 @@ const VercelCLIVersion = "62.7.0"
 // production with the pinned Vercel CLI, run from the repo root (the projects'
 // root directories are set in Vercel). The token, project and team go to the
 // CLI in its environment, never on the command line. It returns the
-// deployment's own URL, which the CLI prints as the last line of stdout.
+// deployment's own URL, which the CLI prints as the last line of stdout, or
+// "" (with a warning) if that line is missing: the URL is for the log only.
 func Deploy(ctx context.Context, r *run.Runner, projectID, orgID, token string) (string, error) {
 	r.Mask(token)
 	env := []string{
@@ -37,9 +37,11 @@ func Deploy(ctx context.Context, r *run.Runner, projectID, orgID, token string) 
 	if err != nil {
 		return "", fmt.Errorf("vercel deploy: %w", err)
 	}
+	// The CLI exited 0, so the deployment exists. Its URL is for the log only;
+	// nothing depends on it, so a missing one is a warning, not a failure.
 	u := lastURLLine(out)
 	if u == "" {
-		return "", fmt.Errorf("vercel deploy: the CLI printed no deployment URL")
+		r.Printf("::warning::vercel deploy succeeded but its deployment URL could not be read from the CLI output")
 	}
 	return u, nil
 }
@@ -61,17 +63,33 @@ func lastURLLine(out string) string {
 
 // RolledBack reports whether the project is in an Instant Rollback state. While
 // it is, Vercel does not move production domains to new deployments, so a
-// release would deploy without going live. Vercel's "Find a project" response
-// has lastRollbackTarget set (non-null) while a rollback is in effect.
+// release would deploy without going live.
+//
+// It reads lastAliasRequest from Vercel's "Find a project" response (the field
+// the Vercel CLI's rollback status reads): the project is rolled back when the
+// last alias request was a rollback that succeeded or is still running. Undo
+// Rollback and `vercel promote` make the last request a promote, which clears
+// it. lastRollbackTarget is ignored: its schema is an object with no
+// documented fields.
 func (c *Client) RolledBack(ctx context.Context, projectID string) (bool, error) {
 	var p struct {
-		LastRollbackTarget json.RawMessage `json:"lastRollbackTarget"`
+		LastAliasRequest *struct {
+			Type      string `json:"type"`
+			JobStatus string `json:"jobStatus"`
+		} `json:"lastAliasRequest"`
 	}
 	if err := c.do(ctx, "GET", "/v9/projects/"+url.PathEscape(projectID), nil, nil, &p); err != nil {
 		return false, err
 	}
-	raw := strings.TrimSpace(string(p.LastRollbackTarget))
-	return raw != "" && raw != "null", nil
+	req := p.LastAliasRequest
+	if req == nil || req.Type != "rollback" {
+		return false, nil
+	}
+	switch req.JobStatus {
+	case "pending", "in-progress", "succeeded":
+		return true, nil
+	}
+	return false, nil
 }
 
 // PreviousProduction returns the deployment the project's production domain
