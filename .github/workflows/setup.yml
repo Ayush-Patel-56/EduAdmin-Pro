@@ -13,21 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
-    env:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-      PROD_DIRECT_URL: ${{ secrets.PROD_DIRECT_URL }}
-      PROD_SMTP_USER: ${{ secrets.PROD_SMTP_USER }}
-      PROD_SMTP_PASS: ${{ secrets.PROD_SMTP_PASS }}
-      PROD_MAIL_FROM: ${{ secrets.PROD_MAIL_FROM }}
-      PROD_R2_ACCOUNT_ID: ${{ secrets.PROD_R2_ACCOUNT_ID }}
-      PROD_R2_ACCESS_KEY_ID: ${{ secrets.PROD_R2_ACCESS_KEY_ID }}
-      PROD_R2_SECRET_ACCESS_KEY: ${{ secrets.PROD_R2_SECRET_ACCESS_KEY }}
-      PROD_R2_BUCKET: ${{ secrets.PROD_R2_BUCKET }}
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      # Optional, not a secret: the proxy hop count. Empty means the default, 1.
-      TRUST_PROXY: ${{ vars.TRUST_PROXY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,3 +25,24 @@ jobs:
 
       - name: Set up the projects
         run: go -C tools/pipeline run . setup
+        # The production secrets go to this step only, not the job, so no other
+        # step (an install script, an action) sees them. The pipeline passes each
+        # child process only the secrets that command needs.
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          PROD_DIRECT_URL: ${{ secrets.PROD_DIRECT_URL }}
+          PROD_SMTP_USER: ${{ secrets.PROD_SMTP_USER }}
+          PROD_SMTP_PASS: ${{ secrets.PROD_SMTP_PASS }}
+          PROD_MAIL_FROM: ${{ secrets.PROD_MAIL_FROM }}
+          PROD_R2_ACCOUNT_ID: ${{ secrets.PROD_R2_ACCOUNT_ID }}
+          PROD_R2_ACCESS_KEY_ID: ${{ secrets.PROD_R2_ACCESS_KEY_ID }}
+          PROD_R2_SECRET_ACCESS_KEY: ${{ secrets.PROD_R2_SECRET_ACCESS_KEY }}
+          PROD_R2_BUCKET: ${{ secrets.PROD_R2_BUCKET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          # Optional, not secrets. TRUST_PROXY is the proxy hop count (empty
+          # means the default, 1); DIGEST_ENABLED=false stops the digest emails
+          # (empty means true).
+          TRUST_PROXY: ${{ vars.TRUST_PROXY }}
+          DIGEST_ENABLED: ${{ vars.DIGEST_ENABLED }}
