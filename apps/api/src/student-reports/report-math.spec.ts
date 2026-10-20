@@ -71,6 +71,11 @@ describe('student report rules', () => {
     expect(topicKey('Computer Science', 'F#')).not.toBe(topicKey('Computer Science', 'F'));
     expect(topicKey('Physics', 'Topic #3')).toBe(topicKey('Physics', 'Topic 3'));
     expect(topicKey('Physics', '#1 Kinematics')).toBe(topicKey('Physics', '1 Kinematics'));
+    // Only after a letter (with at most one space): "C #" is "C#"; after a digit it's "number" (#55).
+    expect(topicKey('Computer Science', 'C #')).toBe(topicKey('Computer Science', 'C#'));
+    expect(topicKey('Computer Science', 'C #')).not.toBe(topicKey('Computer Science', 'C'));
+    expect(topicKey('Physics', 'Topic 3#')).toBe(topicKey('Physics', 'Topic 3'));
+    expect(topicKey('Physics', 'Topic 3#')).not.toBe(topicKey('Physics', 'Topic 3 sharp'));
   });
 
   it('names a topic spelled several ways as on its latest paper, whatever the order (#52)', () => {

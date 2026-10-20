@@ -287,6 +287,10 @@ describe('student reports on the database (e2e)', () => {
     expect(r.feedback.ptm).toMatchObject({ meetings: 2, parentAttended: 1, parentAttendanceRate: 50 });
     expect(r.feedback.ptm.notes.map((n) => n.discussion)).toEqual(['Mine']);
     expect((await reports.report(admin, r1)).feedback.ptm.notes.map((n) => n.discussion).sort()).toEqual(['Mine', 'Theirs']);
+    // On leave isn't gone: his note isn't marked as from a teacher who has left.
+    await prisma.faculty.update({ where: { id: other }, data: { status: 'ON_LEAVE' } });
+    r = await reports.report(admin, r1);
+    expect(r.feedback.ptm.notes.map((n) => [n.discussion, n.teacherLeft]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([['Mine', false], ['Theirs', false]]);
     // Mr Sen leaves: his rating no longer counts, for anyone.
     await prisma.faculty.update({ where: { id: other }, data: { status: 'INACTIVE' } });
     r = await reports.report(admin, r1);

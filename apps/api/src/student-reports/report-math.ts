@@ -119,15 +119,16 @@ export function looseText(s: string): string {
 /**
  * A topic as it is matched: letter case, spacing, punctuation and a possessive
  * 's ignored ("Gauss's Law" = "gauss law", "Work-Energy" = "work energy"),
- * but + and a # after a letter kept, so "C++", "C#" and "C" (or "Na+ ions" and
- * "Na ions") stay different topics (#53), while "Topic #3" is "Topic 3".
+ * but + and a # after a letter kept, so "C++", "C#" (or "C #") and "C" (or
+ * "Na+ ions" and "Na ions") stay different topics (#53). A # before a digit, or
+ * not after a letter, means "number": "Topic #3" and "Topic 3#" are "Topic 3".
  */
 const matchName = (s: string) =>
   looseText(
     s
       .replace(/['’]s\b/gi, '')
       .replace(/\+/g, ' plus ')
-      .replace(/(?<=\p{L})#/gu, ' sharp '),
+      .replace(/(?<=\p{L}) ?#(?!\p{N})/gu, ' sharp '),
   );
 
 /** How a topic is matched across tests and assignments (and in Mistake Analysis): its subject and name, ignoring letter case, spacing and punctuation other than + and #. */
