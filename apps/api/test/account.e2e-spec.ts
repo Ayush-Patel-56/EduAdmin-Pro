@@ -4,6 +4,8 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import type { PrismaService } from '../src/prisma/prisma.service.js';
 import type { MailService } from '../src/auth/mail.service.js';
 import { AvatarService } from '../src/auth/avatar.service.js';
+import type { ConfigService } from '@nestjs/config';
+import { DigestScheduler } from '../src/notifications/digest.scheduler.js';
 import { DigestService } from '../src/notifications/digest.service.js';
 import { RateLimitService } from '../src/rate-limit/rate-limit.service.js';
 import { NotificationsService } from '../src/notifications/notifications.service.js';
@@ -179,6 +181,24 @@ describe('account settings on the database (e2e)', () => {
     await digests.sendDue(minutes(40));
     expect(tries()).toBe(3);
     await prisma.user.updateMany({ where: { id: { in: [ids.admin, ids.stranger] } }, data: { emailNotifications: false } });
+  });
+
+  it('two cron runs at once send each digest once', async () => {
+    // Earlier tests left today's row behind; start this one from a clean slate.
+    await prisma.emailDigest.deleteMany({ where: { userId: ids.admin, day: digestDay } });
+    await prisma.user.update({ where: { id: ids.admin }, data: { emailNotifications: true } });
+    try {
+      const mail = { send: vi.fn().mockResolvedValue(undefined) };
+      const rateLimit = new RateLimitService(db);
+      const digests = new DigestService(db, mail as unknown as MailService, rateLimit);
+      const scheduler = new DigestScheduler({ get: (_key: string, fallback?: string) => fallback } as unknown as ConfigService, digests, new NotificationsService(db), rateLimit);
+      const sentTo = () => mail.send.mock.calls.map((c) => (c[0] as { to: string }).to).filter((to) => to.includes(ids.school.slice(0, 8)));
+      const runs = await Promise.all([scheduler.runDue(digestNow), scheduler.runDue(digestNow)]);
+      expect(runs.map((r) => r.due)).toEqual([true, true]);
+      expect(sentTo()).toEqual([expect.stringMatching(/^admin-/)]);
+    } finally {
+      await prisma.user.update({ where: { id: ids.admin }, data: { emailNotifications: false } });
+    }
   });
 
   it("the digest reads one school's day: reports, late, and who hasn't reported", async () => {

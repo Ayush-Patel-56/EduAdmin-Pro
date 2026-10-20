@@ -23,6 +23,12 @@ describe('AppController', () => {
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
   });
 
+  it('echoes the address Express resolved, nothing else', () => {
+    const res = appController.ip({ ip: '203.0.113.7', headers: { 'x-forwarded-for': '198.51.100.1' } } as never);
+    expect(res).toEqual({ ip: '203.0.113.7' });
+    expect(Object.keys(res)).toEqual(['ip']);
+  });
+
   it('is ready when the database answers', async () => {
     prisma.$queryRaw.mockResolvedValue([{ '?column?': 1 }]);
     await expect(appController.ready()).resolves.toEqual({ status: 'ok', database: 'up' });

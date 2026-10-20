@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DigestService } from './digest.service.js';
+import { RateLimitService } from '../rate-limit/rate-limit.service.js';
 import { NotificationsService } from './notifications.service.js';
 
 /** How often the job looks for digests that are due. */
@@ -11,7 +12,8 @@ const IST_OFFSET_MS = 5.5 * 3_600_000;
  * Sends the daily report digests from DIGEST_HOUR_IST (19:00 by default) and
  * prunes old read notifications. Runs inside the API: every instance ticks,
  * and the per-user-and-day EmailDigest row makes sure each digest goes once.
- * DIGEST_ENABLED=false turns it off (it never runs under tests).
+ * DIGEST_ENABLED=false turns it off (it never runs under tests). On Vercel
+ * there is no long-lived process: Vercel Cron calls runDue through CronController.
  */
 @Injectable()
 export class DigestScheduler implements OnModuleInit, OnModuleDestroy {
@@ -25,10 +27,11 @@ export class DigestScheduler implements OnModuleInit, OnModuleDestroy {
     config: ConfigService,
     private readonly digests: DigestService,
     private readonly notifications: NotificationsService,
+    private readonly rateLimit: RateLimitService,
   ) {
     const hour = Number(config.get<string>('DIGEST_HOUR_IST', '19'));
     this.hour = Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 19;
-    this.enabled = config.get<string>('DIGEST_ENABLED', 'true') !== 'false' && config.get<string>('NODE_ENV') !== 'test' && !process.env.VITEST;
+    this.enabled = config.get<string>('DIGEST_ENABLED', 'true') !== 'false' && config.get<string>('NODE_ENV') !== 'test' && !process.env.VITEST && process.env.VERCEL !== '1';
   }
 
   onModuleInit() {
@@ -46,13 +49,20 @@ export class DigestScheduler implements OnModuleInit, OnModuleDestroy {
     return new Date(now.getTime() + IST_OFFSET_MS).getUTCHours() >= this.hour;
   }
 
+  /** One pass: when due, send the digests and prune old rows. Errors propagate to the caller. */
+  async runDue(now = new Date()) {
+    if (!this.isDue(now)) return { due: false, sent: 0, pruned: 0 };
+    const sent = await this.digests.sendDue(now);
+    const pruned = (await this.notifications.prune(now)) + (await this.rateLimit.prune(now));
+    if (sent || pruned) this.logger.log(`Sent ${sent} digest(s), pruned ${pruned} row(s)`);
+    return { due: true, sent, pruned };
+  }
+
   async tick(now = new Date()) {
     if (this.running || !this.isDue(now)) return;
     this.running = true;
     try {
-      const sent = await this.digests.sendDue(now);
-      const pruned = await this.notifications.prune(now);
-      if (sent || pruned) this.logger.log(`Sent ${sent} digest(s), pruned ${pruned} notification(s)`);
+      await this.runDue(now);
     } catch (err) {
       this.logger.warn(`Digest run failed: ${(err as Error).message}`);
     } finally {

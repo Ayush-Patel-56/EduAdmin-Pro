@@ -323,7 +323,8 @@ describe('DigestScheduler', () => {
   it('is due from the configured hour in India', async () => {
     const digests = { sendDue: vi.fn().mockResolvedValue(0) };
     const notifications = { prune: vi.fn().mockResolvedValue(0) };
-    const s = new DigestScheduler(config({ DIGEST_HOUR_IST: '19' }), digests as never, notifications as never);
+    const rateLimit = { prune: vi.fn().mockResolvedValue(0) };
+    const s = new DigestScheduler(config({ DIGEST_HOUR_IST: '19' }), digests as never, notifications as never, rateLimit as never);
     // 13:29 UTC is 18:59 IST; 13:30 UTC is 19:00 IST.
     expect(s.isDue(new Date('2026-10-20T13:29:00Z'))).toBe(false);
     expect(s.isDue(new Date('2026-10-20T13:30:00Z'))).toBe(true);
@@ -333,6 +334,6 @@ describe('DigestScheduler', () => {
     expect(digests.sendDue).toHaveBeenCalledTimes(1);
     expect(notifications.prune).toHaveBeenCalledTimes(1);
     // A bad hour falls back to 19.
-    expect(new DigestScheduler(config({ DIGEST_HOUR_IST: '99' }), digests as never, notifications as never).isDue(new Date('2026-10-20T13:29:00Z'))).toBe(false);
+    expect(new DigestScheduler(config({ DIGEST_HOUR_IST: '99' }), digests as never, notifications as never, rateLimit as never).isDue(new Date('2026-10-20T13:29:00Z'))).toBe(false);
   });
 });
