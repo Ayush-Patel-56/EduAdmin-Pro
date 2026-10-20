@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Controller, Get, Global, Module, Post, type INestApplication } from '@nestjs/common';
+import { Controller, Get, Global, Injectable, Module, Post, type ExecutionContext, type INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { Throttle, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -65,14 +65,14 @@ describe('durable rate limits (e2e)', () => {
     const live = key('prune-live');
     await rl.hit(expired, 1_000, 5, t0);
     await rl.hit(live, 3_600_000, 5, t0);
-    expect(await rl.prune(new Date(t0.getTime() + 2_000))).toBe(1);
+    // Only this test's own rows are asserted on: another e2e file may share the table.
+    expect(await rl.prune(new Date(t0.getTime() + 2_000))).toBeGreaterThanOrEqual(1);
     const rows = await prisma.rateLimit.findMany({ where: { key: { in: [expired, live] } }, select: { key: true } });
     expect(rows.map((r) => r.key)).toEqual([live]);
   });
 
   describe('wired into the throttler guard', () => {
-    // A route with a durable limit of 2 a minute, and one with none; the limit's key
-    // is the class, handler and caller's IP, so each run uses its own route name.
+    // A route with a durable limit of 2 a minute, and one with none.
     @Controller(`rl-${run}`)
     class Routes {
       @Post('limited')
@@ -86,29 +86,38 @@ describe('durable rate limits (e2e)', () => {
         return { ok: true };
       }
     }
+    // The stock guard keys a limit by a hash of the class, handler and caller's
+    // IP. This one keys it in the clear under this run's prefix, so the test can
+    // find (and clean up) exactly its own rows in a table other tests share.
+    @Injectable()
+    class RunGuard extends ThrottlerGuard {
+      protected override generateKey(context: ExecutionContext, suffix: string, name: string) {
+        return key(`wired:${context.getHandler().name}:${name}:${suffix}`);
+      }
+    }
     // The app's PrismaModule is global; this one hands the test's client to RateLimitService.
     @Global()
     @Module({ providers: [{ provide: PrismaService, useValue: prisma }], exports: [PrismaService] })
     class TestPrismaModule {}
     const apps: INestApplication[] = [];
-    const startedAt = Date.now();
     // One API instance: its own guard and in-memory counts, the shared database.
     const instance = async () => {
       const moduleRef = await Test.createTestingModule({
         imports: [TestPrismaModule, ThrottlerModule.forRootAsync({ imports: [RateLimitModule], inject: [RateLimitService], useFactory: throttlerOptions })],
         controllers: [Routes],
-        providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+        providers: [{ provide: APP_GUARD, useClass: RunGuard }],
       }).compile();
       const app = moduleRef.createNestApplication();
       await app.init();
       apps.push(app);
       return app;
     };
+    // This run's guard rows; the outer afterAll deletes every key with the run in it.
+    const wiredRows = async () =>
+      (await prisma.rateLimit.findMany({ where: { key: { startsWith: key('wired:') } }, select: { key: true, hits: true } })).map((r) => [r.key.slice(key('wired:').length), r.hits]);
 
     afterAll(async () => {
       await Promise.all(apps.map((a) => a.close()));
-      // The route's rows are keyed by a hash; they are the ones whose window began during this test.
-      await prisma.rateLimit.deleteMany({ where: { resetAt: { gte: new Date(startedAt + 60_000), lte: new Date(Date.now() + 60_000) } } });
     });
 
     it('a durable limit holds across two instances, and a route without one is not counted', async () => {
@@ -118,9 +127,10 @@ describe('durable rate limits (e2e)', () => {
       // A third request is refused on either instance, though each has seen only one or two.
       await request(a.getHttpServer()).post(`/rl-${run}/limited`).expect(429);
       await request(b.getHttpServer()).post(`/rl-${run}/limited`).expect(429);
-      const before = await prisma.rateLimit.count();
       for (let i = 0; i < 3; i++) await request(a.getHttpServer()).get(`/rl-${run}/open`).expect(200);
-      expect(await prisma.rateLimit.count()).toBe(before);
+      // One durable row, for the limited route, counted by both instances; none for the open one.
+      const rows = await wiredRows();
+      expect(rows).toEqual([[expect.stringMatching(/^limited:durable:/), 4]]);
     });
   });
 });

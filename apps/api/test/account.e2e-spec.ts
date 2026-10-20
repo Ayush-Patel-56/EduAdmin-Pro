@@ -189,9 +189,17 @@ describe('account settings on the database (e2e)', () => {
     await prisma.user.update({ where: { id: ids.admin }, data: { emailNotifications: true } });
     try {
       const mail = { send: vi.fn().mockResolvedValue(undefined) };
-      const rateLimit = new RateLimitService(db);
-      const digests = new DigestService(db, mail as unknown as MailService, rateLimit);
-      const scheduler = new DigestScheduler({ get: (_key: string, fallback?: string) => fallback } as unknown as ConfigService, digests, new NotificationsService(db), rateLimit);
+      const digests = new DigestService(db, mail as unknown as MailService, new RateLimitService(db));
+      // runDue prunes as of digestNow (2099), which would delete every rate-limit row
+      // and read notification in the shared database, including other e2e files'
+      // while they run in parallel. This test is about the digests, so pruning is stubbed.
+      const noPrune = { prune: async () => 0 };
+      const scheduler = new DigestScheduler(
+        { get: (_key: string, fallback?: string) => fallback } as unknown as ConfigService,
+        digests,
+        noPrune as unknown as NotificationsService,
+        noPrune as unknown as RateLimitService,
+      );
       const sentTo = () => mail.send.mock.calls.map((c) => (c[0] as { to: string }).to).filter((to) => to.includes(ids.school.slice(0, 8)));
       const runs = await Promise.all([scheduler.runDue(digestNow), scheduler.runDue(digestNow)]);
       expect(runs.map((r) => r.due)).toEqual([true, true]);

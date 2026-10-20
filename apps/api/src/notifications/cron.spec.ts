@@ -24,11 +24,11 @@ describe('CronController', () => {
 
 describe('DigestScheduler on Vercel Cron', () => {
   const config = (values: Record<string, string>) => ({ get: (k: string, d?: string) => values[k] ?? d }) as unknown as ConfigService;
-  const build = () => {
+  const build = (enabled = 'true') => {
     const digests = { sendDue: vi.fn().mockResolvedValue(3) };
     const notifications = { prune: vi.fn().mockResolvedValue(4) };
     const rateLimit = { prune: vi.fn().mockResolvedValue(5) };
-    const scheduler = new DigestScheduler(config({ DIGEST_HOUR_IST: '19', DIGEST_ENABLED: 'true' }), digests as never, notifications as never, rateLimit as never);
+    const scheduler = new DigestScheduler(config({ DIGEST_HOUR_IST: '19', DIGEST_ENABLED: enabled }), digests as never, notifications as never, rateLimit as never);
     return { digests, notifications, rateLimit, scheduler };
   };
 
@@ -66,6 +66,14 @@ describe('DigestScheduler on Vercel Cron', () => {
     expect(rateLimit.prune).not.toHaveBeenCalled();
     await expect(scheduler.runDue(new Date('2026-10-20T14:00:00Z'))).resolves.toEqual({ due: true, sent: 3, pruned: 9 });
     expect(digests.sendDue).toHaveBeenCalledTimes(1);
+    expect(notifications.prune).toHaveBeenCalledTimes(1);
+    expect(rateLimit.prune).toHaveBeenCalledTimes(1);
+  });
+
+  it('runDue with DIGEST_ENABLED=false sends no digest but still prunes (the cron keeps calling it on Vercel)', async () => {
+    const { digests, notifications, rateLimit, scheduler } = build('false');
+    await expect(scheduler.runDue(new Date('2026-10-20T14:00:00Z'))).resolves.toEqual({ due: true, sent: 0, pruned: 9 });
+    expect(digests.sendDue).not.toHaveBeenCalled();
     expect(notifications.prune).toHaveBeenCalledTimes(1);
     expect(rateLimit.prune).toHaveBeenCalledTimes(1);
   });
