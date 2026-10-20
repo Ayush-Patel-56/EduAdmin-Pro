@@ -104,6 +104,46 @@ func TestMaskRegistersPasswordOfDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestRedactReplacesMaskedValues(t *testing.T) {
+	r := run.New(t.TempDir(), &bytes.Buffer{})
+	r.Mask("s3cret-value", "abc")
+	err := fmt.Errorf("GET /x: 500 body=%q", "oops s3cret-value oops abc")
+	got := r.Redact(err.Error())
+	if strings.Contains(got, "s3cret-value") {
+		t.Fatalf("secret survived: %q", got)
+	}
+	if !strings.Contains(got, "oops *** oops abc") {
+		t.Fatalf("expected masked text and untouched short value, got %q", got)
+	}
+}
+
+func TestMaskSkipsPasswordOfLocalDatabaseURL(t *testing.T) {
+	const local = "postgresql://postgres:postgres@localhost:5432/test"
+	const remote = "postgresql://user:hunter2-pass@ep-1.neon.tech/db"
+	var buf bytes.Buffer
+	r := run.New(t.TempDir(), &buf)
+	r.Mask(run.MaskFromEnv([]string{"DATABASE_URL=" + local, "PROD_DATABASE_URL=" + remote})...)
+
+	// The throwaway local password must not turn every "postgres" into ***.
+	if got := r.Redact("postgres is up on " + local); got != "postgres is up on ***" {
+		t.Fatalf("local URL: got %q", got)
+	}
+	// A real host's password is still masked on its own.
+	if got := r.Redact("bad password hunter2-pass"); got != "bad password ***" {
+		t.Fatalf("remote URL: got %q", got)
+	}
+	for _, u := range []string{
+		"postgres://u:longpassword@127.0.0.1/db",
+		"postgres://u:longpassword@[::1]:5432/db",
+	} {
+		r := run.New(t.TempDir(), &bytes.Buffer{})
+		r.Mask(u)
+		if got := r.Redact("longpassword " + u); got != "longpassword ***" {
+			t.Fatalf("%s: got %q", u, got)
+		}
+	}
+}
+
 func TestCmdReturnsErrorWithExitCode(t *testing.T) {
 	var buf bytes.Buffer
 	r := run.New(t.TempDir(), &buf)

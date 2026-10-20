@@ -63,14 +63,17 @@ func (r *Runner) Mask(values ...string) {
 }
 
 // maskCandidates expands a value into the strings to register: each line of a
-// multi-line value (masking works line by line), and the password of a
+// multi-line value (masking works line by line), and the password of a remote
 // database URL, which can show up on its own in error messages.
 func maskCandidates(v string) []string {
 	var out []string
 	for _, line := range strings.FieldsFunc(v, func(c rune) bool { return c == '\n' || c == '\r' }) {
 		out = append(out, line)
 		if hasDatabaseScheme(line) {
-			if u, err := url.Parse(line); err == nil && u.User != nil {
+			// A local database's password is a throwaway (CI uses "postgres"),
+			// and masking it would blank unrelated words in the logs. The whole
+			// URL is still masked.
+			if u, err := url.Parse(line); err == nil && u.User != nil && !isLoopback(u.Hostname()) {
 				if pw, ok := u.User.Password(); ok {
 					out = append(out, pw)
 				}
@@ -82,6 +85,10 @@ func maskCandidates(v string) []string {
 
 func hasDatabaseScheme(v string) bool {
 	return strings.HasPrefix(v, "postgres://") || strings.HasPrefix(v, "postgresql://")
+}
+
+func isLoopback(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // addSecret reports whether s was newly registered.
@@ -109,6 +116,11 @@ func (r *Runner) mask(line string) string {
 	}
 	return line
 }
+
+// Redact returns s with every registered secret replaced by ***, exactly as
+// the runner masks command output. Use it on anything else that might reach a
+// log, such as an error that wraps an HTTP response or URL.
+func (r *Runner) Redact(s string) string { return r.mask(s) }
 
 // Stage announces the start of a pipeline stage. On GitHub Actions it opens a
 // collapsible log group (closing the previous one).
