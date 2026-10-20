@@ -147,7 +147,7 @@ describe('DigestService: the daily report digest', () => {
     prisma.dailyReport.findMany.mockResolvedValue([report(), report({ teacherName: 'Sita', facultyId: 'f2', late: true, flaggedAt: day })]);
     prisma.faculty.findMany.mockResolvedValue([{ id: 'f1', name: 'Ravi' }, { id: 'f2', name: 'Sita' }, { id: 'f3', name: 'Meena' }]);
     const d = await service.build('u1', day);
-    expect(d).toMatchObject({ day: '2026-10-20', name: 'Asha', teacher: null, admin: [{ school: 'Test School', submitted: 2, late: 1, flagged: 1, teachers: 2, missing: ['Meena'] }] });
+    expect(d).toMatchObject({ day: '2026-10-20', name: 'Asha', teaching: [], admin: [{ school: 'Test School', submitted: 2, late: 1, flagged: 1, teachers: 2, missing: ['Meena'] }] });
     // Only this school's reports for the day; only active staff with a batch count as expected to report.
     expect(prisma.dailyReport.findMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', reportDate: day });
     expect(prisma.faculty.findMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', status: 'ACTIVE', batchAssignments: { some: {} } });
@@ -157,12 +157,29 @@ describe('DigestService: the daily report digest', () => {
     expect(select.facultyProfiles.where).toEqual({ status: { not: 'INACTIVE' } });
   });
 
+  it('a teacher in two schools gets a section for each (on leave in one still counts)', async () => {
+    const { prisma, service } = build();
+    prisma.user.findUnique.mockResolvedValue({
+      fullName: 'Ravi',
+      memberships: [{ role: 'TEACHER', school: { id: 's1', name: 'North' } }, { role: 'TEACHER', school: { id: 's2', name: 'South' } }, { role: 'TEACHER', school: { id: 's3', name: 'East' } }],
+      // No profile in East (inactive there): no section.
+      facultyProfiles: [{ id: 'f1', schoolId: 's1', _count: { batchAssignments: 1 } }, { id: 'f2', schoolId: 's2', _count: { batchAssignments: 3 } }],
+    });
+    prisma.dailyReport.findMany.mockResolvedValue([]);
+    const d = await service.build('u1', day);
+    expect(d?.teaching.map((t) => [t.school, t.batches])).toEqual([['North', 1], ['South', 3]]);
+    expect(prisma.dailyReport.findMany.mock.calls.map((c) => c[0].where.facultyId)).toEqual(['f1', 'f1', 'f2', 'f2']);
+    const text = compose('r@x.test', d!).text;
+    expect(text).toContain('Your reports (North):');
+    expect(text).toContain('Your reports (South):');
+  });
+
   it("a teacher's digest: their own reports and flags, in their school only; nothing to oversee or teach is no digest", async () => {
     const { prisma, service } = build();
     prisma.user.findUnique.mockResolvedValue({ fullName: 'Ravi', memberships: [{ role: 'TEACHER', school: { id: 's1', name: 'Test School' } }], facultyProfiles: [{ id: 'f1', schoolId: 's1', _count: { batchAssignments: 2 } }] });
     prisma.dailyReport.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([report({ flaggedAt: day, flagReason: 'Too brief' })]);
     const d = await service.build('u1', day);
-    expect(d?.teacher).toMatchObject({ school: 'Test School', today: [], flagged: [{ flagReason: 'Too brief' }] });
+    expect(d?.teaching).toMatchObject([{ school: 'Test School', today: [], flagged: [{ flagReason: 'Too brief' }] }]);
     expect(prisma.dailyReport.findMany.mock.calls[0][0].where).toEqual({ schoolId: 's1', facultyId: 'f1', reportDate: day });
     expect(compose('r@x.test', d!).text).toContain("You haven't submitted a daily report today.");
     prisma.user.findUnique.mockResolvedValue({ fullName: 'New', memberships: [{ role: 'TEACHER', school: { id: 's1', name: 'Test School' } }], facultyProfiles: [{ id: 'f9', schoolId: 's1', _count: { batchAssignments: 0 } }] });
@@ -241,7 +258,7 @@ describe('DigestService: the daily report digest', () => {
   });
 
   it('the email escapes what people typed', () => {
-    const d: Digest = { day: '2026-10-20', name: '<b>Asha</b>', admin: [{ school: 'A&B <School>', submitted: 0, late: 0, flagged: 0, teachers: 0, missing: ['<img src=x>'], reports: [] }], teacher: null };
+    const d: Digest = { day: '2026-10-20', name: '<b>Asha</b>', admin: [{ school: 'A&B <School>', submitted: 0, late: 0, flagged: 0, teachers: 0, missing: ['<img src=x>'], reports: [] }], teaching: [] };
     const { html, subject } = compose('a@x.test', d);
     expect(html).not.toContain('<b>Asha');
     expect(html).not.toContain('<img src=x>');

@@ -19,7 +19,7 @@ type Report = { teacherName: string; batch: { name: string }; subject: string; l
 
 export type AdminSection = { school: string; submitted: number; late: number; flagged: number; teachers: number; missing: string[]; reports: Report[] };
 export type TeacherSection = { school: string; today: Report[]; flagged: Report[]; batches: number };
-export type Digest = { day: string; name: string; admin: AdminSection[]; teacher: TeacherSection | null };
+export type Digest = { day: string; name: string; admin: AdminSection[]; teaching: TeacherSection[] };
 
 const dayLabel = (d: Date) => new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(d);
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -74,18 +74,19 @@ export class DigestService {
         reports: reports.slice(0, DIGEST_LIST_LIMIT),
       });
     }
-    let teacher: TeacherSection | null = null;
-    const teaching = user.memberships.find((x) => x.role === 'TEACHER');
-    const profile = teaching && user.facultyProfiles.find((f) => f.schoolId === teaching.school.id);
-    if (teaching && profile && profile._count.batchAssignments > 0) {
+    // A section for each school they teach in (with batches), not just the first.
+    const teaching: TeacherSection[] = [];
+    for (const m of user.memberships.filter((x) => x.role === 'TEACHER')) {
+      const profile = user.facultyProfiles.find((f) => f.schoolId === m.school.id);
+      if (!profile || profile._count.batchAssignments === 0) continue;
       const [today, flagged] = await Promise.all([
-        this.prisma.dailyReport.findMany({ where: { schoolId: teaching.school.id, facultyId: profile.id, reportDate: day }, select: reportSelect, orderBy: { submittedAt: 'asc' } }),
-        this.prisma.dailyReport.findMany({ where: { schoolId: teaching.school.id, facultyId: profile.id, flaggedAt: { not: null } }, select: reportSelect, orderBy: { reportDate: 'desc' }, take: DIGEST_LIST_LIMIT }),
+        this.prisma.dailyReport.findMany({ where: { schoolId: m.school.id, facultyId: profile.id, reportDate: day }, select: reportSelect, orderBy: { submittedAt: 'asc' } }),
+        this.prisma.dailyReport.findMany({ where: { schoolId: m.school.id, facultyId: profile.id, flaggedAt: { not: null } }, select: reportSelect, orderBy: { reportDate: 'desc' }, take: DIGEST_LIST_LIMIT }),
       ]);
-      teacher = { school: teaching.school.name, today, flagged, batches: profile._count.batchAssignments };
+      teaching.push({ school: m.school.name, today, flagged, batches: profile._count.batchAssignments });
     }
-    if (!admin.length && !teacher) return null;
-    return { day: toIsoDate(day)!, name: user.fullName, admin, teacher };
+    if (!admin.length && !teaching.length) return null;
+    return { day: toIsoDate(day)!, name: user.fullName, admin, teaching };
   }
 
   /**
@@ -190,8 +191,7 @@ export function compose(to: string, d: Digest): Email {
       html.push(`<p style="margin:0 0 10px;color:#b45309">${escapeHtml(names)}</p>`);
     }
   }
-  if (d.teacher) {
-    const t = d.teacher;
+  for (const t of d.teaching) {
     text.push('', `Your reports (${t.school}):`);
     html.push(`<h2 style="margin:24px 0 6px;font-size:16px;color:#0f172a">Your reports · ${escapeHtml(t.school)}</h2>`);
     if (t.today.length) {
