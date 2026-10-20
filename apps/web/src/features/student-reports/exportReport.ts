@@ -66,7 +66,15 @@ export function reportSections(r: StudentReport): Section[] {
     {
       name: 'Topic Strength',
       header: ['Band', 'Subject', 'Chapter', 'Topic', 'Score %', 'Test %', 'Test questions', 'Assignment %', 'Assignments'],
-      rows: topics.map((t) => [BAND_LABELS[t.band], t.subject, t.chapter, t.topic, v(t.percent), v(t.test?.percent), t.test?.questions ?? null, v(t.assignments?.percent), t.assignments?.count ?? null]),
+      rows: [
+        ...topics.map((t): Cell[] => [BAND_LABELS[t.band], t.subject, t.chapter, t.topic, v(t.percent), v(t.test?.percent), t.test?.questions ?? null, v(t.assignments?.percent), t.assignments?.count ?? null]),
+        // A band holding more than the report lists says so, as the page does.
+        ...(['strong', 'average', 'weak'] as const).flatMap((band): Cell[][] => {
+          const total = r.topics.counts?.[band] ?? 0
+          const shown = r.topics[band].length
+          return total > shown ? [[`${BAND_LABELS[band.toUpperCase() as 'STRONG' | 'AVERAGE' | 'WEAK']}: ${shown} of ${total} topics listed`, null, null, null, null, null, null, null, null]] : []
+        }),
+      ],
     },
     {
       name: 'Error Log',
@@ -92,7 +100,7 @@ export function reportSections(r: StudentReport): Section[] {
     {
       name: r.feedback.ownOnly ? 'PTM Notes (yours)' : 'PTM Notes',
       header: ['Date', 'Teacher', 'Parent', 'Parent attended', 'Discussion', 'Action items', 'Follow-up'],
-      rows: r.feedback.ptm.notes.map((n) => [n.date, n.teacherName, n.parentName, n.parentAttended ? 'Yes' : 'No', n.discussion, n.actionItems, n.followUpDate]),
+      rows: r.feedback.ptm.notes.map((n) => [n.date, n.teacherLeft ? `${n.teacherName} (has left)` : n.teacherName, n.parentName, n.parentAttended ? 'Yes' : 'No', n.discussion, n.actionItems, n.followUpDate]),
     },
   ]
 }

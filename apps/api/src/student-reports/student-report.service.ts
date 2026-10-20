@@ -80,10 +80,11 @@ export class StudentReportService {
     const s = { schoolId: actor.schoolId, studentId };
     const testRange = { status: 'SCHEDULED' as const, startsAt: { gte: ctx.fromInstant, lt: ctx.toInstant } };
     const dayRange = { gte: ctx.fromDate, lt: ctx.toDate };
-    // Ratings and PTM notes count only from teachers still active in the school (#50, #53): not an inactive or deleted profile.
-    const activeTeacher = { faculty: { status: { not: 'INACTIVE' as const } } };
-    const ratingWhere = { ...s, date: dayRange, ...activeTeacher };
-    const ptmWhere = { ...s, meetingDate: dayRange, ...activeTeacher };
+    // Ratings count only from teachers still active in the school (#50): not an inactive or deleted profile.
+    const ratingWhere = { ...s, date: dayRange, faculty: { status: { not: 'INACTIVE' as const } } };
+    // PTM notes are records of meetings that happened: every one counts, and admins see them all, a departed
+    // teacher's labelled as such (#55). A teacher's own report lists only the notes they wrote.
+    const ptmWhere = { ...s, meetingDate: dayRange };
     // A teacher reads only the ratings and PTM notes they wrote; the totals and averages are everyone's (#50).
     const ownOnly = isTeacher(actor) ? { facultyId: actor.scope.facultyId ?? '' } : {};
 
@@ -144,7 +145,7 @@ export class StudentReportService {
       this.prisma.ptmNote.count({ where: { ...ptmWhere, parentAttended: true } }),
       this.prisma.ptmNote.findMany({
         where: { ...ptmWhere, ...ownOnly },
-        select: { meetingDate: true, teacherName: true, parentName: true, parentAttended: true, discussion: true, actionItems: true, followUpDate: true },
+        select: { meetingDate: true, teacherName: true, parentName: true, parentAttended: true, discussion: true, actionItems: true, followUpDate: true, faculty: { select: { status: true } } },
         orderBy: [{ meetingDate: 'desc' }, { createdAt: 'desc' }],
         take: RECENT_LIMIT,
       }),
@@ -331,6 +332,8 @@ export class StudentReportService {
           notes: ptm.map((n) => ({
             date: toIsoDate(n.meetingDate),
             teacherName: n.teacherName,
+            /** The teacher has since left: their profile is inactive or was deleted. */
+            teacherLeft: !n.faculty || n.faculty.status === 'INACTIVE',
             parentName: n.parentName,
             parentAttended: n.parentAttended,
             discussion: n.discussion,

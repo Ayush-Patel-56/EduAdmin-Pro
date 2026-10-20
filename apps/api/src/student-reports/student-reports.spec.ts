@@ -488,10 +488,10 @@ describe('StudentReportService: the hub', () => {
     const r = await service.report(teacher(), 'st-1');
     const active = { status: { not: 'INACTIVE' } };
     expect(p.dailyRating.aggregate.mock.calls[0][0].where.faculty).toEqual(active);
-    // PTM notes too, like ratings (#53): the totals and the list leave out inactive teachers' notes.
-    expect(p.ptmNote.count.mock.calls[0][0].where.faculty).toEqual(active);
-    expect(p.ptmNote.count.mock.calls[1][0].where.faculty).toEqual(active);
-    expect(p.ptmNote.findMany.mock.calls[0][0].where.faculty).toEqual(active);
+    // PTM notes are records of meetings: every one counts and is listed, a departed teacher's too (#55).
+    expect(p.ptmNote.count.mock.calls[0][0].where).not.toHaveProperty('faculty');
+    expect(p.ptmNote.count.mock.calls[1][0].where).not.toHaveProperty('faculty');
+    expect(p.ptmNote.findMany.mock.calls[0][0].where).not.toHaveProperty('faculty');
     expect(p.dailyRating.groupBy.mock.calls[0][0].where.faculty).toEqual(active);
     // The teacher's lists: their own only.
     expect(p.dailyRating.findMany.mock.calls[0][0].where).toMatchObject({ faculty: active, facultyId: 'fac-1' });

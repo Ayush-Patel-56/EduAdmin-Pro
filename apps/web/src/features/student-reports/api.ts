@@ -103,7 +103,8 @@ export type StudentReport = {
       meetings: number
       parentAttended: number
       parentAttendanceRate: number | null
-      notes: { date: string; teacherName: string; parentName: string | null; parentAttended: boolean; discussion: string; actionItems: string | null; followUpDate: string | null }[]
+      /** `teacherLeft`: the teacher who logged it has since left (absent from older APIs). */
+      notes: { date: string; teacherName: string; teacherLeft?: boolean; parentName: string | null; parentAttended: boolean; discussion: string; actionItems: string | null; followUpDate: string | null }[]
     }
   }
   coverage: { tests: number; answers: number; gradedAssignments: number; ratings: number; classes: number; ptmNotes: number }

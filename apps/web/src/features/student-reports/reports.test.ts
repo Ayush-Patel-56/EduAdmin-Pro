@@ -99,6 +99,19 @@ describe('5-in-1 exports', () => {
     expect(String(summary['Worked out from'])).toContain('2 test result(s)')
   })
 
+  it("says when a band lists fewer topics than it holds, and marks a departed teacher's PTM note (#55)", () => {
+    const topic = { subject: 'Physics', chapter: null, topic: 'Heat', percent: 30, band: 'WEAK' as const, test: { questions: 1, percent: 30 }, assignments: null }
+    const capped = {
+      ...report,
+      topics: { strong: [], average: [], weak: [topic], counts: { strong: 0, average: 0, weak: 40 } },
+      feedback: { ...report.feedback, ptm: { meetings: 1, parentAttended: 1, parentAttendanceRate: 100, notes: [{ date: '2026-10-01', teacherName: 'Mr Sen', teacherLeft: true, parentName: null, parentAttended: true, discussion: 'Met', actionItems: null, followUpDate: null }] } },
+    } as unknown as StudentReport
+    const sections = reportSections(capped)
+    const topics = sections.find((x) => x.name === 'Topic Strength')!.rows
+    expect(topics.at(-1)?.[0]).toBe('Weak (below 50%): 1 of 40 topics listed')
+    expect(sections.find((x) => x.name === 'PTM Notes')!.rows[0][1]).toBe('Mr Sen (has left)')
+  })
+
   it('carries no contact details', () => {
     const text = JSON.stringify(reportSections(report)).toLowerCase()
     for (const word of ['phone', 'aadhar', 'address', 'guardian', 'email']) expect(text).not.toContain(word)

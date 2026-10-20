@@ -67,6 +67,10 @@ describe('student report rules', () => {
     expect(new Set(c).size).toBe(3);
     expect(topicKey('Chemistry', 'Na+ ions')).not.toBe(topicKey('Chemistry', 'Na ions'));
     expect(topicKey('Computer Science', 'c++')).toBe(topicKey('Computer Science', ' C ++ '));
+    // # after a letter is "sharp" (C#, F#); elsewhere it means "number" and doesn't count (#55).
+    expect(topicKey('Computer Science', 'F#')).not.toBe(topicKey('Computer Science', 'F'));
+    expect(topicKey('Physics', 'Topic #3')).toBe(topicKey('Physics', 'Topic 3'));
+    expect(topicKey('Physics', '#1 Kinematics')).toBe(topicKey('Physics', '1 Kinematics'));
   });
 
   it('names a topic spelled several ways as on its latest paper, whatever the order (#52)', () => {

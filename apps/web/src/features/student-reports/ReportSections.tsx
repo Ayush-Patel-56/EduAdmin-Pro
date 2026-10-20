@@ -281,6 +281,7 @@ export function FeedbackSection({ r }: { r: StudentReport }) {
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                   <span className="font-semibold text-slate-700">{dayLabel(n.date)}</span>
                   <span>{n.teacherName}</span>
+                  {n.teacherLeft && <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-600">Teacher has left</span>}
                   {n.parentName && <span>with {n.parentName}</span>}
                   <span className={`rounded px-1.5 py-0.5 font-bold ${n.parentAttended ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{n.parentAttended ? 'Parent attended' : 'Parent absent'}</span>
                 </div>
