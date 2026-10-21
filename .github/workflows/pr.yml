@@ -13,8 +13,9 @@ permissions:
   contents: read
 
 env:
-  # Node 22 is required: the API tests crash a vitest worker on Node 20.
-  NODE_VERSION: 22
+  # Node 24, as on Vercel (its Node 22 runtime refuses require() of an ES module,
+  # which NestJS 12 needs). Node 20 crashes a vitest worker.
+  NODE_VERSION: 24
 
 jobs:
   check:

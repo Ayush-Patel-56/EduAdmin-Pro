@@ -99,7 +99,7 @@ func TestEnsureProjectCreatesThenPatches(t *testing.T) {
 	if got[1].Body["name"] != "eduadmin-api" {
 		t.Errorf("create body = %v", got[1].Body)
 	}
-	if got[2].Body["nodeVersion"] != "22.x" {
+	if got[2].Body["nodeVersion"] != "24.x" {
 		t.Errorf("patch body = %v", got[2].Body)
 	}
 }
