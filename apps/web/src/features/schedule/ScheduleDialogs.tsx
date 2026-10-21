@@ -19,6 +19,9 @@ const label = 'mb-1.5 block text-[11px] font-bold tracking-wide text-slate-500 u
 const field =
   'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 focus:outline-none read-only:bg-slate-50 read-only:text-slate-500'
 const area = `${field.replace('h-10 ', '')} resize-y py-2.5`
+// The field without its full width, for controls sharing a row: w-full next to
+// another width class lets w-full win (Tailwind doesn't go by class order).
+const fieldBox = field.replace('w-full ', '')
 
 export type BatchOption = { id: string; name: string; program: string }
 
@@ -35,8 +38,8 @@ function ClockField({ id, text, value, onChange }: { id: string; text: string; v
   return (
     <F id={id} text={text}>
       <div className="flex gap-2">
-        <input id={id} inputMode="numeric" placeholder="09:00" value={value.time} onChange={(e) => onChange({ ...value, time: e.target.value })} className={field} />
-        <select aria-label={`${text} AM or PM`} value={value.meridiem} onChange={(e) => onChange({ ...value, meridiem: e.target.value as Clock['meridiem'] })} className={`${field} w-24 shrink-0`}>
+        <input id={id} inputMode="numeric" placeholder="09:00" value={value.time} onChange={(e) => onChange({ ...value, time: e.target.value })} className={`${fieldBox} min-w-0 flex-1`} />
+        <select aria-label={`${text} AM or PM`} value={value.meridiem} onChange={(e) => onChange({ ...value, meridiem: e.target.value as Clock['meridiem'] })} className={`${fieldBox} w-24 shrink-0`}>
           <option value="AM">AM</option>
           <option value="PM">PM</option>
         </select>
