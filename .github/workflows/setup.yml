@@ -24,12 +24,13 @@ jobs:
           cache: false
 
       # Run the pipeline as a binary, not through `go run`: `go run` does not
-      # pass SIGTERM on to the program, and a cancelled run must reach it.
+      # pass SIGTERM on to the program, and a cancelled run must reach it; `exec`
+      # replaces the shell so the signal goes straight to the pipeline.
       - name: Build the pipeline
         run: go -C tools/pipeline build -o "$RUNNER_TEMP/pipeline" .
 
       - name: Set up the projects
-        run: '"$RUNNER_TEMP/pipeline" setup'
+        run: 'exec "$RUNNER_TEMP/pipeline" setup'
         # The production secrets go to this step only, not the job, so no other
         # step (an install script, an action) sees them. The pipeline passes each
         # child process only the secrets that command needs.

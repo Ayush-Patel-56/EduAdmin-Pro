@@ -46,12 +46,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Run the pipeline as a binary, not through `go run`: `go run` does not
-      # pass SIGTERM on to the program, and a cancelled run must reach it.
+      # pass SIGTERM on to the program, and a cancelled run must reach it; `exec`
+      # replaces the shell so the signal goes straight to the pipeline.
       - name: Build the pipeline
         run: go -C tools/pipeline build -o "$RUNNER_TEMP/pipeline" .
 
       - name: Check
-        run: '"$RUNNER_TEMP/pipeline" check'
+        run: 'exec "$RUNNER_TEMP/pipeline" check'
 
   e2e:
     name: API e2e (Postgres)
@@ -96,12 +97,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Run the pipeline as a binary, not through `go run`: `go run` does not
-      # pass SIGTERM on to the program, and a cancelled run must reach it.
+      # pass SIGTERM on to the program, and a cancelled run must reach it; `exec`
+      # replaces the shell so the signal goes straight to the pipeline.
       - name: Build the pipeline
         run: go -C tools/pipeline build -o "$RUNNER_TEMP/pipeline" .
 
       - name: E2E
-        run: '"$RUNNER_TEMP/pipeline" e2e'
+        run: 'exec "$RUNNER_TEMP/pipeline" e2e'
 
   release:
     name: Release to production
@@ -130,12 +132,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Run the pipeline as a binary, not through `go run`: `go run` does not
-      # pass SIGTERM on to the program, and a cancelled run must reach it.
+      # pass SIGTERM on to the program, and a cancelled run must reach it; `exec`
+      # replaces the shell so the signal goes straight to the pipeline.
       - name: Build the pipeline
         run: go -C tools/pipeline build -o "$RUNNER_TEMP/pipeline" .
 
       - name: Release
-        run: '"$RUNNER_TEMP/pipeline" release'
+        run: 'exec "$RUNNER_TEMP/pipeline" release'
         # The production secrets go to this step only, not the job, so no other
         # step (an install script, an action) sees them. The pipeline passes each
         # child process only the secrets that command needs.
