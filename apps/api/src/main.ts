@@ -45,4 +45,10 @@ async function bootstrap() {
   app.enableShutdownHooks();
   await app.listen(process.env.PORT ?? 3000);
 }
-await bootstrap();
+// Not awaited at the top level: on Vercel the NestJS integration takes over
+// listen(), and a module that awaits it never finishes loading, so every request
+// would hang. A failed start still exits the process.
+bootstrap().catch((err: unknown) => {
+  console.error(err);
+  process.exit(1);
+});
