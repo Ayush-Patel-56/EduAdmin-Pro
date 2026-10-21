@@ -132,6 +132,8 @@ Once the production web address exists (the first release prints it as `web orig
 | Function region | One region (`sin1`), which is all we need | Same |
 
 - **On Hobby the daily digest goes out between about 19:30 and 22:30 IST.** The last cron entry runs at 16:00 UTC (21:30 IST), so a `DIGEST_HOUR_IST` later than 21 would never send. The pipeline sets it to 19.
+- **Retries are thin on Hobby.** With only three digest runs a day, a failed send and the "stop after 5 failed sends in a row" rule get at most three chances. If the third run hits the mail quota, the digests still unsent wait until tomorrow. On Pro the 10-minute schedule removes this: a run that stops early is followed by another ten minutes later.
+- **The cron has the function's default time limit.** `apps/api/vercel.json` sets no `maxDuration`, so the digest run gets Vercel's default for a function with Fluid compute (on by default): 300 seconds (5 minutes) on Hobby, which is also the Hobby maximum (checked against [Vercel's docs](https://vercel.com/docs/functions/configuring-functions/duration) on 2026-10-21). A run that is cut off leaves its unsent digests to the next run. After the first real digest run, look at its duration in the Vercel logs (project `eduadmin-api` → Logs, filter on `/api/internal/cron/digest`) and check that it is well under that limit.
 - On Pro, change `apps/api/vercel.json` to one entry, `*/10 13-18 * * *` (UTC). Nothing else changes.
 
 ## Before the invite-code migration (`20261011210000_admin_invite_and_email_index`)
