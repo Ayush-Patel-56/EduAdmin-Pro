@@ -9,7 +9,7 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
-  test: { include: ['src/**/*.test.ts'] },
+  test: { include: ['src/**/*.test.{ts,tsx}'] },
   server: {
     // Forward API calls to the NestJS dev server.
     proxy: { '/api': 'http://localhost:3000' },

@@ -30,7 +30,7 @@ export function RouteError() {
             Reload page
           </button>
           <a
-            href="/"
+            href="/app"
             className="flex h-10 items-center rounded-lg border border-slate-200 px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
             Go home
