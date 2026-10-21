@@ -24,9 +24,15 @@ describe('HybridThrottlerStorage', () => {
   });
 
   it('a durable count within the limit is not blocked; the time left is in whole seconds, rounded up', async () => {
-    const hit = vi.fn().mockResolvedValue({ hits: 4, allowed: true, resetAt: new Date(Date.now() + 29_001) });
-    const record = await storageWith(hit).increment('login-1', 60_000, 10, 60_000, DURABLE);
-    expect(record).toMatchObject({ totalHits: 4, isBlocked: false, timeToExpire: 30 });
+    // A fixed clock: 29.001 s left must round up to 30, however slow the machine.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-21T00:00:00Z') });
+    try {
+      const hit = vi.fn().mockResolvedValue({ hits: 4, allowed: true, resetAt: new Date(Date.now() + 29_001) });
+      const record = await storageWith(hit).increment('login-1', 60_000, 10, 60_000, DURABLE);
+      expect(record).toMatchObject({ totalHits: 4, isBlocked: false, timeToExpire: 30 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('durableThrottle is the @Throttle argument for the durable throttler', () => {
