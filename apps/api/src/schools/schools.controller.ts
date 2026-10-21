@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
+import { durableThrottle } from '../rate-limit/hybrid-throttler.storage.js';
 import { ConfirmNameDto, CreateSchoolDto, JoinSchoolDto, RegenerateCodeDto } from './schools.dto.js';
 import { SchoolsService } from './schools.service.js';
 
@@ -27,8 +28,9 @@ export class SchoolsController {
   }
 
   @Post('join')
-  // Invite codes are guessable only by brute force; keep attempts slow.
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  // Invite codes are guessable only by brute force; keep attempts slow: per
+  // instance in memory, and across all instances in Postgres.
+  @Throttle({ default: { limit: 10, ttl: 60_000 }, ...durableThrottle(10, 60_000) })
   join(@Auth() auth: AuthContext, @Body() dto: JoinSchoolDto) {
     return this.schools.joinSchool(auth, dto.inviteCode);
   }
