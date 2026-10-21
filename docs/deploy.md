@@ -19,7 +19,7 @@ Two Vercel projects are built from this repo:
 
 | Project | Root | What it is |
 |---|---|---|
-| `eduadmin-api` | `apps/api` | NestJS as a Vercel Function (Fluid compute), region `sin1` (Singapore, next to the Neon database), Node 22. The daily-digest cron is in `apps/api/vercel.json`. |
+| `eduadmin-api` | `apps/api` | NestJS as a Vercel Function (Fluid compute), region `sin1` (Singapore, next to the Neon database), Node 24 (Vercel's Node 22 runtime refuses `require()` of an ES module, which NestJS 12's CommonJS add-ons such as `@nestjs/throttler` do). The daily-digest cron is in `apps/api/vercel.json`. |
 | `eduadmin-web` | `apps/web` | The static Vite build. `apps/web/vercel.json` serves `index.html` for page URLs and rewrites `/api/*` to the API project. |
 
 - **The browser only talks to the web address.** Login cookies are `sameSite: lax`, and `*.vercel.app` is a public suffix, so two `vercel.app` hosts would count as different sites and the cookie would never be sent. The web project forwards `/api/*` to the API, so both look like one site.
@@ -62,7 +62,7 @@ All production secrets live in one GitHub Environment named `production`. Only t
    - `DIGEST_ENABLED` set to `false` to stop the daily digest emails (only `true` or `false` is accepted; unset means `true`). Pruning old rows goes on.
 5. **Delete the old secrets.** Remove any repository-level copies of the secrets above (Settings → Secrets and variables → Actions), so only the `production` environment holds them. Delete **`NEON_API_KEY`** and **`NEON_PROJECT_ID`** there too: they were only for per-PR previews, which are not used. That Neon key can reach every Neon project, so also **revoke it in the Neon console** (Account settings → API keys). Deleting it in GitHub does not disable it.
 6. Merge. The first release sets everything up (see the box above).
-7. Later, after you change a secret or variable, run **Actions → Setup Vercel → Run workflow**. It creates or updates both Vercel projects (root directory, framework, Node 22) and writes the API's environment, and is safe to run again. It prints the project names and the web address, never a value. Vercel applies environment changes only to new deployments, so the live API keeps the old values until the next release: merge the next change, or re-run the latest **Release** run (Actions → Release → the latest run → **Re-run all jobs**). A release writes the environment itself too, so the re-run alone is enough.
+7. Later, after you change a secret or variable, run **Actions → Setup Vercel → Run workflow**. It creates or updates both Vercel projects (root directory, framework, Node 24) and writes the API's environment, and is safe to run again. It prints the project names and the web address, never a value. Vercel applies environment changes only to new deployments, so the live API keeps the old values until the next release: merge the next change, or re-run the latest **Release** run (Actions → Release → the latest run → **Re-run all jobs**). A release writes the environment itself too, so the re-run alone is enough.
 8. Recommended: add a branch protection rule for `main` that requires the `Typecheck, lint, test, build` and `API e2e (Postgres)` checks, so a red PR cannot be merged.
 
 ### What a PR runs, and what a merge runs
@@ -515,4 +515,4 @@ See `apps/api/.env.example`. Production refuses to start without `WEB_ORIGIN` an
 
 ## CI
 
-Three workflows in `.github/workflows` start the Go pipeline; see [Deploying on Vercel](#deploying-on-vercel). `pr.yml` runs on every pull request (Node 22): install → `pipeline check` (typecheck, lint, unit tests, build) and, in a second job, `pipeline e2e` against a throwaway Postgres 17 service with all migrations applied from scratch. `release.yml` runs the same checks on every push to `main`, then releases. `setup.yml` is manual. Node 20 isn't supported (the API tests crash a vitest worker).
+Three workflows in `.github/workflows` start the Go pipeline; see [Deploying on Vercel](#deploying-on-vercel). `pr.yml` runs on every pull request (Node 24): install → `pipeline check` (typecheck, lint, unit tests, build) and, in a second job, `pipeline e2e` against a throwaway Postgres 17 service with all migrations applied from scratch. `release.yml` runs the same checks on every push to `main`, then releases. `setup.yml` is manual. Node 20 isn't supported (the API tests crash a vitest worker).

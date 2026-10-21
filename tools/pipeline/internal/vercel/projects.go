@@ -9,7 +9,7 @@ import (
 )
 
 // nodeVersion is the Node runtime both projects build and run on.
-const nodeVersion = "22.x"
+const nodeVersion = "24.x"
 
 // ProjectSpec is how a Vercel project must be configured.
 type ProjectSpec struct {
