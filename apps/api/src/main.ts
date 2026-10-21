@@ -2,8 +2,14 @@ import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
-import helmet from 'helmet';
+import type { RequestHandler } from 'express';
+import * as helmetModule from 'helmet';
 import { AppModule } from './app.module.js';
+
+// helmet ships separate CommonJS and ES module typings, and Vercel's builder
+// type-checks with the CommonJS ones, where the default import is the module
+// object. At runtime both resolve to the same middleware factory.
+const helmet = ((helmetModule as { default?: unknown }).default ?? helmetModule) as () => RequestHandler;
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
