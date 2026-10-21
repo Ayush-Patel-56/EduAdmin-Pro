@@ -1,26 +1,23 @@
 import { useState, type InputHTMLAttributes } from 'react'
-import { Eye, EyeOff, type LucideIcon } from 'lucide-react'
+import { CircleAlert, Eye, EyeOff, type LucideIcon } from 'lucide-react'
 
 type AuthInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'className'> & {
   label: string
   icon?: LucideIcon
 }
 
-const inputClass =
-  'h-10 w-full rounded-lg bg-slate-100 pr-10 pl-4 text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-brand-600/40 focus:outline-none'
-
-// Grey pill input with a trailing icon. Password inputs get a show/hide toggle instead.
+// Outlined input with a trailing icon. Password inputs get a show/hide toggle instead.
 export function AuthInput({ label, icon: Icon, type = 'text', ...props }: AuthInputProps) {
   const [revealed, setRevealed] = useState(false)
   const isPassword = type === 'password'
 
   return (
-    <label className="relative block">
+    <label className="au-field">
       <span className="sr-only">{label}</span>
       <input
         type={isPassword && revealed ? 'text' : type}
         placeholder={label}
-        className={inputClass}
+        className="au-input"
         {...props}
       />
       {isPassword ? (
@@ -28,14 +25,12 @@ export function AuthInput({ label, icon: Icon, type = 'text', ...props }: AuthIn
           type="button"
           onClick={() => setRevealed((v) => !v)}
           aria-label={revealed ? 'Hide password' : 'Show password'}
-          className="absolute top-1/2 right-3 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-600"
+          className="au-eye"
         >
           {revealed ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
         </button>
       ) : (
-        Icon && (
-          <Icon className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-slate-400" />
-        )
+        Icon && <Icon className="au-ico" />
       )}
     </label>
   )
@@ -43,21 +38,23 @@ export function AuthInput({ label, icon: Icon, type = 'text', ...props }: AuthIn
 
 export function SubmitButton({ busy, label, busyLabel }: { busy: boolean; label: string; busyLabel: string }) {
   return (
-    <button
-      type="submit"
-      disabled={busy}
-      className="mt-4 h-10 w-full rounded-lg bg-ink text-sm font-semibold text-white transition hover:bg-ink-hover disabled:opacity-60"
-    >
+    <button type="submit" disabled={busy} className="au-btn">
+      {busy && <span className="au-spin" aria-hidden="true" />}
       {busy ? busyLabel : label}
     </button>
   )
 }
 
+// Also used outside the auth screens (onboarding, preferences), so it is styled with utilities only.
 export function FormError({ message }: { message: string | null }) {
   if (!message) return null
   return (
-    <p role="alert" className="mt-3 text-center text-xs text-red-600">
-      {message}
+    <p
+      role="alert"
+      className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left text-[13px] leading-snug text-red-700"
+    >
+      <CircleAlert className="mt-px size-4 shrink-0" />
+      <span>{message}</span>
     </p>
   )
 }

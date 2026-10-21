@@ -61,17 +61,18 @@ export function OtpVerification({ email, initialCooldown = RESEND_COOLDOWN_S }: 
 
   if (verified) {
     return (
-      <div role="status" className="mt-6 text-center">
-        <span className="mx-auto flex size-10 items-center justify-center rounded-full bg-emerald-100">
-          <Check className="size-5 text-emerald-600" />
+      <div role="status" className="au-done mt-6">
+        <span className="badge">
+          <Check className="size-6" />
         </span>
-        <p className="mt-3 text-sm font-semibold text-slate-900">Email verified</p>
-        <p className="mt-1 text-xs text-slate-400">Your account is active — you can sign in now</p>
+        <p className="t">Email verified</p>
+        <p className="au-sub">Your account is active. You can sign in now.</p>
         <Link
           to="/login"
           state={{ email }}
           replace
-          className="mt-3 inline-block text-xs font-medium text-brand-600 hover:underline"
+          viewTransition
+          className="au-cta-dark"
         >
           Back to sign in
         </Link>
@@ -81,10 +82,10 @@ export function OtpVerification({ email, initialCooldown = RESEND_COOLDOWN_S }: 
 
   return (
     <form onSubmit={handleSubmit} noValidate>
-      <p className="mb-3 text-xs text-slate-500">
-        Enter the 6-digit code sent to <span className="font-semibold text-slate-700">{email}</span>
+      <p className="au-sub mb-4">
+        Enter the 6-digit code sent to <span className="font-semibold text-[#0f2147]">{email}</span>
       </p>
-      <label className="relative block">
+      <label className="au-field">
         <span className="sr-only">Verification code</span>
         <input
           value={code}
@@ -96,20 +97,20 @@ export function OtpVerification({ email, initialCooldown = RESEND_COOLDOWN_S }: 
           inputMode="numeric"
           autoComplete="one-time-code"
           autoFocus
-          className="h-10 w-full rounded-lg bg-slate-100 px-10 text-center font-mono text-sm font-semibold tracking-[0.5em] text-slate-900 placeholder:font-sans placeholder:font-semibold placeholder:tracking-[0.4em] placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-brand-600/40 focus:outline-none"
+          className="au-input au-code"
         />
-        <Hash className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-slate-400" />
+        <Hash className="au-ico" />
       </label>
 
       <FormError message={error} />
-      {notice && <p className="mt-3 text-center text-xs text-emerald-600">{notice}</p>}
+      {notice && <p className="au-ok mt-3 mb-0">{notice}</p>}
       <SubmitButton busy={submitting} label="Verify Email" busyLabel="Verifying…" />
 
-      <p className="mt-4 text-center text-xs">
+      <p className="mt-4 text-center text-[13px]">
         {cooldown > 0 ? (
-          <span className="text-slate-400">Resend code in {cooldown}s</span>
+          <span className="text-[#5d6888]">Resend code in {cooldown}s</span>
         ) : (
-          <button type="button" onClick={resend} className="font-medium text-brand-600 hover:underline">
+          <button type="button" onClick={resend} className="font-semibold text-[#4f46e5] hover:underline">
             Resend code
           </button>
         )}

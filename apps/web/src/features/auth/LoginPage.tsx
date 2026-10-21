@@ -5,7 +5,7 @@ import { User } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
 import { AuthLayout } from './AuthLayout'
-import { AuthCard, AuthPanel } from './AuthPanel'
+import { AuthCard, AuthFormSide, AuthPanel } from './AuthPanel'
 import { meQueryKey } from './session'
 
 export function LoginPage() {
@@ -48,18 +48,19 @@ export function LoginPage() {
       <AuthCard>
         <AuthPanel
           side="left"
-          title="New Here?"
-          description="Join the most advanced academic planning ecosystem today."
+          title="New to EduAdmin Pro?"
+          description="Set up your school or join as a teacher. It takes a few minutes."
           ctaLabel="Create account"
           ctaTo="/signup"
         />
 
-        <section className="flex flex-1 items-center justify-center px-8 py-12 md:px-12">
-          <form onSubmit={handleSubmit} className="w-full max-w-[352px]" noValidate>
-            <h1 className="mb-6 text-center text-2xl font-bold text-slate-900">Login</h1>
+        <AuthFormSide>
+          <form onSubmit={handleSubmit} noValidate>
+            <h1>Login</h1>
+            <p className="au-sub mb-6">Welcome back. Sign in to your school.</p>
 
             {fromSignup?.signedUp && (
-              <p className="-mt-3 mb-4 text-center text-xs text-emerald-600">Account created. Log in to continue.</p>
+              <p className="au-ok">Account created. Log in to continue.</p>
             )}
 
             <div className="space-y-3">
@@ -80,11 +81,11 @@ export function LoginPage() {
               />
             </div>
 
-            <div className="mt-3 flex justify-between text-xs text-slate-500">
-              <Link to="/verify-email" state={{ email }} className="hover:text-slate-800">
+            <div className="au-links">
+              <Link to="/verify-email" state={{ email }} viewTransition>
                 Verify email
               </Link>
-              <Link to="/forgot-password" className="hover:text-slate-800">
+              <Link to="/forgot-password" viewTransition>
                 Forgot Password?
               </Link>
             </div>
@@ -92,7 +93,7 @@ export function LoginPage() {
             <FormError message={error} />
             <SubmitButton busy={submitting} label="Login" busyLabel="Logging in…" />
           </form>
-        </section>
+        </AuthFormSide>
       </AuthCard>
     </AuthLayout>
   )

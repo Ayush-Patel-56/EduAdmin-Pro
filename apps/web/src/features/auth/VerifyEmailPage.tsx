@@ -4,7 +4,7 @@ import { Mail } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
 import { AuthLayout } from './AuthLayout'
-import { AuthCard, AuthPanel } from './AuthPanel'
+import { AuthCard, AuthFormSide, AuthPanel } from './AuthPanel'
 import { OtpVerification } from './OtpVerification'
 
 type VerifyState = { email?: string; autoSend?: boolean } | null
@@ -59,23 +59,23 @@ export function VerifyEmailPage() {
       <AuthCard>
         <AuthPanel
           side="right"
-          title="Welcome Back!"
-          description="To stay connected with your institution, please login."
+          title="Already have an account?"
+          description="Sign in to pick up your timetable, tests and reports right where you left them."
           ctaLabel="Sign in"
           ctaTo="/login"
         />
-        <section className="flex flex-1 items-center justify-center px-8 py-12 md:px-12">
-          <div className="w-full max-w-[352px]">
-            <Link to="/login" className="text-xs text-slate-500 hover:text-slate-800">
+        <AuthFormSide>
+          <div>
+            <Link to="/login" viewTransition className="au-back">
               ← Back
             </Link>
-            <h1 className="mt-3 mb-4 text-xl font-bold text-slate-900">Verify Email</h1>
+            <h1 className="mt-4 mb-2">Verify Email</h1>
 
             {codeSentTo ? (
               <OtpVerification email={codeSentTo} />
             ) : (
               <form onSubmit={handleSubmit} noValidate>
-                <p className="mb-3 text-xs text-slate-500">
+                <p className="au-sub mb-5">
                   {state?.autoSend
                     ? 'Your email is not verified yet. Sending you a code…'
                     : "Enter your account's email and we'll send you a 6-digit code."}
@@ -93,7 +93,7 @@ export function VerifyEmailPage() {
               </form>
             )}
           </div>
-        </section>
+        </AuthFormSide>
       </AuthCard>
     </AuthLayout>
   )
