@@ -8,6 +8,9 @@ import { AuthModule } from './auth/auth.module.js';
 import { validateEnv } from './config/env.js';
 import { CurriculumModule } from './curriculum/curriculum.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { RateLimitModule } from './rate-limit/rate-limit.module.js';
+import { RateLimitService } from './rate-limit/rate-limit.service.js';
+import { throttlerOptions } from './rate-limit/throttler.options.js';
 import { RecruitmentModule } from './recruitment/recruitment.module.js';
 import { SchoolsModule } from './schools/schools.module.js';
 import { StorageModule } from './storage/storage.module.js';
@@ -30,8 +33,13 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
+    ThrottlerModule.forRootAsync({
+      imports: [RateLimitModule],
+      inject: [RateLimitService],
+      useFactory: throttlerOptions,
+    }),
     PrismaModule,
+    RateLimitModule,
     AuthModule,
     SchoolsModule,
     AcademicModule,

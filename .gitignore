@@ -15,3 +15,6 @@ coverage
 
 # Uploaded files in development (LocalDriver)
 .storage
+
+# Vercel CLI link and build output (written at the repo root during a release)
+.vercel

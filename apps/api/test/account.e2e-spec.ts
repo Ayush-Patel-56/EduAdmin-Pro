@@ -4,7 +4,10 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import type { PrismaService } from '../src/prisma/prisma.service.js';
 import type { MailService } from '../src/auth/mail.service.js';
 import { AvatarService } from '../src/auth/avatar.service.js';
+import type { ConfigService } from '@nestjs/config';
+import { DigestScheduler } from '../src/notifications/digest.scheduler.js';
 import { DigestService } from '../src/notifications/digest.service.js';
+import { RateLimitService } from '../src/rate-limit/rate-limit.service.js';
 import { NotificationsService } from '../src/notifications/notifications.service.js';
 import { SyllabusService } from '../src/academic/syllabus.service.js';
 import type { SyllabusImportDto } from '../src/academic/academic.dto.js';
@@ -147,7 +150,7 @@ describe('account settings on the database (e2e)', () => {
     const flags = await prisma.user.findMany({ where: { id: { in: ours() } }, select: { emailNotifications: true } });
     expect(flags.map((f) => f.emailNotifications)).toEqual(ours().map(() => false));
     const mail = { send: vi.fn().mockResolvedValue(undefined) };
-    const digests = new DigestService(db, mail as unknown as MailService);
+    const digests = new DigestService(db, mail as unknown as MailService, new RateLimitService(db));
     await digests.sendDue(digestNow);
     const sentTo = () => mail.send.mock.calls.map((c) => (c[0] as { to: string }).to).filter((to) => to.includes(ids.school.slice(0, 8)));
     expect(sentTo()).toEqual([]);
@@ -163,7 +166,7 @@ describe('account settings on the database (e2e)', () => {
   it('a failing digest is retried on later ticks, at most 3 times, never while a claim is fresh', async () => {
     await prisma.user.update({ where: { id: ids.stranger }, data: { emailNotifications: true } });
     const mail = { send: vi.fn((m: { to: string }) => (m.to.startsWith('stranger-') ? Promise.reject(new Error('SMTP down')) : Promise.resolve())) };
-    const digests = new DigestService(db, mail as unknown as MailService);
+    const digests = new DigestService(db, mail as unknown as MailService, new RateLimitService(db));
     const tries = () => mail.send.mock.calls.filter((c) => (c[0] as { to: string }).to.startsWith(`stranger-${ids.school.slice(0, 8)}`)).length;
     const row = () => prisma.emailDigest.findUnique({ where: { userId_day: { userId: ids.stranger, day: digestDay } } });
     const minutes = (m: number) => new Date(digestNow.getTime() + m * 60_000);
@@ -180,12 +183,38 @@ describe('account settings on the database (e2e)', () => {
     await prisma.user.updateMany({ where: { id: { in: [ids.admin, ids.stranger] } }, data: { emailNotifications: false } });
   });
 
+  it('two cron runs at once send each digest once', async () => {
+    // Earlier tests left today's row behind; start this one from a clean slate.
+    await prisma.emailDigest.deleteMany({ where: { userId: ids.admin, day: digestDay } });
+    await prisma.user.update({ where: { id: ids.admin }, data: { emailNotifications: true } });
+    try {
+      const mail = { send: vi.fn().mockResolvedValue(undefined) };
+      const digests = new DigestService(db, mail as unknown as MailService, new RateLimitService(db));
+      // runDue prunes as of digestNow (2099), which would delete every rate-limit row
+      // and read notification in the shared database, including other e2e files'
+      // while they run in parallel. This test is about the digests, so pruning is stubbed.
+      const noPrune = { prune: async () => 0 };
+      const scheduler = new DigestScheduler(
+        { get: (_key: string, fallback?: string) => fallback } as unknown as ConfigService,
+        digests,
+        noPrune as unknown as NotificationsService,
+        noPrune as unknown as RateLimitService,
+      );
+      const sentTo = () => mail.send.mock.calls.map((c) => (c[0] as { to: string }).to).filter((to) => to.includes(ids.school.slice(0, 8)));
+      const runs = await Promise.all([scheduler.runDue(digestNow), scheduler.runDue(digestNow)]);
+      expect(runs.map((r) => r.due)).toEqual([true, true]);
+      expect(sentTo()).toEqual([expect.stringMatching(/^admin-/)]);
+    } finally {
+      await prisma.user.update({ where: { id: ids.admin }, data: { emailNotifications: false } });
+    }
+  });
+
   it("the digest reads one school's day: reports, late, and who hasn't reported", async () => {
     const day = new Date('2026-10-20T00:00:00Z');
     await prisma.dailyReport.create({
       data: { schoolId: ids.school, facultyId: ids.f1, teacherName: 'Actor', batchId: ids.batch, reportDate: day, subject: 'Physics', topics: 'Heat', late: true, submittedAt: new Date('2026-10-21T05:00:00Z') },
     });
-    const digests = new DigestService(db, { send: vi.fn() } as unknown as MailService);
+    const digests = new DigestService(db, { send: vi.fn() } as unknown as MailService, new RateLimitService(db));
     const d = await digests.build(ids.admin, day);
     expect(d?.admin).toEqual([expect.objectContaining({ submitted: 1, late: 1, flagged: 0, teachers: 1, missing: ['Off', 'Teacher'] })]);
     expect(await digests.build(ids.stranger, day)).toMatchObject({ admin: [{ submitted: 0, missing: [] }] });

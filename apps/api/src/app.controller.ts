@@ -1,5 +1,6 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Controller, Get, Req, ServiceUnavailableException } from '@nestjs/common';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import type { Request } from 'express';
 import { PrismaService } from './prisma/prisma.service.js';
 
 const READY_TIMEOUT_MS = 3_000;
@@ -24,6 +25,15 @@ export class AppController {
   @SkipThrottle()
   live() {
     return this.health();
+  }
+
+  /**
+   * The address Express resolved for the caller (after the trust-proxy setting),
+   * and nothing else: lets a deploy check what the rate limiter will key on.
+   */
+  @Get('ip')
+  ip(@Req() req: Request) {
+    return { ip: req.ip };
   }
 
   /**
