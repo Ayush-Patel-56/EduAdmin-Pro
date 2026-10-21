@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from './throttler/index.js';
 import { AppController } from './app.controller.js';
 import { AcademicModule } from './academic/academic.module.js';
 import { AuthModule } from './auth/auth.module.js';

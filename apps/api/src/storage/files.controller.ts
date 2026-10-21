@@ -19,7 +19,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle } from '../throttler/index.js';
 import type { Request, Response } from 'express';
 import { AccessService } from '../academic/access.service.js';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';

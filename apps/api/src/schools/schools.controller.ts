@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle } from '../throttler/index.js';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
 import { durableThrottle } from '../rate-limit/hybrid-throttler.storage.js';
 import { ConfirmNameDto, CreateSchoolDto, JoinSchoolDto, RegenerateCodeDto } from './schools.dto.js';

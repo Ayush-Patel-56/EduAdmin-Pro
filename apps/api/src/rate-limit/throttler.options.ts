@@ -1,4 +1,4 @@
-import type { ThrottlerModuleOptions } from '@nestjs/throttler';
+import type { ThrottlerModuleOptions } from '../throttler/index.js';
 import { DURABLE, HybridThrottlerStorage, hasDurableLimit } from './hybrid-throttler.storage.js';
 import type { RateLimitService } from './rate-limit.service.js';
 

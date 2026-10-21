@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle } from '../throttler/index.js';
 import type { CookieOptions, Request, Response } from 'express';
 import {
   AdminSignupDto,

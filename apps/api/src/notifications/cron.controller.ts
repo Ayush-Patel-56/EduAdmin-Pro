@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Controller, Get, Headers, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle } from '../throttler/index.js';
 import { DigestScheduler } from './digest.scheduler.js';
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest();

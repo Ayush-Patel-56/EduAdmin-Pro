@@ -1,5 +1,5 @@
 import { Controller, Get, Req, ServiceUnavailableException } from '@nestjs/common';
-import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from './throttler/index.js';
 import type { Request } from 'express';
 import { PrismaService } from './prisma/prisma.service.js';
 

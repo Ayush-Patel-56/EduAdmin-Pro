@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Controller, Get, Global, Injectable, Module, Post, type ExecutionContext, type INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
-import { Throttle, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { Throttle, ThrottlerGuard, ThrottlerModule } from '../src/throttler/index.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { PrismaClient } from '../src/generated/prisma/client.js';
