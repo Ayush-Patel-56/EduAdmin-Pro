@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties } from 'react'
+import { useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { Link } from 'react-router-dom'
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
@@ -13,6 +13,8 @@ import { DEMO_MAILTO, FAQ, INVITE_MAILTO, TIMETABLE_DAYS, timetable } from './co
 import { useLandingMotion } from './useLandingMotion'
 
 const year = new Date().getFullYear()
+// Tag only the clicked link so the View Transition morphs it into the auth card.
+const morphIntoCard = (e: MouseEvent<HTMLAnchorElement>) => e.currentTarget.style.setProperty('view-transition-name', 'au-card')
 const barHeight = (h: string) => ({ '--h': h }) as CSSProperties
 
 /** Public marketing page at "/". Signed-in users see "Go to dashboard" instead of "Sign in". */
@@ -30,9 +32,9 @@ export function LandingPage() {
        <ul><li><a href="#day">The school day</a></li><li><a href="#modules">Modules</a></li><li><a href="#portals">Portals</a></li><li><a href="#faq">Questions</a></li><li><a href="#contact">Contact</a></li></ul>
        <div className="nav-r">
         {signedIn ? (
-         <Link className="nav-link" to="/app">Go to dashboard</Link>
+         <Link className="nav-link" to="/app" viewTransition>Go to dashboard</Link>
         ) : (
-         <Link className="nav-link" to="/login">Sign in</Link>
+         <Link className="nav-link" to="/login" viewTransition onClick={morphIntoCard}>Sign in</Link>
         )}
         <a className="btn mag" href={DEMO_MAILTO}>Book a demo</a>
        </div>
@@ -182,7 +184,7 @@ export function LandingPage() {
        <a className="mail-big" href="mailto:academicplanningsystem@gmail.com?subject=Hello%20from%20the%20EduAdmin%20Pro%20website">academicplanningsystem@gmail.com</a>
        <div className="cgrid">
         <div><h4>Book a demo</h4><a href={DEMO_MAILTO}>Request a walkthrough →</a></div>
-        <div><h4>Set up my school</h4><Link to="/signup">Create your account →</Link><p className="hint">New schools need an admin invite code. <a href={INVITE_MAILTO}>Ask us for one</a>.</p></div>
+        <div><h4>Set up my school</h4><Link to="/signup" viewTransition onClick={morphIntoCard}>Create your account →</Link><p className="hint">New schools need an admin invite code. <a href={INVITE_MAILTO}>Ask us for one</a>.</p></div>
         <div><h4>Questions</h4><a href="mailto:academicplanningsystem@gmail.com?subject=Question%20about%20EduAdmin%20Pro">Write to us →</a></div>
        </div>
        <div className="foot"><a className="logo" href="#top"><b>EA</b><span>EduAdmin Pro</span></a><span>© {year} EduAdmin Pro</span></div>

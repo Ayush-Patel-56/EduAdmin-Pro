@@ -1,5 +1,7 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { ArrowRight, Check } from 'lucide-react'
+import { TOASTS } from '@/features/landing/content'
 
 type AuthPanelProps = {
   side: 'left' | 'right'
@@ -9,33 +11,86 @@ type AuthPanelProps = {
   ctaTo: string
 }
 
-const sideClasses = {
-  left: 'md:rounded-l-3xl md:rounded-r-[110px] shadow-[12px_0_40px_-12px_rgba(79,70,229,0.35)]',
-  right: 'md:order-last md:rounded-r-3xl md:rounded-l-[110px] shadow-[-12px_0_40px_-12px_rgba(79,70,229,0.35)]',
+const PILL_MS = 2800
+const WEEK = [62, 80, 54, 92, 70, 86]
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 }
 
-// The purple call-to-action half of the auth card.
+/** Small animated product preview with the cycling "what just happened" pill from the landing page. */
+function LivePreview() {
+  const [i, setI] = useState(0)
+  useEffect(() => {
+    if (prefersReducedMotion()) return
+    const t = setInterval(() => setI((n) => (n + 1) % TOASTS.length), PILL_MS)
+    return () => clearInterval(t)
+  }, [])
+  const [title, meta] = TOASTS[i]
+
+  return (
+    <div className="au-prev" aria-hidden="true">
+      <div className="au-prev-h">
+        <b>Today at your school</b>
+        <span className="au-live">
+          <i /> Live
+        </span>
+      </div>
+      <div className="au-stats">
+        <div className="au-stat">
+          <small>Attendance</small>
+          <b>93%</b>
+          <div className="bar"><i style={{ width: '93%' }} /></div>
+        </div>
+        <div className="au-stat">
+          <small>Reports</small>
+          <b>15/24</b>
+          <div className="bar"><i style={{ width: '62%' }} /></div>
+        </div>
+        <div className="au-stat">
+          <small>Tests</small>
+          <b>4</b>
+          <div className="bar"><i style={{ width: '40%' }} /></div>
+        </div>
+      </div>
+      <div className="au-week">
+        {WEEK.map((h, n) => (
+          <i key={n} style={{ height: `${h}%`, animationDelay: `${n * 0.18}s` }} />
+        ))}
+      </div>
+      <div key={i} className="au-pill au-pill-in">
+        <span className="dot"><Check className="size-3.5" /></span>
+        <b>{title}</b>
+        <span>{meta}</span>
+      </div>
+    </div>
+  )
+}
+
+/** Navy side of the auth card: switch prompt plus a live product preview. */
 export function AuthPanel({ side, title, description, ctaLabel, ctaTo }: AuthPanelProps) {
   return (
-    <section
-      className={`relative z-10 flex flex-col items-center justify-center max-md:rounded-b-[56px] bg-linear-to-br from-brand-400 via-brand-500 to-brand-600 px-8 py-14 text-center text-white md:w-1/2 md:py-0 ${sideClasses[side]}`}
-    >
-      <h2 className="text-[34px] font-extrabold tracking-tight">{title}</h2>
-      <p className="mt-3 max-w-[260px] text-[15px] leading-relaxed font-medium text-white/85">{description}</p>
-      <Link
-        to={ctaTo}
-        className="mt-11 rounded-lg border border-white/40 bg-white/10 px-10 py-3 text-sm font-bold tracking-wide uppercase transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
-      >
-        {ctaLabel}
-      </Link>
+    <section className={`au-panel ${side}`}>
+      <span className="au-dots" />
+      <div className="relative">
+        <h2>{title}</h2>
+        <p className="d">{description}</p>
+        <Link to={ctaTo} viewTransition className="au-cta">
+          {ctaLabel} <ArrowRight className="size-4" />
+        </Link>
+      </div>
+      <div className="relative pb-5">
+        <LivePreview />
+      </div>
     </section>
   )
 }
 
 export function AuthCard({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex w-full max-w-[896px] flex-col overflow-hidden rounded-3xl bg-white/90 shadow-[0_30px_80px_-20px_rgba(79,70,229,0.18)] md:min-h-[600px] md:flex-row">
-      {children}
-    </div>
-  )
+  return <div className="au-card">{children}</div>
+}
+
+/** Form half of the auth card. */
+export function AuthFormSide({ children }: { children: ReactNode }) {
+  return <section className="au-form">{children}</section>
 }

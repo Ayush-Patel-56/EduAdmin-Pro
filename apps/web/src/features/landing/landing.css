@@ -331,3 +331,19 @@
 @media (max-width:480px){.lp .nav-r{gap:14px}.lp nav .logo small{display:none}}
 .lp .cgrid .hint{margin-top:8px;font-size:13px;color:#a9b2d4}
 .lp .cgrid .hint a{color:#fff}
+/* Phones and small tablets: stack the hero (headline, copy, CTAs) above the dashboard preview. */
+@media (max-width:900px){
+.lp .hero{padding-top:112px}
+.lp .hero-top{grid-template-columns:1fr!important;gap:18px;align-items:start}
+.lp .hero h1{font-size:clamp(38px,10.4vw,72px);line-height:1.04}
+.lp .hero-side p{font-size:17px;max-width:46ch}
+.lp .hero-side .ctas{margin-top:22px}
+.lp .stage{margin-top:40px}
+.lp .note{display:none}
+}
+@media (max-width:480px){
+.lp .hero{padding-top:100px}
+.lp .hero-side p{font-size:16px}
+.lp .hero-side .ctas{gap:10px}
+.lp .hero-side .ctas>*{flex:1 1 auto;justify-content:center;text-align:center}
+}

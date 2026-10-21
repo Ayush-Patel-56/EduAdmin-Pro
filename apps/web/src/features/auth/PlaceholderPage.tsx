@@ -4,12 +4,16 @@ import { AuthLayout } from './AuthLayout'
 export function PlaceholderPage({ title }: { title: string }) {
   return (
     <AuthLayout>
-      <div className="rounded-3xl bg-white p-10 text-center shadow-lg">
-        <h1 className="text-2xl font-semibold">{title}</h1>
-        <p className="mt-2 text-sm text-slate-500">Coming soon.</p>
-        <Link to="/login" className="mt-6 inline-block text-sm font-medium text-brand-600 hover:underline">
+      <div className="au-card au-solo">
+        <div className="au-form au-done">
+          <div>
+        <h1>{title}</h1>
+        <p className="au-sub">Coming soon. Need help now? Email academicplanningsystem@gmail.com.</p>
+        <Link to="/login" viewTransition className="au-cta-dark">
           Back to login
         </Link>
+          </div>
+        </div>
       </div>
     </AuthLayout>
   )

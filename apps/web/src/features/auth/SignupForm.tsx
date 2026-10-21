@@ -4,7 +4,7 @@ import { CircleCheck, type LucideIcon } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
 import { AuthLayout } from './AuthLayout'
-import { AuthCard, AuthPanel } from './AuthPanel'
+import { AuthCard, AuthFormSide, AuthPanel } from './AuthPanel'
 import { OtpVerification } from './OtpVerification'
 
 export type SignupField = {
@@ -95,35 +95,35 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
       <AuthCard>
         <AuthPanel
           side="right"
-          title="Welcome Back!"
-          description="To stay connected with your institution, please login."
+          title="Already have an account?"
+          description="Sign in to pick up your timetable, tests and reports right where you left them."
           ctaLabel="Sign in"
           ctaTo="/login"
         />
 
-        <section className="flex flex-1 items-center justify-center px-8 py-12 md:px-12">
+        <AuthFormSide>
           {created ? (
-            <div role="status" className="w-full max-w-[352px] text-center">
-              <span className="mx-auto flex size-14 items-center justify-center rounded-full bg-emerald-100">
-                <CircleCheck className="size-7 text-emerald-600" />
+            <div role="status" className="au-done">
+              <span className="badge">
+                <CircleCheck className="size-7" />
               </span>
-              <h1 className="mt-4 text-xl font-bold text-slate-900">Account created successfully</h1>
-              <p className="mt-1 text-sm text-slate-500">Redirecting you to login…</p>
+              <h1 className="text-2xl">Account created successfully</h1>
+              <p className="au-sub">Redirecting you to login…</p>
             </div>
           ) : verifyEmail ? (
-            <div className="w-full max-w-[352px]">
-              <Link to="/signup" className="text-xs text-slate-500 hover:text-slate-800">
+            <div>
+              <Link to="/signup" viewTransition className="au-back">
                 ← Back
               </Link>
-              <h1 className="mt-3 mb-4 text-xl font-bold text-slate-900">{title}</h1>
+              <h1 className="mt-4 mb-5">{title}</h1>
               <OtpVerification email={verifyEmail} />
             </div>
           ) : (
-          <form onSubmit={handleSubmit} className="w-full max-w-[352px]" noValidate>
-            <Link to="/signup" className="text-xs text-slate-500 hover:text-slate-800">
+          <form onSubmit={handleSubmit} noValidate>
+            <Link to="/signup" viewTransition className="au-back">
               ← Back
             </Link>
-            <h1 className="mt-3 mb-4 text-xl font-bold text-slate-900">{title}</h1>
+            <h1 className="mt-4 mb-5">{title}</h1>
 
             <div className="space-y-2.5">
               {fields.map((f) => (
@@ -144,13 +144,13 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
               ))}
             </div>
 
-            {hint && <p className="mt-2 px-0.5 text-[11px] text-slate-500">{hint}</p>}
+            {hint && <p className="au-sub mt-2 text-[13px]">{hint}</p>}
 
             <FormError message={error} />
             <SubmitButton busy={submitting} label="Create Account" busyLabel="Creating account…" />
           </form>
           )}
-        </section>
+        </AuthFormSide>
       </AuthCard>
     </AuthLayout>
   )
