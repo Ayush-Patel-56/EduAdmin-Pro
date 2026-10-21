@@ -31,7 +31,7 @@ export function LoginPage() {
         body: JSON.stringify({ email, password }),
       })
       await queryClient.invalidateQueries({ queryKey: meQueryKey })
-      navigate('/', { replace: true })
+      navigate('/app', { replace: true })
     } catch (err) {
       if (err instanceof ApiError && err.code === 'EMAIL_NOT_VERIFIED') {
         navigate('/verify-email', { state: { email, autoSend: true } })

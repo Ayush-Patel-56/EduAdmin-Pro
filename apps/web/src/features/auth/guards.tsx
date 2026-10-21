@@ -29,7 +29,7 @@ export function RequireAuth({ accountType, children }: { accountType?: AccountTy
     if (error instanceof ApiError && error.status === 401) return <Navigate to="/login" replace />
     return <p className="p-8 text-center text-sm text-red-600">{error.message}</p>
   }
-  if (accountType && me.accountType !== accountType) return <Navigate to="/" replace />
+  if (accountType && me.accountType !== accountType) return <Navigate to="/app" replace />
   return children
 }
 
