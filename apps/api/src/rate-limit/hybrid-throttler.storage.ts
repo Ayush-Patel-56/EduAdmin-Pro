@@ -1,6 +1,7 @@
 import { Injectable, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
+import { ThrottlerStorage, ThrottlerStorageService } from '../throttler/index.js';
+import { THROTTLER_LIMIT } from '../throttler/throttler.constants.js';
 import { RateLimitService } from './rate-limit.service.js';
 
 /** The throttler whose counts live in Postgres; every other throttler counts in memory. */
@@ -16,10 +17,10 @@ const reflector = new Reflector();
 /**
  * Whether the route (or its controller) sets a durable limit; the durable
  * throttler skips every route that doesn't, since it has no default limit.
- * `@Throttle` stores the limit under this key (the library doesn't export it).
+ * `@Throttle` stores the limit under `THROTTLER_LIMIT` + the throttler's name.
  */
 export const hasDurableLimit = (context: ExecutionContext) =>
-  reflector.getAllAndOverride<number | undefined>(`THROTTLER:LIMIT${DURABLE}`, [context.getHandler(), context.getClass()]) !== undefined;
+  reflector.getAllAndOverride<number | undefined>(THROTTLER_LIMIT + DURABLE, [context.getHandler(), context.getClass()]) !== undefined;
 
 /**
  * The throttler's storage: the `durable` throttler counts in Postgres, so a

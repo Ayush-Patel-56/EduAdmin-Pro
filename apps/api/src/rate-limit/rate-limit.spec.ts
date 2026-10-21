@@ -1,5 +1,5 @@
 import type { ExecutionContext } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle } from '../throttler/index.js';
 import { DURABLE, HybridThrottlerStorage, durableThrottle, hasDurableLimit } from './hybrid-throttler.storage.js';
 import type { RateLimitService } from './rate-limit.service.js';
 

@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Put, Res, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle } from '../throttler/index.js';
 import { Transform } from 'class-transformer';
 import { IsNotEmpty, IsString, IsUrl, MaxLength } from 'class-validator';
 import type { Response } from 'express';
