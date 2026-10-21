@@ -30,9 +30,13 @@ type Runner struct {
 	// to record commands instead of executing them.
 	Exec func(cmd *exec.Cmd) error
 
-	root    string
-	out     io.Writer
-	actions bool // running on GitHub Actions
+	// Actions turns on the GitHub Actions log commands (::group::, ::add-mask::).
+	// New sets it from GITHUB_ACTIONS; tests set it explicitly so they don't
+	// depend on where they run.
+	Actions bool
+
+	root string
+	out  io.Writer
 
 	mu      sync.Mutex
 	secrets []string // longest first
@@ -44,7 +48,7 @@ func New(repoRoot string, out io.Writer) *Runner {
 	return &Runner{
 		root:    repoRoot,
 		out:     &syncWriter{w: out},
-		actions: os.Getenv("GITHUB_ACTIONS") == "true",
+		Actions: os.Getenv("GITHUB_ACTIONS") == "true",
 	}
 }
 
@@ -55,7 +59,7 @@ func New(repoRoot string, out io.Writer) *Runner {
 func (r *Runner) Mask(values ...string) {
 	for _, v := range values {
 		for _, s := range maskCandidates(v) {
-			if r.addSecret(s) && r.actions {
+			if r.addSecret(s) && r.Actions {
 				// Written to the raw writer: this line must not be masked.
 				fmt.Fprintf(r.out, "::add-mask::%s\n", s)
 			}
@@ -128,7 +132,7 @@ func (r *Runner) Redact(s string) string { return r.mask(s) }
 func (r *Runner) Stage(name string) {
 	name = r.mask(name)
 	r.Close()
-	if r.actions {
+	if r.Actions {
 		fmt.Fprintf(r.out, "::group::%s\n", name)
 		r.mu.Lock()
 		r.inGroup = true

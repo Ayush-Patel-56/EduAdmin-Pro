@@ -1,5 +1,6 @@
-// Command pipeline is the CI/CD driver for EduAdmin Pro. GitHub Actions calls
-// it as `go -C tools/pipeline run . <stage>`.
+// Command pipeline is the CI/CD driver for EduAdmin Pro. GitHub Actions builds
+// it and runs the binary, so a cancelled run's SIGTERM reaches it (`go run` does
+// not pass signals on). Locally: `go -C tools/pipeline run . <stage>`.
 package main
 
 import (

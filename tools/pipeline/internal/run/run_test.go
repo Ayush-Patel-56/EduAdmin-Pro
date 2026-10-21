@@ -247,16 +247,15 @@ func TestCommandSetsWaitDelay(t *testing.T) {
 }
 
 func TestStageOutput(t *testing.T) {
-	t.Setenv("GITHUB_ACTIONS", "")
 	var plain bytes.Buffer
 	run.New("", &plain).Stage("lint")
 	if plain.String() != "==> lint\n" {
 		t.Fatalf("got %q", plain.String())
 	}
 
-	t.Setenv("GITHUB_ACTIONS", "true")
 	var gh bytes.Buffer
 	r := run.New("", &gh)
+	r.Actions = true
 	r.Stage("one")
 	r.Stage("two")
 	r.Close()
@@ -267,13 +266,66 @@ func TestStageOutput(t *testing.T) {
 }
 
 func TestMaskEmitsAddMaskOnGitHubActions(t *testing.T) {
-	t.Setenv("GITHUB_ACTIONS", "true")
 	var buf bytes.Buffer
 	r := run.New("", &buf)
+	r.Actions = true
 	r.Mask("s3cret-value", "xy")
 	// The marker line itself must not be masked into "::add-mask::***".
 	if buf.String() != "::add-mask::s3cret-value\n" {
 		t.Fatalf("got %q", buf.String())
+	}
+}
+
+func TestNewReadsGitHubActionsFromEnvironment(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	if !run.New("", &bytes.Buffer{}).Actions {
+		t.Fatal("GITHUB_ACTIONS=true should switch the Actions log commands on")
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+	if run.New("", &bytes.Buffer{}).Actions {
+		t.Fatal("Actions should be off outside GitHub Actions")
+	}
+}
+
+// On Actions every secret is registered with ::add-mask:: (the one place the
+// plain value is written, and the runner strips it from the logs), and nothing
+// else the runner prints may contain it.
+func TestActionsEmitsAddMaskPerSecretAndNoOtherLineLeaksIt(t *testing.T) {
+	const (
+		token = "tok-plain-secret-1"
+		dbURL = "postgresql://user:db-pass-word-2@db.example.com:5432/app"
+		multi = "line-secret-3\nline-secret-4"
+	)
+	secrets := []string{token, dbURL, "db-pass-word-2", "line-secret-3", "line-secret-4"}
+	var buf bytes.Buffer
+	r := run.New(t.TempDir(), &buf)
+	r.Actions = true
+	r.Mask(token, dbURL, multi)
+	r.Stage("deploy " + token)
+	r.Printf("connecting to %s with %s", dbURL, token)
+	if err := r.Cmd(context.Background(), "", []string{"GO_WANT_HELPER_PROCESS=1",
+		"HELPER_STDOUT=child " + token + " " + dbURL + " line-secret-4"},
+		os.Args[0], "-test.run=^TestHelperProcess$"); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+
+	masks := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if v, ok := strings.CutPrefix(line, "::add-mask::"); ok {
+			masks[v] = true
+			continue
+		}
+		for _, s := range secrets {
+			if strings.Contains(line, s) {
+				t.Errorf("line %q leaks %q", line, s)
+			}
+		}
+	}
+	for _, s := range secrets {
+		if !masks[s] {
+			t.Errorf("no ::add-mask:: line for %q; got %v", s, masks)
+		}
 	}
 }
 
