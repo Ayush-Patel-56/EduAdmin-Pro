@@ -43,8 +43,13 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # Run the pipeline as a binary, not through `go run`: `go run` does not
+      # pass SIGTERM on to the program, and a cancelled run must reach it.
+      - name: Build the pipeline
+        run: go -C tools/pipeline build -o "$RUNNER_TEMP/pipeline" .
+
       - name: Check
-        run: go -C tools/pipeline run . check
+        run: '"$RUNNER_TEMP/pipeline" check'
 
   e2e:
     name: API e2e (Postgres)
@@ -88,7 +93,12 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # Run the pipeline as a binary, not through `go run`: `go run` does not
+      # pass SIGTERM on to the program, and a cancelled run must reach it.
+      - name: Build the pipeline
+        run: go -C tools/pipeline build -o "$RUNNER_TEMP/pipeline" .
+
       # Replays every migration from an empty database, runs the e2e suite and
       # checks the migrations match schema.prisma.
       - name: E2E
-        run: go -C tools/pipeline run . e2e
+        run: '"$RUNNER_TEMP/pipeline" e2e'
