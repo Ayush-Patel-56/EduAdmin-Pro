@@ -235,6 +235,8 @@ export function useLandingMotion(rootRef: RefObject<HTMLElement | null>) {
         })
         gsap.from('.panel', { y: 80, opacity: 0, stagger: 0.08, duration: 1.1, ease: spring, scrollTrigger: { trigger: '#modules', start: 'top 85%' } })
         const tks = $$('.tk')
+        // Reset any stale px offset first so yPercent alone positions each time.
+        gsap.set(tks, { y: 0, yPercent: 0, opacity: 1 })
         gsap.set(tks.slice(1), { opacity: 0, yPercent: 100 })
         const beats = $$('.beat')
         const S = [$$('.s1'), $$('.s2'), $$('.s3'), $$('.s4')]
@@ -243,8 +245,8 @@ export function useLandingMotion(rootRef: RefObject<HTMLElement | null>) {
         const st = gsap.timeline({ scrollTrigger: { trigger: '#story', start: 'top top', end: '+=2200', pin: true, scrub: 0.7 } })
         st.to({}, { duration: 0.6 })
         for (let i = 1; i < 4; i++) {
-          st.to(tks[i - 1], { yPercent: -100, opacity: 0, duration: 0.45, ease: 'power3.inOut' })
-            .fromTo(tks[i], { yPercent: 100, opacity: 0 }, { yPercent: 0, opacity: 1, duration: 0.45, ease: 'power3.inOut' }, '<')
+          st.to(tks[i - 1], { y: 0, yPercent: -100, opacity: 0, duration: 0.45, ease: 'power3.inOut' })
+            .fromTo(tks[i], { y: 0, yPercent: 100, opacity: 0 }, { y: 0, yPercent: 0, opacity: 1, duration: 0.45, ease: 'power3.inOut' }, '<')
             .to(beats[i - 1], { opacity: 0, y: -30, duration: 0.3 }, '<')
             .to(S[i - 1], { opacity: 0, y: -40, scale: 0.96, stagger: 0.04, duration: 0.35 }, '<')
             .fromTo(beats[i], { y: 30 }, { opacity: 1, y: 0, duration: 0.35 }, '<.2')
