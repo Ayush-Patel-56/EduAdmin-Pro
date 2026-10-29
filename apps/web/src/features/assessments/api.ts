@@ -154,6 +154,16 @@ export function useOverview(base: string) {
 
 export type QuestionFilters = { q?: string; subject?: string; difficulty?: string; type?: string; chapterId?: string; author?: string; bank?: 'mine' | 'school'; page?: number; pageSize?: number }
 
+/** Every question matching the filters, across all pages (the API serves at most 200 a page). */
+export async function allMatchingQuestions(base: string, f: QuestionFilters): Promise<Question[]> {
+  const all: Question[] = []
+  for (let page = 1; ; page++) {
+    const res = await api<Page<Question>>(`${base}/questions?${query({ ...f, page, pageSize: 200 })}`)
+    all.push(...res.items)
+    if (!res.items.length || all.length >= res.total) return all
+  }
+}
+
 export function useQuestions(base: string, f: QuestionFilters, enabled = true) {
   return useQuery({
     queryKey: [base, 'questions', f],
