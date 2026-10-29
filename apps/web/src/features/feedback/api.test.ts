@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { rowsToRecords } from '@/lib/spreadsheet'
 import { FEEDBACK_COLUMNS, sampleRows } from './sheet'
-import { dayLabel, importInChunks, keywordTone, percent } from './api'
+import { dayLabel, feedbackLinkUrl, importInChunks, keywordTone, percent } from './api'
 
 describe('feedback display', () => {
   it('rating shares round, and are 0 with no feedback', () => {
@@ -76,5 +76,11 @@ describe('importing a sheet in chunks', () => {
       return { applied: true, created: rows.length, updated: 0, skipped: 0, rows: rows.map((_, i) => ({ row: firstRow + i, label: '', action: 'create' as const, errors: [], key: `k${firstRow + i}` })) }
     }
     await expect(importInChunks(send, sheet, false)).rejects.toThrow('That teacher was just removed from the school. (200 rows were imported before this; uploading the sheet again skips them.)')
+  })
+})
+
+describe('student feedback links', () => {
+  it('builds the public link from the site origin', () => {
+    expect(feedbackLinkUrl('abc', 'https://eduadmin-web.vercel.app')).toBe('https://eduadmin-web.vercel.app/feedback/abc')
   })
 })
