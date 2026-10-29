@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { HelpCircle, LogOut, Menu, Settings, X, type LucideIcon } from 'lucide-react'
 import { useDismiss } from '@/components/ui/useDismiss'
@@ -71,6 +71,13 @@ export function PortalShell({
   useDismiss(menuRef, menuOpen, closeMenu)
   const initial = me.fullName.trim().charAt(0).toUpperCase()
   const accent = (preferencesOf(me).accentTheme ?? defaultAccent).toLowerCase()
+  // On <html> as well, so menus and pickers rendered outside the shell (portals) follow the theme.
+  useEffect(() => {
+    document.documentElement.dataset.accent = accent
+    return () => {
+      delete document.documentElement.dataset.accent
+    }
+  }, [accent])
 
   const searchItems = useMemo<SearchItem[]>(
     () =>
