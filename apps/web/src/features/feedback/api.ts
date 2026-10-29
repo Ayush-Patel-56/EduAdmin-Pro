@@ -88,8 +88,14 @@ export function useInvalidateFeedback(schoolId: string) {
   return () => client.invalidateQueries({ queryKey: [schoolId, 'feedback'] })
 }
 
+/** Student feedback as a teacher sees it: never who sent it. */
+export type StudentFeedbackForTeacher = { id: string; rating: number; content: string; batchName: string | null; date: string; createdAt: string; status: FeedbackStatus }
+
 export function useTeacherFeedback() {
-  return useQuery({ queryKey: ['teacher-feedback'], queryFn: () => api<{ received: Feedback[]; sent: Feedback[] }>(TEACHER_FEEDBACK_PATH) })
+  return useQuery({
+    queryKey: ['teacher-feedback'],
+    queryFn: () => api<{ received: Feedback[]; sent: Feedback[]; fromStudents: StudentFeedbackForTeacher[] }>(TEACHER_FEEDBACK_PATH),
+  })
 }
 
 export function useInvalidateTeacherFeedback() {

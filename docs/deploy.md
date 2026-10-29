@@ -369,6 +369,16 @@ New enums and a new table only (feedback between management and faculty), wrappe
   ```
 - **Import keys.** Imported rows are now keyed with a teacher sender or target by faculty id (so the same teacher written differently is one row); rows imported earlier keep their old key, and an upload checks both, so nothing already imported comes in again. Large sheets are sent in chunks of 200 rows.
 
+## Student feedback links (`20261030090000_student_feedback_links`, `20261030091000_student_feedback_check`)
+
+A new table (`FeedbackLink`), four nullable columns on `Feedback` and a new direction, `STUDENT_TO_TEACHER`. Additive only, each in a transaction with `lock_timeout = 10s`; nothing to check before deploying.
+
+- **One link per batch.** On the Feedback page, *Student feedback links* gives each batch a public link (`/feedback/<token>`, 32 random bytes). Admins can copy it, switch it off and on, or replace it (the old link stops working at once). Deleting the batch or school deletes its link.
+- **No login.** The page lists the batch's active students (names only) and its assigned teachers who aren't inactive. A student picks their name and a teacher, and gives 1-5 stars and a 10-1,000 character comment. Nothing proves who the student is, for now (accepted; a check can be added later in `PublicFeedbackService.submit`).
+- **Limits.** One entry per student every 15 minutes (the student's row is locked while it's checked, so two at once can't both get in), plus a loose 120 requests a minute per IP, since a class often shares one IP.
+- **Who sees what.** Admins see the student's name and batch under *Student -> Teacher*. Teachers see the entries about them under *From Students* with the rating, comment, batch and date, never the name (the API doesn't send it). Dismissed entries drop off the teacher's page; an inactive teacher sees none.
+- **Kept as records.** An entry keeps the student's, batch's and teacher's names if any of them is deleted (`ON DELETE SET NULL ("studentId")` / `("batchId")`, checked in `schema-constraints.e2e-spec.ts`). The second migration widens `Feedback_direction_check` for the new direction; it's separate because Postgres can't use an enum value in the transaction that added it. Clear All Data removes the links with the rest.
+
 ## PTM notes (`20261018150000_ptm_notes`)
 
 A new table only (parent-teacher meeting notes), wrapped in a transaction with `lock_timeout = 10s`, so there is nothing to check before deploying.

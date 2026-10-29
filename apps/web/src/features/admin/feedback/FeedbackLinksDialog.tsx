@@ -48,6 +48,8 @@ function LinkItem({ row, schoolId }: { row: FeedbackLinkRow; schoolId: string })
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [confirmReplace, setConfirmReplace] = useState(false)
+  // The browser refused the clipboard: show the whole link to copy by hand.
+  const [manualCopy, setManualCopy] = useState(false)
   const url = row.token ? feedbackLinkUrl(row.token) : null
 
   async function run(change: () => Promise<FeedbackLinkRow>) {
@@ -70,7 +72,7 @@ function LinkItem({ row, schoolId }: { row: FeedbackLinkRow; schoolId: string })
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      setError('Could not copy. Select the link and copy it yourself.')
+      setManualCopy(true)
     }
   }
 
@@ -114,6 +116,19 @@ function LinkItem({ row, schoolId }: { row: FeedbackLinkRow; schoolId: string })
           </div>
         )}
       </div>
+      {manualCopy && url && row.active && (
+        <div className="mt-3">
+          <label htmlFor={`link-${row.batchId}`} className="text-[11px] font-semibold text-slate-500">Copying was blocked by the browser. Copy the link from here:</label>
+          <input
+            id={`link-${row.batchId}`}
+            readOnly
+            autoFocus
+            value={url}
+            onFocus={(e) => e.currentTarget.select()}
+            className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 font-mono text-xs text-slate-700 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 focus:outline-none"
+          />
+        </div>
+      )}
       {confirmReplace && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
           <span>The old link will stop working. Students will need the new one.</span>
