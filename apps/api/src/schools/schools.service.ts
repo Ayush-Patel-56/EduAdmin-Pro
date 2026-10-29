@@ -466,6 +466,7 @@ export class SchoolsService {
       await tx.calendarEvent.deleteMany({ where: { schoolId } });
       await tx.dailyReport.deleteMany({ where: { schoolId } }); // before the batches and faculty they name
       await tx.feedback.deleteMany({ where: { schoolId } }); // before the faculty profiles it names
+      await tx.feedbackLink.deleteMany({ where: { schoolId } }); // student feedback links, before their batches
       await tx.ptmNote.deleteMany({ where: { schoolId } }); // before the students they are about
       await tx.dailyRating.deleteMany({ where: { schoolId } }); // before the students, batches and faculty they name
       await tx.notification.deleteMany({ where: { schoolId } }); // about chapters and reports that go now
