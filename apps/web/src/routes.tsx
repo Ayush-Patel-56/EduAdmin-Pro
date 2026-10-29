@@ -22,6 +22,9 @@ import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
 // Heavy pages load on first visit instead of in the initial bundle.
 const LandingPage = lazy(() => import('@/features/landing/LandingPage').then((m) => ({ default: m.LandingPage })))
+const StudentFeedbackPage = lazy(() =>
+  import('@/features/public-feedback/StudentFeedbackPage').then((m) => ({ default: m.StudentFeedbackPage })),
+)
 const AcademicPlanningPage = lazy(() =>
   import('@/features/admin/planning/AcademicPlanningPage').then((m) => ({ default: m.AcademicPlanningPage })),
 )
@@ -126,6 +129,15 @@ export const routes: RouteObject[] = [
       // Sends a signed-in user to their portal (or to /login); used after sign-in.
       { path: '/app', element: <HomeRedirect /> },
       { path: '/login', element: <LoginPage /> },
+      // A batch's student feedback link: no login, the token is the key.
+      {
+        path: '/feedback/:token',
+        element: (
+          <Suspense fallback={<FullPageSpinner />}>
+            <StudentFeedbackPage />
+          </Suspense>
+        ),
+      },
       { path: '/signup', element: <SignupRolePage /> },
       { path: '/signup/teacher', element: <TeacherSignupPage /> },
       { path: '/signup/admin', element: <AdminSignupPage /> },

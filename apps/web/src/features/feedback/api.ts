@@ -117,6 +117,26 @@ export const regenerateLink = (schoolId: string, batchId: string) =>
 /** The page students open. Built here from the site's own address; the API only knows the token. */
 export const feedbackLinkUrl = (token: string, origin = window.location.origin) => `${origin}/feedback/${token}`
 
+/** The student form behind a link: the batch's students (names only) and its teachers. */
+export type PublicFeedbackForm = {
+  schoolName: string
+  batchName: string
+  cooldownMinutes: number
+  students: { id: string; name: string }[]
+  teachers: { id: string; name: string; subjects: string[] }[]
+}
+export type StudentFeedbackBody = { studentId: string; facultyId: string; rating: number; comment: string }
+
+const publicPath = (token: string) => `/public/feedback/${encodeURIComponent(token)}`
+
+/** No login; a switched-off or replaced link is a 404, which isn't worth retrying. */
+export function usePublicFeedbackForm(token: string) {
+  return useQuery({ queryKey: ['public-feedback', token], queryFn: () => api<PublicFeedbackForm>(publicPath(token)), retry: false, refetchOnWindowFocus: false })
+}
+
+export const submitStudentFeedback = (token: string, body: StudentFeedbackBody) =>
+  api<{ ok: true; nextAllowedAt: string }>(publicPath(token), { method: 'POST', body: JSON.stringify(body) })
+
 /** A share of the total, rounded, for the rating chart (0 when there is nothing yet). */
 export const percent = (count: number, total: number) => (total ? Math.round((count / total) * 100) : 0)
 
