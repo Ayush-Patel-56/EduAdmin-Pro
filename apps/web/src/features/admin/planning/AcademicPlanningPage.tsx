@@ -19,7 +19,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 
 export function AcademicPlanningPage() {
-  const { me, schoolId, structure, filters } = useAdminContext()
+  const { me, schoolId, structure, filters, dashboard } = useAdminContext()
   const [params, setParams] = useSearchParams()
   const tab: TabId = TABS.some((t) => t.id === params.get('tab')) ? (params.get('tab') as TabId) : 'schools'
   const schoolName = me.memberships.find((m) => m.schoolId === schoolId)?.schoolName ?? ''
@@ -57,6 +57,7 @@ export function AcademicPlanningPage() {
             filters={filters}
             schoolName={schoolName}
             manageBatchesTo="?tab=batches"
+            academicYearStartMonth={dashboard?.school.academicYearStartMonth}
           />
         )}
         {tab === 'faculty' && <FacultyTab />}

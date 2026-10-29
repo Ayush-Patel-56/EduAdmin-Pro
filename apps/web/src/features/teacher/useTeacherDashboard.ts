@@ -14,6 +14,7 @@ export type TeacherDashboard = {
     name: string
     board: string
     classes: string[]
+    academicYearStartMonth: number
     mouStartDate: string | null
     mouEndDate: string | null
     mouStatus: MouStatus

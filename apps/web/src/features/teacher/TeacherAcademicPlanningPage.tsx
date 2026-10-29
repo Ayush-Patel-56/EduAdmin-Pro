@@ -25,7 +25,7 @@ export function TeacherAcademicPlanningPage() {
           </p>
         ) : (
           school && (
-            <SyllabusTracker source={{ kind: 'teacher' }} structure={structure} filters={filters} schoolName={school.name} />
+            <SyllabusTracker source={{ kind: 'teacher' }} structure={structure} filters={filters} schoolName={school.name} academicYearStartMonth={school.academicYearStartMonth} />
           )
         )}
       </div>
