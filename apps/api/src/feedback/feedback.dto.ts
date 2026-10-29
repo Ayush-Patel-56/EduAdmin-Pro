@@ -20,7 +20,7 @@ import { FEEDBACK_CATEGORIES, FEEDBACK_DIRECTIONS, type FeedbackCategory, type F
 const blankToNull = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') || null : value;
 /** Keeps line breaks: feedback can be several lines. */
-const multiline = ({ value }: { value: unknown }) =>
+export const multiline = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim() : value;
 const UUID_OR_ALL = /^(ALL|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
