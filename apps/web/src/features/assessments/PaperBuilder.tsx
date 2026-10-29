@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
 import { btnPrimary, btnSecondary, inputClass } from '@/components/ui/formStyles'
-import { answerLabel, DIFFICULTY_LABELS, paperTotal, TYPE_LABELS, useInvalidateAssessments, useQuestions, type Options, type PaperQuestion, type Question, type TestDetail } from './api'
+import { allMatchingQuestions, SELECT_ALL_LIMIT, answerLabel, DIFFICULTY_LABELS, paperTotal, TYPE_LABELS, useInvalidateAssessments, useQuestions, type Options, type PaperQuestion, type Question, type TestDetail } from './api'
 import { Card, DifficultyBadge, Empty, FilterSelect, iconBtn, Pager, TypeBadge } from './ui'
 
 /** A question on the draft paper: `key` is its paper id (already on it) or its bank id (being added). */
@@ -181,6 +181,32 @@ function BankPicker({ base, options, subject, taken, onAdd, onClose }: { base: s
     setPage(1)
   }
   const toggle = (q: Question) => setPicked((p) => (p.some((x) => x.id === q.id) ? p.filter((x) => x.id !== q.id) : [...p, q]))
+  // Questions already on the paper can't be picked again.
+  const selectable = items.filter((q) => !taken.has(q.id))
+  const pageAllOn = selectable.length > 0 && selectable.every((q) => picked.some((p) => p.id === q.id))
+  const add = (qs: Question[]) => setPicked((p) => [...p, ...qs.filter((q) => !taken.has(q.id) && !p.some((x) => x.id === q.id))])
+  const togglePage = () => (pageAllOn ? setPicked((p) => p.filter((x) => !selectable.some((q) => q.id === x.id))) : add(selectable))
+  const total = list.data?.total ?? 0
+  const [selectingAll, setSelectingAll] = useState(false)
+  const [selectError, setSelectError] = useState<string | null>(null)
+  async function selectAllMatching() {
+    // The search box may still be waiting out its debounce: use what's typed now,
+    // and show that same result in the list.
+    const latest = { ...filters, q: search.trim() }
+    if (latest.q !== filters.q) {
+      setFilters(latest)
+      setPage(1)
+    }
+    setSelectingAll(true)
+    setSelectError(null)
+    try {
+      add(await allMatchingQuestions(base, { ...latest, bank: 'school' }))
+    } catch (err) {
+      setSelectError(err instanceof Error ? err.message : 'Could not load all the questions')
+    } finally {
+      setSelectingAll(false)
+    }
+  }
 
   return (
     <Dialog title="Add from Question Bank" description="The school’s whole bank. Questions are copied onto the paper as they are now." onClose={onClose} widthClass="max-w-3xl">
@@ -195,6 +221,27 @@ function BankPicker({ base, options, subject, taken, onAdd, onClose }: { base: s
           <FilterSelect label="Type" all="All Types" value={filters.type} options={options.questionTypes.map((t) => ({ value: t, label: TYPE_LABELS[t] }))} onChange={(v) => setF('type', v)} />
         </div>
         <div className="overflow-hidden rounded-xl border border-slate-200">
+          {items.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+              <label className={`flex items-center gap-3 text-xs font-semibold text-slate-600 ${selectable.length ? 'cursor-pointer' : 'opacity-50'}`}>
+                <input type="checkbox" disabled={!selectable.length} checked={pageAllOn} onChange={togglePage} className="size-4 shrink-0 accent-ink" />
+                {total > items.length ? `Select all ${selectable.length} on this page` : `Select all ${selectable.length}`}
+              </label>
+              <div className="flex items-center gap-3 text-xs font-semibold">
+                {total > items.length && (
+                  <button type="button" onClick={selectAllMatching} disabled={selectingAll} className="text-brand-600 hover:underline disabled:opacity-60">
+                    {selectingAll ? 'Selecting…' : total > SELECT_ALL_LIMIT ? `Select all matching (up to ${SELECT_ALL_LIMIT.toLocaleString('en-IN')})` : `Select all ${total} matching`}
+                  </button>
+                )}
+                {picked.length > 0 && (
+                  <button type="button" onClick={() => setPicked([])} className="text-slate-500 hover:text-slate-700 hover:underline">
+                    Clear selection
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {selectError && <div className="px-3 pt-2"><ErrorBanner message={selectError} /></div>}
           <ul className="max-h-96 divide-y divide-slate-100 overflow-y-auto">
             {items.map((q) => {
               const on = taken.has(q.id)

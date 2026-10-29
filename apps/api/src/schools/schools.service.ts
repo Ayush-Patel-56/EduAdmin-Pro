@@ -231,6 +231,7 @@ export class SchoolsService {
             name: school.name,
             board: school.board,
             classes: school.classes,
+            academicYearStartMonth: school.academicYearStartMonth,
             mouStartDate: toIsoDate(school.mouStartDate),
             mouEndDate: toIsoDate(school.mouEndDate),
             mouStatus: mouStatus(school.mouStartDate, school.mouEndDate),
@@ -526,7 +527,9 @@ export class SchoolsService {
 
   private async assertConfirmName(schoolId: string, confirmName: string) {
     const school = await this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { name: true } });
-    if (confirmName.trim() !== school.name) {
+    // Stray spaces at the ends or doubled inside don't count (the dialog compares the same way).
+    const norm = (s: string) => s.trim().replace(/\s+/g, ' ');
+    if (norm(confirmName) !== norm(school.name)) {
       throw new BadRequestException('Type the school name exactly to confirm');
     }
   }

@@ -294,8 +294,12 @@ function SchoolDialog({ school, onSaved, onClose }: { school?: ApiSchool; onSave
             submittingLabel="Saving…"
             note={school ? 'Removing a program is only possible when it has no batches.' : 'A unique invite code will be auto-generated for this school.'}
           />
+        ) : error ? (
+          <ErrorBanner message={error.message} />
         ) : (
-          <ErrorBanner message={error?.message} />
+          <p className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+            <Loader2 className="size-4 animate-spin" aria-hidden /> Loading the school's details…
+          </p>
         )}
       </div>
     </Dialog>
@@ -360,8 +364,12 @@ type ConfirmNameDialogProps = {
 }
 
 /** Destructive school actions: the owner types the school name to confirm. */
+/** Spaces at the ends or doubled inside don't count when the owner types the name (the API does the same). */
+const sameName = (a: string, b: string) => a.trim().replace(/\s+/g, ' ') === b.trim().replace(/\s+/g, ' ')
+
 function ConfirmNameDialog({ school, title, action, description, extra, onConfirm, onClose }: ConfirmNameDialogProps) {
   const [typed, setTyped] = useState('')
+  const matches = sameName(typed, school.name)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   async function submit(e: FormEvent) {
@@ -388,12 +396,19 @@ function ConfirmNameDialog({ school, title, action, description, extra, onConfir
           <label htmlFor="confirm-name" className={labelClass}>
             Type <span className="normal-case text-slate-900">{school.name}</span> to confirm
           </label>
-          <input id="confirm-name" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" className={inputClass()} />
+          <input id="confirm-name" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" aria-describedby="confirm-name-hint" className={inputClass()} />
+          <p id="confirm-name-hint" className={`mt-1.5 text-xs ${matches ? 'font-semibold text-emerald-700' : 'text-slate-500'}`}>
+            {matches
+              ? 'Name matches.'
+              : typed
+                ? 'Not a match yet: type the name exactly as shown, including capital letters.'
+                : `The ${action} button turns on once the name matches.`}
+          </p>
         </div>
         <ErrorBanner message={error} />
         <div className="flex justify-end gap-3">
           <button type="button" onClick={onClose} className={btnSecondary}>Cancel</button>
-          <button type="submit" disabled={busy || typed.trim() !== school.name} className={btnDanger}>
+          <button type="submit" disabled={busy || !matches} className={btnDanger}>
             {busy ? 'Working…' : action}
           </button>
         </div>
@@ -423,7 +438,7 @@ type ClearPreview = {
 
 function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () => void }) {
   const queryClient = useQueryClient()
-  const { data: preview } = useQuery({
+  const { data: preview, error: previewError } = useQuery({
     queryKey: [school.id, 'clear-preview'],
     queryFn: () => api<ClearPreview>(`/schools/${school.id}/clear-preview`),
     staleTime: 0,
@@ -468,6 +483,8 @@ function ClearDataDialog({ school, onClose }: { school: ApiSchool; onClose: () =
                 </li>
               ))}
             </ul>
+          ) : previewError ? (
+            <p className="text-red-700">Couldn't load what will be deleted: {previewError.message}</p>
           ) : (
             <Loader2 className="size-4 animate-spin text-slate-300" aria-label="Loading" />
           )}

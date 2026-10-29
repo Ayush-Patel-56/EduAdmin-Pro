@@ -2,34 +2,155 @@
 
 @theme {
   --font-sans: 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --color-brand-50: #eef2ff;
-  --color-brand-400: #7072f1;
-  --color-brand-500: #5b57ea;
-  --color-brand-600: #4f46e5;
+  --color-brand-50: oklch(96.2% 0.018 272.314);
+  --color-brand-100: oklch(93% 0.034 272.788);
+  --color-brand-200: oklch(87% 0.065 274.039);
+  --color-brand-300: oklch(78.5% 0.115 274.713);
+  --color-brand-400: oklch(67.3% 0.182 276.935);
+  --color-brand-500: oklch(58.5% 0.233 277.117);
+  --color-brand-600: oklch(51.1% 0.262 276.966);
+  --color-brand-700: oklch(45.7% 0.24 277.023);
+  --color-brand-800: oklch(39.8% 0.195 277.366);
+  --color-brand-900: oklch(35.9% 0.144 278.697);
+  --color-brand-950: oklch(25.7% 0.09 281.288);
   --color-ink: #0f2147;
   --color-ink-hover: #182e5e;
 }
 
-/* Accent theme from Account Preferences, set as data-accent on the portal shell. */
+/*
+ * Accent theme from Account Preferences, set as data-accent on <html> (and the
+ * portal shell). The app's accent colours are mostly indigo-* (admin) and blue-*
+ * (teacher) utilities, so the theme repoints both palettes, brand-* and the dark
+ * ink of primary buttons at the chosen colour. Generated from Tailwind's palettes.
+ */
+[data-accent='indigo'] {
+  --color-brand-50: oklch(96.2% 0.018 272.314);
+  --color-brand-100: oklch(93% 0.034 272.788);
+  --color-brand-200: oklch(87% 0.065 274.039);
+  --color-brand-300: oklch(78.5% 0.115 274.713);
+  --color-brand-400: oklch(67.3% 0.182 276.935);
+  --color-brand-500: oklch(58.5% 0.233 277.117);
+  --color-brand-600: oklch(51.1% 0.262 276.966);
+  --color-brand-700: oklch(45.7% 0.24 277.023);
+  --color-brand-800: oklch(39.8% 0.195 277.366);
+  --color-brand-900: oklch(35.9% 0.144 278.697);
+  --color-brand-950: oklch(25.7% 0.09 281.288);
+  --color-blue-50: oklch(96.2% 0.018 272.314);
+  --color-blue-100: oklch(93% 0.034 272.788);
+  --color-blue-200: oklch(87% 0.065 274.039);
+  --color-blue-300: oklch(78.5% 0.115 274.713);
+  --color-blue-400: oklch(67.3% 0.182 276.935);
+  --color-blue-500: oklch(58.5% 0.233 277.117);
+  --color-blue-600: oklch(51.1% 0.262 276.966);
+  --color-blue-700: oklch(45.7% 0.24 277.023);
+  --color-blue-800: oklch(39.8% 0.195 277.366);
+  --color-blue-900: oklch(35.9% 0.144 278.697);
+  --color-blue-950: oklch(25.7% 0.09 281.288);
+  --color-ink: #0f2147;
+  --color-ink-hover: #182e5e;
+}
+
 [data-accent='blue'] {
-  --color-brand-50: #eff6ff;
-  --color-brand-400: #60a5fa;
-  --color-brand-500: #3b82f6;
-  --color-brand-600: #2563eb;
+  --color-brand-50: oklch(97% 0.014 254.604);
+  --color-brand-100: oklch(93.2% 0.032 255.585);
+  --color-brand-200: oklch(88.2% 0.059 254.128);
+  --color-brand-300: oklch(80.9% 0.105 251.813);
+  --color-brand-400: oklch(70.7% 0.165 254.624);
+  --color-brand-500: oklch(62.3% 0.214 259.815);
+  --color-brand-600: oklch(54.6% 0.245 262.881);
+  --color-brand-700: oklch(48.8% 0.243 264.376);
+  --color-brand-800: oklch(42.4% 0.199 265.638);
+  --color-brand-900: oklch(37.9% 0.146 265.522);
+  --color-brand-950: oklch(28.2% 0.091 267.935);
+  --color-indigo-50: oklch(97% 0.014 254.604);
+  --color-indigo-100: oklch(93.2% 0.032 255.585);
+  --color-indigo-200: oklch(88.2% 0.059 254.128);
+  --color-indigo-300: oklch(80.9% 0.105 251.813);
+  --color-indigo-400: oklch(70.7% 0.165 254.624);
+  --color-indigo-500: oklch(62.3% 0.214 259.815);
+  --color-indigo-600: oklch(54.6% 0.245 262.881);
+  --color-indigo-700: oklch(48.8% 0.243 264.376);
+  --color-indigo-800: oklch(42.4% 0.199 265.638);
+  --color-indigo-900: oklch(37.9% 0.146 265.522);
+  --color-indigo-950: oklch(28.2% 0.091 267.935);
+  --color-ink: oklch(28.2% 0.091 267.935);
+  --color-ink-hover: oklch(37.9% 0.146 265.522);
 }
 
 [data-accent='emerald'] {
-  --color-brand-50: #ecfdf5;
-  --color-brand-400: #34d399;
-  --color-brand-500: #10b981;
-  --color-brand-600: #059669;
+  --color-brand-50: oklch(97.9% 0.021 166.113);
+  --color-brand-100: oklch(95% 0.052 163.051);
+  --color-brand-200: oklch(90.5% 0.093 164.15);
+  --color-brand-300: oklch(84.5% 0.143 164.978);
+  --color-brand-400: oklch(76.5% 0.177 163.223);
+  --color-brand-500: oklch(69.6% 0.17 162.48);
+  --color-brand-600: oklch(59.6% 0.145 163.225);
+  --color-brand-700: oklch(50.8% 0.118 165.612);
+  --color-brand-800: oklch(43.2% 0.095 166.913);
+  --color-brand-900: oklch(37.8% 0.077 168.94);
+  --color-brand-950: oklch(26.2% 0.051 172.552);
+  --color-indigo-50: oklch(97.9% 0.021 166.113);
+  --color-indigo-100: oklch(95% 0.052 163.051);
+  --color-indigo-200: oklch(90.5% 0.093 164.15);
+  --color-indigo-300: oklch(84.5% 0.143 164.978);
+  --color-indigo-400: oklch(76.5% 0.177 163.223);
+  --color-indigo-500: oklch(69.6% 0.17 162.48);
+  --color-indigo-600: oklch(59.6% 0.145 163.225);
+  --color-indigo-700: oklch(50.8% 0.118 165.612);
+  --color-indigo-800: oklch(43.2% 0.095 166.913);
+  --color-indigo-900: oklch(37.8% 0.077 168.94);
+  --color-indigo-950: oklch(26.2% 0.051 172.552);
+  --color-blue-50: oklch(97.9% 0.021 166.113);
+  --color-blue-100: oklch(95% 0.052 163.051);
+  --color-blue-200: oklch(90.5% 0.093 164.15);
+  --color-blue-300: oklch(84.5% 0.143 164.978);
+  --color-blue-400: oklch(76.5% 0.177 163.223);
+  --color-blue-500: oklch(69.6% 0.17 162.48);
+  --color-blue-600: oklch(59.6% 0.145 163.225);
+  --color-blue-700: oklch(50.8% 0.118 165.612);
+  --color-blue-800: oklch(43.2% 0.095 166.913);
+  --color-blue-900: oklch(37.8% 0.077 168.94);
+  --color-blue-950: oklch(26.2% 0.051 172.552);
+  --color-ink: oklch(37.8% 0.077 168.94);
+  --color-ink-hover: oklch(43.2% 0.095 166.913);
 }
 
 [data-accent='slate'] {
-  --color-brand-50: #f1f5f9;
-  --color-brand-400: #94a3b8;
-  --color-brand-500: #64748b;
-  --color-brand-600: #475569;
+  --color-brand-50: oklch(98.4% 0.003 247.858);
+  --color-brand-100: oklch(96.8% 0.007 247.896);
+  --color-brand-200: oklch(92.9% 0.013 255.508);
+  --color-brand-300: oklch(86.9% 0.022 252.894);
+  --color-brand-400: oklch(70.4% 0.04 256.788);
+  --color-brand-500: oklch(55.4% 0.046 257.417);
+  --color-brand-600: oklch(44.6% 0.043 257.281);
+  --color-brand-700: oklch(37.2% 0.044 257.287);
+  --color-brand-800: oklch(27.9% 0.041 260.031);
+  --color-brand-900: oklch(20.8% 0.042 265.755);
+  --color-brand-950: oklch(12.9% 0.042 264.695);
+  --color-indigo-50: oklch(98.4% 0.003 247.858);
+  --color-indigo-100: oklch(96.8% 0.007 247.896);
+  --color-indigo-200: oklch(92.9% 0.013 255.508);
+  --color-indigo-300: oklch(86.9% 0.022 252.894);
+  --color-indigo-400: oklch(70.4% 0.04 256.788);
+  --color-indigo-500: oklch(55.4% 0.046 257.417);
+  --color-indigo-600: oklch(44.6% 0.043 257.281);
+  --color-indigo-700: oklch(37.2% 0.044 257.287);
+  --color-indigo-800: oklch(27.9% 0.041 260.031);
+  --color-indigo-900: oklch(20.8% 0.042 265.755);
+  --color-indigo-950: oklch(12.9% 0.042 264.695);
+  --color-blue-50: oklch(98.4% 0.003 247.858);
+  --color-blue-100: oklch(96.8% 0.007 247.896);
+  --color-blue-200: oklch(92.9% 0.013 255.508);
+  --color-blue-300: oklch(86.9% 0.022 252.894);
+  --color-blue-400: oklch(70.4% 0.04 256.788);
+  --color-blue-500: oklch(55.4% 0.046 257.417);
+  --color-blue-600: oklch(44.6% 0.043 257.281);
+  --color-blue-700: oklch(37.2% 0.044 257.287);
+  --color-blue-800: oklch(27.9% 0.041 260.031);
+  --color-blue-900: oklch(20.8% 0.042 265.755);
+  --color-blue-950: oklch(12.9% 0.042 264.695);
+  --color-ink: oklch(27.9% 0.041 260.031);
+  --color-ink-hover: oklch(37.2% 0.044 257.287);
 }
 
 html,

@@ -1,4 +1,6 @@
 import { useState, type DragEvent } from 'react'
+import { todayIst } from '@/lib/dates'
+import { chapterTimeline, parseTargetRange, type Timeline } from '@/lib/timeline'
 import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Clock, Download, GripVertical, Loader2, Pencil, Plus, Trash2, Upload } from 'lucide-react'
@@ -35,6 +37,8 @@ type SyllabusTrackerProps = {
   schoolName: string
   /** Where "create a batch" points when there are none (admins only). */
   manageBatchesTo?: string
+  /** The month (1-12) the school's academic year starts, to place target dates in a year. */
+  academicYearStartMonth?: number
 }
 
 type Modal =
@@ -50,7 +54,8 @@ type Modal =
  * component against the same rows, so a status change on either side shows up
  * on the other (the list refreshes every 15 seconds and after every change).
  */
-export function SyllabusTracker({ source, structure, filters, schoolName, manageBatchesTo }: SyllabusTrackerProps) {
+export function SyllabusTracker({ source, structure, filters, schoolName, manageBatchesTo, academicYearStartMonth = 4 }: SyllabusTrackerProps) {
+  const today = todayIst()
   const queryClient = useQueryClient()
   const { data: options } = useAcademicOptions()
   const subjects = options?.subjects ?? []
@@ -208,6 +213,7 @@ export function SyllabusTracker({ source, structure, filters, schoolName, manage
                 ) : (
                   cards.map((item) => (
                     <ChapterCard
+                      timeline={chapterTimeline(item.status, parseTargetRange(item.targetDates, academicYearStartMonth, today), today)}
                       key={item.id}
                       item={item}
                       onMove={(s) => move(item, s)}
@@ -274,13 +280,22 @@ export function SyllabusTracker({ source, structure, filters, schoolName, manage
 }
 
 type ChapterCardProps = {
+  /** Red / amber / green for the target dates; null when they can't be read. */
+  timeline: Timeline | null
   item: SyllabusItem
   onMove: (status: SyllabusStatus) => void
   onEdit: () => void
   onDelete: () => void
 }
 
-function ChapterCard({ item, onMove, onEdit, onDelete }: ChapterCardProps) {
+const TONE: Record<Timeline['tone'], { bar: string; pill: string }> = {
+  green: { bar: 'border-l-emerald-500', pill: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+  amber: { bar: 'border-l-amber-500', pill: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  red: { bar: 'border-l-red-500', pill: 'bg-red-50 text-red-700 ring-red-200' },
+}
+
+function ChapterCard({ item, timeline, onMove, onEdit, onDelete }: ChapterCardProps) {
+  const tone = timeline ? TONE[timeline.tone] : null
   return (
     <article
       draggable
@@ -288,7 +303,7 @@ function ChapterCard({ item, onMove, onEdit, onDelete }: ChapterCardProps) {
         e.dataTransfer.setData('text/plain', item.id)
         e.dataTransfer.effectAllowed = 'move'
       }}
-      className="group cursor-grab rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm transition hover:shadow-md active:cursor-grabbing"
+      className={`group cursor-grab rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm transition hover:shadow-md active:cursor-grabbing ${tone ? `border-l-4 ${tone.bar}` : ''}`}
     >
       <div className="flex items-start gap-2">
         <GripVertical className="mt-0.5 size-4 shrink-0 text-slate-300" aria-hidden />
@@ -310,6 +325,11 @@ function ChapterCard({ item, onMove, onEdit, onDelete }: ChapterCardProps) {
             </span>
           )}
           {item.targetDates && <span>{item.targetDates}</span>}
+        </p>
+      )}
+      {timeline && item.status !== 'COMPLETED' && (
+        <p className="mt-2 pl-6">
+          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${tone!.pill}`}>{timeline.label}</span>
         </p>
       )}
       {item.remarks && <p className="mt-2 pl-6 text-xs text-slate-600 italic">{item.remarks}</p>}

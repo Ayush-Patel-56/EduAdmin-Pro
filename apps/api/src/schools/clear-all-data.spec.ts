@@ -139,6 +139,13 @@ describe('Clear All Data is one transaction', () => {
     expect(deleteMany.mock.calls[i][0]).toEqual({ where: { schoolId: 'school-1' } });
   });
 
+  it('the typed name must match, ignoring stray spaces but not capitals', async () => {
+    await expect(schools.clearAllData(auth, 'school-1', 'demo school')).rejects.toThrow('Type the school name exactly to confirm');
+    expect(transaction).not.toHaveBeenCalled();
+    await schools.clearAllData(auth, 'school-1', '  Demo   School ');
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
   it('clears recruitment and academic data in the same transaction', async () => {
     await schools.clearAllData(auth, 'school-1', 'Demo School');
     expect(transaction).toHaveBeenCalledTimes(1);
