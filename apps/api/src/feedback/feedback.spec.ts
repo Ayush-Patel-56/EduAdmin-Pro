@@ -3,8 +3,8 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import { FeedbackImportDto, FeedbackStatusDto, type FeedbackImportRow, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
-import { categoriesMatching, isAllFaculty, parseCategory, parseDirection, sentimentKeywords } from './feedback-rules.js';
+import { FeedbackImportDto, FeedbackQuery, FeedbackStatusDto, type FeedbackImportRow, SendFeedbackDto, TeacherFeedbackDto } from './feedback.dto.js';
+import { categoriesMatching, DIRECTION_LABELS, isAllFaculty, parseCategory, parseDirection, sentimentKeywords } from './feedback-rules.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { FEEDBACK_LIST_LIMIT, FeedbackService, importKeyOf, legacyImportKeyOf, legacyImportKeysOf } from './feedback.service.js';
 
@@ -224,6 +224,26 @@ describe('FeedbackService: admin', () => {
   });
 });
 
+describe('FeedbackService: student feedback for admins', () => {
+  const studentRow = () =>
+    row({ direction: 'STUDENT_TO_TEACHER', senderName: 'Aarav Sharma', createdById: null, studentId: 'stu-1', studentName: 'Aarav Sharma', batchId: 'b-1', batchName: 'JEE A', category: 'GENERAL' });
+
+  it('admin list filters by Student -> Teacher and shows the student and batch', async () => {
+    const { service, prisma } = build();
+    prisma.feedback.findMany.mockResolvedValueOnce([studentRow(), row()]);
+    const out = await service.adminList('school-1', { direction: 'STUDENT_TO_TEACHER' });
+    expect(prisma.feedback.findMany.mock.calls[0][0].where).toMatchObject({ schoolId: 'school-1', direction: 'STUDENT_TO_TEACHER' });
+    expect(out.items[0]).toMatchObject({ direction: 'STUDENT_TO_TEACHER', target: { all: false, name: 'Ayush' }, student: { name: 'Aarav Sharma', batchName: 'JEE A' } });
+    expect(out.items[1].student).toBeNull();
+    expect(DIRECTION_LABELS.STUDENT_TO_TEACHER).toBe('Student -> Teacher');
+  });
+
+  it('the list filter accepts Student -> Teacher, but an import row cannot be one', async () => {
+    expect(await validate(plainToInstance(FeedbackQuery, { direction: 'STUDENT_TO_TEACHER' }))).toEqual([]);
+    expect(parseDirection('Student -> Teacher')).toBeNull();
+  });
+});
+
 describe('FeedbackService: faculty', () => {
   it('From Management: to all faculty or to them, not dismissed; Sent: their own', async () => {
     const { service, prisma } = build();
@@ -244,7 +264,39 @@ describe('FeedbackService: faculty', () => {
     const out = await service.teacherFeedback(scope({ active: false }));
     expect(out.received).toEqual([]);
     expect(prisma.feedback.findMany).toHaveBeenCalledTimes(1);
-    await expect(service.teacherFeedback(scope({ facultyId: null }))).resolves.toEqual({ received: [], sent: [] });
+    await expect(service.teacherFeedback(scope({ facultyId: null }))).resolves.toEqual({ received: [], sent: [], fromStudents: [] });
+  });
+
+  const studentCall = (prisma: ReturnType<typeof build>['prisma']) =>
+    prisma.feedback.findMany.mock.calls.map((c) => c[0]).find((a) => a.where?.direction === 'STUDENT_TO_TEACHER');
+  const fromStudent = { id: 'fb-s', rating: 4, content: 'Explains kinematics clearly.', batchName: 'JEE A', feedbackDate: d('2026-10-30'), createdAt: new Date('2026-10-30T04:00:00Z'), status: 'SUBMITTED' };
+
+  it('teacher student-feedback has no student identity, even in the query', async () => {
+    const { service, prisma } = build();
+    prisma.feedback.findMany.mockImplementation((args: { where: { direction: string } }) =>
+      Promise.resolve(args.where.direction === 'STUDENT_TO_TEACHER' ? [fromStudent] : []),
+    );
+    const out = await service.teacherFeedback(scope());
+    expect(out.fromStudents).toEqual([
+      { id: 'fb-s', rating: 4, content: 'Explains kinematics clearly.', batchName: 'JEE A', date: '2026-10-30', createdAt: '2026-10-30T04:00:00.000Z', status: 'SUBMITTED' },
+    ]);
+    const call = studentCall(prisma);
+    expect(call.select).toEqual({ id: true, rating: true, content: true, batchName: true, feedbackDate: true, createdAt: true, status: true });
+    for (const key of ['studentId', 'studentName', 'senderName']) {
+      expect(call.select).not.toHaveProperty(key);
+      expect(out.fromStudents[0]).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(out.fromStudents)).not.toMatch(/student/i);
+  });
+
+  it('hides dismissed student feedback from the teacher and shows nothing to an inactive one', async () => {
+    const { service, prisma } = build();
+    await service.teacherFeedback(scope());
+    expect(studentCall(prisma).where).toEqual({ schoolId: 'school-1', direction: 'STUDENT_TO_TEACHER', targetFacultyId: 'fac-1', status: { not: 'DISMISSED' } });
+    prisma.feedback.findMany.mockClear();
+    const inactive = await service.teacherFeedback(scope({ active: false }));
+    expect(inactive.fromStudents).toEqual([]);
+    expect(studentCall(prisma)).toBeUndefined();
   });
 
   it('sends to management under the teacher’s name; only active faculty can', async () => {

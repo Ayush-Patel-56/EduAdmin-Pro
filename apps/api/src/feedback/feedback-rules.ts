@@ -2,7 +2,8 @@
 // as people write them in a sheet, and the Sentiment Keywords drawn from what
 // was actually written (never sample words).
 
-export const FEEDBACK_DIRECTIONS = ['TEACHER_TO_MANAGEMENT', 'MANAGEMENT_TO_TEACHER'] as const;
+// Student -> Teacher comes only through a batch's feedback link, never an import.
+export const FEEDBACK_DIRECTIONS = ['TEACHER_TO_MANAGEMENT', 'MANAGEMENT_TO_TEACHER', 'STUDENT_TO_TEACHER'] as const;
 export const FEEDBACK_CATEGORIES = ['ACADEMICS', 'DISCIPLINE', 'PUNCTUALITY', 'TEACHING_QUALITY', 'ADMINISTRATION', 'GENERAL'] as const;
 export const FEEDBACK_STATUSES = ['SUBMITTED', 'REVIEWED', 'ACTIONED', 'DISMISSED'] as const;
 export type FeedbackDirection = (typeof FEEDBACK_DIRECTIONS)[number];
@@ -20,6 +21,7 @@ export const CATEGORY_LABELS: Record<FeedbackCategory, string> = {
 export const DIRECTION_LABELS: Record<FeedbackDirection, string> = {
   TEACHER_TO_MANAGEMENT: 'Teacher -> Management',
   MANAGEMENT_TO_TEACHER: 'Management -> Teacher',
+  STUDENT_TO_TEACHER: 'Student -> Teacher',
 };
 
 const letters = (text: string) => text.toLowerCase().replace(/[^a-z]/g, '');

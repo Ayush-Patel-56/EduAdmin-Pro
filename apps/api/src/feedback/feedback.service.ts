@@ -157,10 +157,14 @@ export class FeedbackService {
 
   // Faculty
 
-  /** The faculty Feedback page: From Management and Sent to Management. */
+  /**
+   * The faculty Feedback page: From Management, Sent to Management and From
+   * Students. Student feedback never says which student sent it: only the
+   * rating, comment, batch and date are read.
+   */
   async teacherFeedback(scope: TeacherScope) {
-    if (!scope.facultyId) return { received: [], sent: [] };
-    const [received, sent] = await Promise.all([
+    if (!scope.facultyId) return { received: [], sent: [], fromStudents: [] };
+    const [received, sent, fromStudents] = await Promise.all([
       // Appraisal-like notes stop reaching someone who has left the school.
       scope.active
         ? this.prisma.feedback.findMany({ where: receivedBy(scope.schoolId, scope.facultyId), orderBy: { createdAt: 'desc' }, take: TEACHER_LIST_LIMIT })
@@ -170,8 +174,28 @@ export class FeedbackService {
         orderBy: { createdAt: 'desc' },
         take: TEACHER_LIST_LIMIT,
       }),
+      scope.active
+        ? this.prisma.feedback.findMany({
+            where: { schoolId: scope.schoolId, direction: 'STUDENT_TO_TEACHER', targetFacultyId: scope.facultyId, status: { not: 'DISMISSED' } },
+            select: { id: true, rating: true, content: true, batchName: true, feedbackDate: true, createdAt: true, status: true },
+            orderBy: { createdAt: 'desc' },
+            take: TEACHER_LIST_LIMIT,
+          })
+        : [],
     ]);
-    return { received: received.map(toFeedback), sent: sent.map(toFeedback) };
+    return {
+      received: received.map(toFeedback),
+      sent: sent.map(toFeedback),
+      fromStudents: fromStudents.map((f) => ({
+        id: f.id,
+        rating: f.rating,
+        content: f.content,
+        batchName: f.batchName,
+        date: toIsoDate(f.feedbackDate)!,
+        createdAt: f.createdAt.toISOString(),
+        status: f.status,
+      })),
+    };
   }
 
   async teacherSend(scope: TeacherScope, userId: string, dto: TeacherFeedbackDto) {
@@ -438,7 +462,14 @@ export function toFeedback(f: Row) {
     id: f.id,
     direction: f.direction as FeedbackDirection,
     sender: { name: f.senderName, facultyId: f.senderFacultyId },
-    target: f.direction === 'MANAGEMENT_TO_TEACHER' ? (f.toAllFaculty ? { all: true, name: 'All Faculty' } : { all: false, name: f.targetName! }) : null,
+    target:
+      f.direction === 'MANAGEMENT_TO_TEACHER' || f.direction === 'STUDENT_TO_TEACHER'
+        ? f.toAllFaculty
+          ? { all: true, name: 'All Faculty' }
+          : { all: false, name: f.targetName! }
+        : null,
+    // Who sent Student -> Teacher feedback: admins only (teachers get fromStudents).
+    student: f.direction === 'STUDENT_TO_TEACHER' ? { name: f.studentName!, batchName: f.batchName! } : null,
     rating: f.rating,
     content: f.content,
     subject: f.subject,
