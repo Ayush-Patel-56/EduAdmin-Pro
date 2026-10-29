@@ -8,6 +8,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -127,4 +128,16 @@ export class FeedbackImportDto {
   @ValidateNested({ each: true })
   @Type(() => PriorImportKey)
   priorKeys?: PriorImportKey[];
+}
+
+/** Give a batch a student feedback link. */
+export class CreateFeedbackLinkDto {
+  @IsUUID('all', { message: 'Select a batch' })
+  batchId: string;
+}
+
+/** Switch a batch's student feedback link off or back on. */
+export class FeedbackLinkActiveDto {
+  @IsBoolean({ message: 'active must be true or false' })
+  active: boolean;
 }

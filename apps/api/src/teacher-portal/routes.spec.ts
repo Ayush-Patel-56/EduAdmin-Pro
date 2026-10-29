@@ -70,8 +70,8 @@ describe.each([
   ['AdminAssessmentsController', (a: AccessService) => new AdminAssessmentsController(a, untouched() as never, untouched() as never), 18],
   // Admins read daily reports; only teachers write them.
   ['AdminDailyReportsController', (a: AccessService) => new AdminDailyReportsController(a, untouched() as never), 1],
-  // Feedback Management: reads, sending, imports and the review workflow are all admin only.
-  ['AdminFeedbackController', (a: AccessService) => new AdminFeedbackController(a, untouched() as never), 5],
+  // Feedback Management: reads, sending, imports, the review workflow and the student feedback links are all admin only.
+  ['AdminFeedbackController', (a: AccessService) => new AdminFeedbackController(a, untouched() as never, untouched() as never), 9],
 ])('%s: admin routes of /schools/:schoolId', (_name, build, minimum) => {
   const assertAdmin = vi.fn();
   const controller = build({ assertAdmin } as unknown as AccessService);
