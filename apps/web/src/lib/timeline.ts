@@ -1,8 +1,13 @@
 /**
  * Red / amber / green for a syllabus chapter, from its free-text target dates
- * ("Aug 01 - Aug 20", "15 Oct", "2026-08-01 to 2026-08-20", "01/08 - 20/08")
- * and its status. The text has no year: it's taken from the school's academic
- * year (months from the start month on are in its first calendar year).
+ * and its status. The text usually has no year: it's taken from the school's
+ * academic year (months from the start month on are in its first calendar year).
+ *
+ * Read: "Aug 01 - Aug 20", "Oct 15 – Nov 15", "1 Aug to 20 Aug", "Aug 01 - 20",
+ * "15 Oct", "September 3rd - September 18th", "1st-15th Aug", "1 - 15 Aug 2026",
+ * "01/08 - 20/08", "01-08 - 20-08", "01.08.2026 to 20.08.2026", "2026-08-01 - 2026-08-20".
+ * Day-month numbers are day first (Indian style). Anything else ("Term 2",
+ * "next week", "Q3") isn't a date: the card stays neutral.
  */
 
 const MONTHS: Record<string, number> = {
@@ -18,7 +23,7 @@ function parsePart(raw: string): Part | null {
   const s = raw.trim().toLowerCase().replace(/[,.]/g, ' ').replace(/\s+/g, ' ')
   let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s)
   if (m) return { year: +m[1], month: +m[2], day: +m[3] }
-  m = /^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?$/.exec(s)
+  m = /^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{4}))?$/.exec(raw.trim())
   if (m) return { day: +m[1], month: +m[2], year: m[3] ? +m[3] : null }
   m = /^([a-z]+) (\d{1,2})(?:st|nd|rd|th)?(?: (\d{4}))?$/.exec(s)
   if (m && MONTHS[m[1].slice(0, 3)] !== undefined) return { month: MONTHS[m[1].slice(0, 3)], day: +m[2], year: m[3] ? +m[3] : null }
@@ -27,6 +32,28 @@ function parsePart(raw: string): Part | null {
   m = /^(\d{1,2})$/.exec(s)
   if (m) return { day: +m[1], month: null, year: null }
   return null
+}
+
+const RANGE = String.raw`\s*(?:-|–|—|\bto\b|\buntil\b|\btill\b)\s*`
+const NUMERIC = String.raw`\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{4})?`
+
+/** The one or two dates in the text, before years are filled in. */
+function readParts(t: string): (Part | null)[] | null {
+  // ISO dates hold hyphens of their own: "2026-08-01 - 2026-08-20".
+  const isoDates = t.match(/\d{4}-\d{1,2}-\d{1,2}/g)
+  if (isoDates) return isoDates.slice(0, 2).map(parsePart)
+  // "1st-15th Aug", "1 - 15 Aug 2026": two days of one month.
+  let m = new RegExp(String.raw`^(\d{1,2})(?:st|nd|rd|th)?${RANGE}(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\.?(?:\s+(\d{4}))?$`, 'i').exec(t)
+  if (m) {
+    const month = MONTHS[m[3].slice(0, 3).toLowerCase()]
+    if (month === undefined) return null
+    const year = m[4] ? +m[4] : null
+    return [{ day: +m[1], month, year }, { day: +m[2], month, year }]
+  }
+  // Numeric day-month, whatever the separator: "01-08 - 20-08", "01.08.2026 to 20.08.2026", "01-08".
+  m = new RegExp(String.raw`^(${NUMERIC})(?:${RANGE}(${NUMERIC}))?$`, 'i').exec(t)
+  if (m) return [parsePart(m[1]), ...(m[2] ? [parsePart(m[2])] : [])]
+  return t.split(new RegExp(RANGE, 'i')).filter(Boolean).slice(0, 2).map(parsePart)
 }
 
 const iso = (y: number, m: number, d: number) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
@@ -39,11 +66,8 @@ function valid(y: number, m: number, d: number) {
 /** The start and end (YYYY-MM-DD) the text describes, or null when it can't be read. */
 export function parseTargetRange(text: string | null | undefined, startMonth: number, today: string): { start: string; end: string } | null {
   if (!text?.trim()) return null
-  const pieces = text.split(/\s*(?:-|–|—|\bto\b|\buntil\b|\btill\b)\s*/i).filter(Boolean)
-  // "2026-08-01 - 2026-08-20" splits on every hyphen: try the ISO forms first.
-  const isoDates = text.match(/\d{4}-\d{1,2}-\d{1,2}/g)
-  const parts = isoDates && isoDates.length >= 1 ? isoDates.slice(0, 2).map(parsePart) : pieces.slice(0, 2).map(parsePart)
-  if (!parts.length || parts.some((p) => !p)) return null
+  const parts = readParts(text.trim())
+  if (!parts?.length || parts.some((p) => !p)) return null
   let [a, b] = parts as Part[]
   b ??= a
   // "Aug 01 - 20": the end takes the start's month.

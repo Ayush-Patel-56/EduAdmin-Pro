@@ -154,11 +154,21 @@ export function useOverview(base: string) {
 
 export type QuestionFilters = { q?: string; subject?: string; difficulty?: string; type?: string; chapterId?: string; author?: string; bank?: 'mine' | 'school'; page?: number; pageSize?: number }
 
-/** Every question matching the filters, across all pages (the API serves at most 200 a page). */
+/** "Select all matching" picks at most this many questions at once. */
+export const SELECT_ALL_LIMIT = 1000
+
+/**
+ * Every question matching the filters, across pages (the API serves at most 200
+ * a page). Refuses more than SELECT_ALL_LIMIT, so a large bank with no filters
+ * can't fire dozens of requests or drop hundreds of questions on a paper.
+ */
 export async function allMatchingQuestions(base: string, f: QuestionFilters): Promise<Question[]> {
   const all: Question[] = []
   for (let page = 1; ; page++) {
     const res = await api<Page<Question>>(`${base}/questions?${query({ ...f, page, pageSize: 200 })}`)
+    if (res.total > SELECT_ALL_LIMIT) {
+      throw new Error(`${res.total.toLocaleString('en-IN')} questions match. Select all works for up to ${SELECT_ALL_LIMIT.toLocaleString('en-IN')} at a time: narrow the filters (subject, difficulty, type or search) and try again.`)
+    }
     all.push(...res.items)
     if (!res.items.length || all.length >= res.total) return all
   }

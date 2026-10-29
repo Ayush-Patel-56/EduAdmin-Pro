@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
 import { btnPrimary, btnSecondary, inputClass } from '@/components/ui/formStyles'
-import { allMatchingQuestions, answerLabel, DIFFICULTY_LABELS, paperTotal, TYPE_LABELS, useInvalidateAssessments, useQuestions, type Options, type PaperQuestion, type Question, type TestDetail } from './api'
+import { allMatchingQuestions, SELECT_ALL_LIMIT, answerLabel, DIFFICULTY_LABELS, paperTotal, TYPE_LABELS, useInvalidateAssessments, useQuestions, type Options, type PaperQuestion, type Question, type TestDetail } from './api'
 import { Card, DifficultyBadge, Empty, FilterSelect, iconBtn, Pager, TypeBadge } from './ui'
 
 /** A question on the draft paper: `key` is its paper id (already on it) or its bank id (being added). */
@@ -190,10 +190,17 @@ function BankPicker({ base, options, subject, taken, onAdd, onClose }: { base: s
   const [selectingAll, setSelectingAll] = useState(false)
   const [selectError, setSelectError] = useState<string | null>(null)
   async function selectAllMatching() {
+    // The search box may still be waiting out its debounce: use what's typed now,
+    // and show that same result in the list.
+    const latest = { ...filters, q: search.trim() }
+    if (latest.q !== filters.q) {
+      setFilters(latest)
+      setPage(1)
+    }
     setSelectingAll(true)
     setSelectError(null)
     try {
-      add(await allMatchingQuestions(base, { ...filters, bank: 'school' }))
+      add(await allMatchingQuestions(base, { ...latest, bank: 'school' }))
     } catch (err) {
       setSelectError(err instanceof Error ? err.message : 'Could not load all the questions')
     } finally {
@@ -223,7 +230,7 @@ function BankPicker({ base, options, subject, taken, onAdd, onClose }: { base: s
               <div className="flex items-center gap-3 text-xs font-semibold">
                 {total > items.length && (
                   <button type="button" onClick={selectAllMatching} disabled={selectingAll} className="text-brand-600 hover:underline disabled:opacity-60">
-                    {selectingAll ? 'Selecting…' : `Select all ${total} matching`}
+                    {selectingAll ? 'Selecting…' : total > SELECT_ALL_LIMIT ? `Select all matching (up to ${SELECT_ALL_LIMIT.toLocaleString('en-IN')})` : `Select all ${total} matching`}
                   </button>
                 )}
                 {picked.length > 0 && (

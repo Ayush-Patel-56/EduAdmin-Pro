@@ -17,6 +17,16 @@ describe('parseTargetRange', () => {
     expect(range('September 3rd - September 18th')).toEqual({ start: '2026-09-03', end: '2026-09-18' })
   })
 
+  it('reads day-month numbers with dashes or dots, and ranges of days in one month', () => {
+    expect(range('01-08 - 20-08')).toEqual({ start: '2026-08-01', end: '2026-08-20' })
+    expect(range('01-08')).toEqual({ start: '2026-08-01', end: '2026-08-01' })
+    expect(range('01.08.2026 to 20.08.2026')).toEqual({ start: '2026-08-01', end: '2026-08-20' })
+    expect(range('1st-15th Aug')).toEqual({ start: '2026-08-01', end: '2026-08-15' })
+    expect(range('1 - 15 Aug 2026')).toEqual({ start: '2026-08-01', end: '2026-08-15' })
+    expect(range('5th to 25th November')).toEqual({ start: '2026-11-05', end: '2026-11-25' })
+    expect(range('20-12 - 10-01')).toEqual({ start: '2026-12-20', end: '2027-01-10' })
+  })
+
   it('puts months before the start month in the next calendar year, and rolls a range across new year', () => {
     expect(range('Jan 05 - Jan 25')).toEqual({ start: '2027-01-05', end: '2027-01-25' })
     expect(range('Dec 15 - Jan 10')).toEqual({ start: '2026-12-15', end: '2027-01-10' })
@@ -25,7 +35,9 @@ describe('parseTargetRange', () => {
   })
 
   it("returns null for text it can't read", () => {
-    for (const t of ['', '   ', 'Term 1', 'next week', 'Feb 30', 'Aug 40 - Aug 50', null, undefined]) expect(range(t as string)).toBeNull()
+    for (const t of ['', '   ', 'Term 1', 'next week', 'Q3', 'Feb 30', 'Aug 40 - Aug 50', '1st-15th Smarch', '32-08 - 40-08', '15-15', null, undefined]) {
+      expect(range(t as string)).toBeNull()
+    }
   })
 })
 
