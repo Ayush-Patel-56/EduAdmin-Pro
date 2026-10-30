@@ -3,10 +3,10 @@ import { Info, Loader2, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { ErrorBanner } from '@/components/ui/form'
 import { textareaClass } from '@/components/ui/formStyles'
-import { CATEGORY_LABELS, dayLabel, TEACHER_FEEDBACK_PATH, useInvalidateTeacherFeedback, useTeacherFeedback, type Feedback } from '@/features/feedback/api'
+import { CATEGORY_LABELS, dayLabel, TEACHER_FEEDBACK_PATH, useInvalidateTeacherFeedback, useTeacherFeedback, type Feedback, type StudentFeedbackForTeacher } from '@/features/feedback/api'
 import { Stars, StarInput, StatusBadge } from '@/features/feedback/ui'
 
-/** Feedback (PRD 5.13): what management sent (to everyone or to them), and what they sent to management. */
+/** Feedback (PRD 5.13): what management sent (to everyone or to them), what they sent to management, and what students said (without names). */
 export function TeacherFeedbackPage() {
   const feedback = useTeacherFeedback()
   const invalidate = useInvalidateTeacherFeedback()
@@ -18,7 +18,7 @@ export function TeacherFeedbackPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-slate-900 sm:text-[26px]">Feedback</h1>
-          <p className="mt-1 text-sm text-slate-500">Feedback from management, and feedback you have sent to management</p>
+          <p className="mt-1 text-sm text-slate-500">Feedback from management and from your students, and feedback you have sent to management</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => void feedback.refetch()} disabled={feedback.isFetching} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60">
@@ -40,6 +40,12 @@ export function TeacherFeedbackPage() {
         <Column title={`Sent to Management (${data?.sent.length ?? 0})`} loading={!data && !feedback.error} empty="You haven't sent any feedback yet.">
           {data?.sent.map((f) => <Sent key={f.id} feedback={f} />)}
         </Column>
+      </div>
+      <div className="mt-6">
+        <Column title={`From Students (${data?.fromStudents.length ?? 0})`} loading={!data && !feedback.error} empty="No feedback from students yet.">
+          {data?.fromStudents.map((f) => <FromStudent key={f.id} feedback={f} />)}
+        </Column>
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500"><Info className="size-3" /> Students send this through their batch's feedback link. Their names aren't shown to you.</p>
       </div>
     </>
   )
@@ -115,6 +121,19 @@ function Received({ feedback: f }: { feedback: Feedback }) {
         <span className="font-semibold text-indigo-500">{CATEGORY_LABELS[f.category]}</span> · {dayLabel(f.date)}
         {f.target?.all && <> · to all faculty</>}
       </p>
+    </li>
+  )
+}
+
+function FromStudent({ feedback: f }: { feedback: StudentFeedbackForTeacher }) {
+  return (
+    <li className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <span className="min-w-0 truncate text-sm font-bold text-slate-900">A student{f.batchName && <span className="font-semibold text-slate-500"> · {f.batchName}</span>}</span>
+        <Stars rating={f.rating} size="xs" />
+      </div>
+      <p className="mt-2 text-sm whitespace-pre-line text-slate-700 italic [overflow-wrap:anywhere]">“{f.content}”</p>
+      <p className="mt-2 text-[11px] text-slate-400">{dayLabel(f.date)}</p>
     </li>
   )
 }

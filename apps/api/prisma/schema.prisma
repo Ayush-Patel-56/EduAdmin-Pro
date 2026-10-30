@@ -340,6 +340,7 @@ model School {
   calendarEvents  CalendarEvent[]
   dailyReports    DailyReport[]
   feedback        Feedback[]
+  feedbackLinks   FeedbackLink[]
   ptmNotes        PtmNote[]
   questions       Question[]
   tests           Test[]
@@ -437,6 +438,8 @@ model Batch {
   tests          Test[]
   dailyRatings   DailyRating[]
   studentMarks   StudentMark[]
+  feedback       Feedback[]          @relation("FeedbackBatch")
+  feedbackLinks  FeedbackLink[]
 
   @@unique([programId, name])
   @@unique([id, schoolId])
@@ -811,6 +814,7 @@ model Student {
   testResults TestResult[]
   ratings     DailyRating[]
   marks       StudentMark[]
+  feedback    Feedback[]             @relation("FeedbackStudent")
   reports     ProgressReport[]
 
   @@unique([schoolId, admissionNumber])
@@ -1453,6 +1457,7 @@ model DailyReport {
 enum FeedbackDirection {
   TEACHER_TO_MANAGEMENT
   MANAGEMENT_TO_TEACHER
+  STUDENT_TO_TEACHER // from a student, through their batch's feedback link
 }
 
 enum FeedbackCategory {
@@ -1491,6 +1496,10 @@ model Feedback {
   toAllFaculty      Boolean           @default(false) // Management -> Teacher, addressed to every teacher
   targetFacultyId   String? // Management -> Teacher, addressed to one teacher
   targetName        String? // that teacher's name when it was sent
+  studentId         String? // Student -> Teacher: who sent it; null once the student is deleted
+  studentName       String? // and their name when it was sent (admins see it, teachers never do)
+  batchId           String? // Student -> Teacher: the batch whose link it came through; null once deleted
+  batchName         String? // that batch's name when it was sent
   rating            Int // 1-5
   content           String
   subject           String?
@@ -1509,11 +1518,35 @@ model Feedback {
   // Tied to the entry's school; deleting the profile nulls only that link (ON DELETE SET NULL (column) in the migration).
   senderFaculty Faculty? @relation("FeedbackSender", fields: [senderFacultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
   targetFaculty Faculty? @relation("FeedbackTarget", fields: [targetFacultyId, schoolId], references: [id, schoolId], onDelete: SetNull)
+  // Same for the student and the batch (ON DELETE SET NULL (column) in the migration).
+  student       Student? @relation("FeedbackStudent", fields: [studentId, schoolId], references: [id, schoolId], onDelete: SetNull)
+  batch         Batch?   @relation("FeedbackBatch", fields: [batchId, schoolId], references: [id, schoolId], onDelete: SetNull)
 
   @@index([schoolId, createdAt])
   @@index([schoolId, status])
   @@index([senderFacultyId])
   @@index([targetFacultyId])
+  @@index([studentId, createdAt]) // the 15-minute cool-down check
+}
+
+// A batch's public student feedback link (one per batch). Students open
+// /feedback/<token> with no login, pick their name and a teacher, and rate
+// them. The admin can switch the link off or replace it (a new token; the old
+// link stops working). Deleting the batch (or the school) deletes its link.
+model FeedbackLink {
+  id          String   @id @default(uuid())
+  schoolId    String
+  batchId     String   @unique
+  token       String   @unique // 32 random bytes, base64url
+  active      Boolean  @default(true)
+  createdById String? // the admin who created it
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batch  Batch  @relation(fields: [batchId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  @@index([schoolId])
 }
 
 // Notes from a parent-teacher meeting (PRD 5.8): what was discussed about a

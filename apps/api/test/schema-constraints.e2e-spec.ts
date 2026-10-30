@@ -23,6 +23,8 @@ describe('school-tied foreign keys keep their SET NULL column list (e2e)', () =>
     ['TestQuestion_questionId_schoolId_fkey', 'FOREIGN KEY ("questionId", "schoolId") REFERENCES "Question"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("questionId")'],
     ['Feedback_senderFacultyId_schoolId_fkey', 'FOREIGN KEY ("senderFacultyId", "schoolId") REFERENCES "Faculty"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("senderFacultyId")'],
     ['Feedback_targetFacultyId_schoolId_fkey', 'FOREIGN KEY ("targetFacultyId", "schoolId") REFERENCES "Faculty"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("targetFacultyId")'],
+    ['Feedback_studentId_schoolId_fkey', 'FOREIGN KEY ("studentId", "schoolId") REFERENCES "Student"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("studentId")'],
+    ['Feedback_batchId_schoolId_fkey', 'FOREIGN KEY ("batchId", "schoolId") REFERENCES "Batch"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("batchId")'],
     ['DailyReport_facultyId_schoolId_fkey', 'FOREIGN KEY ("facultyId", "schoolId") REFERENCES "Faculty"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("facultyId")'],
     ['DailyRating_batchId_schoolId_fkey', 'FOREIGN KEY ("batchId", "schoolId") REFERENCES "Batch"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("batchId")'],
     ['DailyRating_facultyId_schoolId_fkey', 'FOREIGN KEY ("facultyId", "schoolId") REFERENCES "Faculty"(id, "schoolId") ON UPDATE CASCADE ON DELETE SET NULL ("facultyId")'],

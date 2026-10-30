@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { CalendarDays, Folder, FolderOpen, Info, Loader2, RefreshCw, RotateCcw, Search, Star, TrendingDown, TrendingUp, UserRound } from 'lucide-react'
+import { CalendarDays, Folder, FolderOpen, GraduationCap, Info, Link2, Loader2, RefreshCw, RotateCcw, Search, Star, TrendingDown, TrendingUp, UserRound } from 'lucide-react'
 import { api } from '@/lib/api'
 import { ErrorBanner } from '@/components/ui/form'
 import { formatDay } from '@/features/portal/format'
@@ -20,15 +20,17 @@ import {
 import { Stars, StatusBadge } from '@/features/feedback/ui'
 import { useAdminContext } from '../adminContext'
 import { FeedbackImportDialog } from './FeedbackImportDialog'
+import { FeedbackLinksDialog } from './FeedbackLinksDialog'
 import { SendFeedbackDialog } from './SendFeedbackDialog'
 
 const DIRECTIONS: { key: AdminFilters['direction']; label: string }[] = [
-  { key: '', label: 'All' },
+  { key: '', label: 'All staff' },
   { key: 'TEACHER_TO_MANAGEMENT', label: 'Teacher → Management' },
   { key: 'MANAGEMENT_TO_TEACHER', label: 'Management → Teacher' },
+  { key: 'STUDENT_TO_TEACHER', label: 'Student → Teacher' },
 ]
 
-/** Feedback Management (PRD 4.12): feedback both ways between management and faculty, and its review workflow. */
+/** Feedback Management (PRD 4.12): feedback both ways between management and faculty, students' feedback on their teachers, and its review workflow. */
 export function FeedbackPage() {
   const { schoolId } = useAdminContext()
   const [filters, setFilters] = useState<AdminFilters>({ view: 'pending', status: '', direction: '', q: '' })
@@ -39,7 +41,7 @@ export function FeedbackPage() {
   }, [search])
   const feedback = useAdminFeedback(schoolId, filters)
   const invalidate = useInvalidateFeedback(schoolId)
-  const [dialog, setDialog] = useState<'send' | 'import' | null>(null)
+  const [dialog, setDialog] = useState<'send' | 'import' | 'links' | null>(null)
   const data = feedback.data
   const setView = (view: AdminFilters['view'], status: AdminFilters['status'] = '') => setFilters((f) => ({ ...f, view, status }))
 
@@ -48,9 +50,12 @@ export function FeedbackPage() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-slate-900 sm:text-[26px]">Feedback Management</h1>
-          <p className="mt-1 text-sm text-slate-500">Review feedback exchanged between management and faculty</p>
+          <p className="mt-1 text-sm text-slate-500">Review feedback exchanged between management and faculty, and from students</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setDialog('links')} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+            <Link2 className="size-4" /> Student feedback links
+          </button>
           <button type="button" onClick={() => setDialog('import')} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">
             <Folder className="size-4" /> Upload Excel Sheet
           </button>
@@ -125,6 +130,7 @@ export function FeedbackPage() {
       </div>
 
       {dialog === 'send' && <SendFeedbackDialog schoolId={schoolId} onSent={invalidate} onClose={() => setDialog(null)} />}
+      {dialog === 'links' && <FeedbackLinksDialog schoolId={schoolId} onClose={() => setDialog(null)} />}
       {dialog === 'import' && <FeedbackImportDialog schoolId={schoolId} onImported={invalidate} onClose={() => setDialog(null)} />}
     </>
   )
@@ -192,6 +198,11 @@ function FeedbackCard({ feedback: f, schoolId, onChanged }: { feedback: Feedback
     }
   }
   const toTeacher = f.direction === 'MANAGEMENT_TO_TEACHER'
+  const badge = f.student
+    ? 'border-amber-200 bg-amber-50 text-amber-700'
+    : toTeacher
+      ? 'border-purple-200 bg-purple-50 text-purple-700'
+      : 'border-indigo-200 bg-indigo-50 text-indigo-700'
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
       <div className="flex items-start gap-3">
@@ -201,7 +212,9 @@ function FeedbackCard({ feedback: f, schoolId, onChanged }: { feedback: Feedback
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-bold text-slate-900">{f.sender.name}</span>
-            <span className={`rounded-md border px-2 py-0.5 text-[10px] font-bold ${toTeacher ? 'border-purple-200 bg-purple-50 text-purple-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>{DIRECTION_LABELS[f.direction]}</span>
+            {f.student && <span className="text-xs font-semibold text-slate-500">({f.student.batchName})</span>}
+            {f.student && f.target && <span className="text-sm text-slate-500">→ <span className="font-bold text-slate-900">{f.target.name}</span></span>}
+            <span className={`rounded-md border px-2 py-0.5 text-[10px] font-bold ${badge}`}>{DIRECTION_LABELS[f.direction]}</span>
             {f.source === 'IMPORT' && <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">Imported</span>}
           </div>
           <div className="mt-1"><Stars rating={f.rating} /></div>
@@ -211,7 +224,7 @@ function FeedbackCard({ feedback: f, schoolId, onChanged }: { feedback: Feedback
       <p className="mt-4 text-sm whitespace-pre-line text-slate-800 italic [overflow-wrap:anywhere]">“{f.content}”</p>
       <div className="mt-5 flex flex-col gap-4 border-t border-slate-100 pt-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap gap-2">
-          <Chip icon={FolderOpen}>Category: {CATEGORY_LABELS[f.category]}</Chip>
+          {f.student ? <Chip icon={GraduationCap}>Batch: {f.student.batchName}</Chip> : <Chip icon={FolderOpen}>Category: {CATEGORY_LABELS[f.category]}</Chip>}
           {f.target && <Chip icon={UserRound} tone="blue">Target: {f.target.name}</Chip>}
           {f.subject && <Chip>Subject: {f.subject}</Chip>}
           <Chip icon={CalendarDays}>Date: {formatDay(f.date)}</Chip>

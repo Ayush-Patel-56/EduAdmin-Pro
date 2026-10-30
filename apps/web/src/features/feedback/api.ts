@@ -3,7 +3,7 @@ import { api } from '@/lib/api'
 import { todayIst } from '@/lib/dates'
 import type { ImportPreview } from '@/features/academic/api'
 
-export type FeedbackDirection = 'TEACHER_TO_MANAGEMENT' | 'MANAGEMENT_TO_TEACHER'
+export type FeedbackDirection = 'TEACHER_TO_MANAGEMENT' | 'MANAGEMENT_TO_TEACHER' | 'STUDENT_TO_TEACHER'
 export type FeedbackCategory = 'ACADEMICS' | 'DISCIPLINE' | 'PUNCTUALITY' | 'TEACHING_QUALITY' | 'ADMINISTRATION' | 'GENERAL'
 export type FeedbackStatus = 'SUBMITTED' | 'REVIEWED' | 'ACTIONED' | 'DISMISSED'
 
@@ -11,8 +11,10 @@ export type Feedback = {
   id: string
   direction: FeedbackDirection
   sender: { name: string; facultyId: string | null }
-  /** Management -> Teacher only: every teacher, or one. */
+  /** Management -> Teacher: every teacher, or one. Student -> Teacher: the teacher it's about. */
   target: { all: boolean; name: string } | null
+  /** Student -> Teacher only (admins): who sent it, and through which batch's link. */
+  student: { name: string; batchName: string } | null
   rating: number
   content: string
   subject: string | null
@@ -51,6 +53,7 @@ export const CATEGORY_LABELS: Record<FeedbackCategory, string> = {
 export const DIRECTION_LABELS: Record<FeedbackDirection, string> = {
   TEACHER_TO_MANAGEMENT: 'Teacher -> Management',
   MANAGEMENT_TO_TEACHER: 'Management -> Teacher',
+  STUDENT_TO_TEACHER: 'Student -> Teacher',
 }
 export const STATUS_LABELS: Record<FeedbackStatus, string> = { SUBMITTED: 'Submitted', REVIEWED: 'Reviewed', ACTIONED: 'Actioned', DISMISSED: 'Dismissed' }
 export const STATUS_HINTS: Record<FeedbackStatus, string> = {
@@ -85,8 +88,14 @@ export function useInvalidateFeedback(schoolId: string) {
   return () => client.invalidateQueries({ queryKey: [schoolId, 'feedback'] })
 }
 
+/** Student feedback as a teacher sees it: never who sent it. */
+export type StudentFeedbackForTeacher = { id: string; rating: number; content: string; batchName: string | null; date: string; createdAt: string; status: FeedbackStatus }
+
 export function useTeacherFeedback() {
-  return useQuery({ queryKey: ['teacher-feedback'], queryFn: () => api<{ received: Feedback[]; sent: Feedback[] }>(TEACHER_FEEDBACK_PATH) })
+  return useQuery({
+    queryKey: ['teacher-feedback'],
+    queryFn: () => api<{ received: Feedback[]; sent: Feedback[]; fromStudents: StudentFeedbackForTeacher[] }>(TEACHER_FEEDBACK_PATH),
+  })
 }
 
 export function useInvalidateTeacherFeedback() {
@@ -94,6 +103,45 @@ export function useInvalidateTeacherFeedback() {
   // The dashboard's "Feedback from Admin" reads the same entries.
   return () => Promise.all([client.invalidateQueries({ queryKey: ['teacher-feedback'] }), client.invalidateQueries({ queryKey: ['teacher-dashboard'] })])
 }
+
+/** A batch and its student feedback link (`token: null` until one is created). */
+export type FeedbackLinkRow = { batchId: string; batchName: string; programName: string; token: string | null; active: boolean }
+
+const linksPath = (schoolId: string) => `${feedbackPath(schoolId)}/links`
+
+export function useFeedbackLinks(schoolId: string) {
+  return useQuery({ queryKey: [schoolId, 'feedback', 'links'], queryFn: () => api<FeedbackLinkRow[]>(linksPath(schoolId)) })
+}
+
+export const createLink = (schoolId: string, batchId: string) =>
+  api<FeedbackLinkRow>(linksPath(schoolId), { method: 'POST', body: JSON.stringify({ batchId }) })
+export const setLinkActive = (schoolId: string, batchId: string, active: boolean) =>
+  api<FeedbackLinkRow>(`${linksPath(schoolId)}/${batchId}`, { method: 'PATCH', body: JSON.stringify({ active }) })
+export const regenerateLink = (schoolId: string, batchId: string) =>
+  api<FeedbackLinkRow>(`${linksPath(schoolId)}/${batchId}/regenerate`, { method: 'POST' })
+
+/** The page students open. Built here from the site's own address; the API only knows the token. */
+export const feedbackLinkUrl = (token: string, origin = window.location.origin) => `${origin}/feedback/${token}`
+
+/** The student form behind a link: the batch's students (names only) and its teachers. */
+export type PublicFeedbackForm = {
+  schoolName: string
+  batchName: string
+  cooldownMinutes: number
+  students: { id: string; name: string }[]
+  teachers: { id: string; name: string; subjects: string[] }[]
+}
+export type StudentFeedbackBody = { studentId: string; facultyId: string; rating: number; comment: string }
+
+const publicPath = (token: string) => `/public/feedback/${encodeURIComponent(token)}`
+
+/** No login; a switched-off or replaced link is a 404, which isn't worth retrying. */
+export function usePublicFeedbackForm(token: string) {
+  return useQuery({ queryKey: ['public-feedback', token], queryFn: () => api<PublicFeedbackForm>(publicPath(token)), retry: false, refetchOnWindowFocus: false })
+}
+
+export const submitStudentFeedback = (token: string, body: StudentFeedbackBody) =>
+  api<{ ok: true; nextAllowedAt: string }>(publicPath(token), { method: 'POST', body: JSON.stringify(body) })
 
 /** A share of the total, rounded, for the rating chart (0 when there is nothing yet). */
 export const percent = (count: number, total: number) => (total ? Math.round((count / total) * 100) : 0)
