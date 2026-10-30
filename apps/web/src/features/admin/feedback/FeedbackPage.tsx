@@ -24,7 +24,7 @@ import { FeedbackLinksDialog } from './FeedbackLinksDialog'
 import { SendFeedbackDialog } from './SendFeedbackDialog'
 
 const DIRECTIONS: { key: AdminFilters['direction']; label: string }[] = [
-  { key: '', label: 'All' },
+  { key: '', label: 'All staff' },
   { key: 'TEACHER_TO_MANAGEMENT', label: 'Teacher → Management' },
   { key: 'MANAGEMENT_TO_TEACHER', label: 'Management → Teacher' },
   { key: 'STUDENT_TO_TEACHER', label: 'Student → Teacher' },

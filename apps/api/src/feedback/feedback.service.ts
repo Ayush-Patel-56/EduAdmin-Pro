@@ -27,6 +27,8 @@ export const TEACHER_LIST_LIMIT = 100;
 const KEYWORD_DAYS = 30;
 const PENDING = ['SUBMITTED', 'REVIEWED'] as const;
 const CLOSED = ['ACTIONED', 'DISMISSED'] as const;
+/** The All tab: feedback between management and faculty. Student feedback has its own tab and numbers. */
+const STAFF_DIRECTIONS: FeedbackDirection[] = ['TEACHER_TO_MANAGEMENT', 'MANAGEMENT_TO_TEACHER'];
 
 type Row = Prisma.FeedbackGetPayload<object>;
 
@@ -51,13 +53,14 @@ export class FeedbackService {
 
   /**
    * The list for one view (and direction and search), with the KPIs, counts
-   * and charts for the direction tab: All mixes both directions, the other
-   * tabs show how teachers rate management or how management rates teachers.
+   * and charts for the direction tab: All mixes both staff directions, the
+   * other tabs show how teachers rate management, how management rates
+   * teachers, or how students rate teachers (never part of All's numbers).
    * Dismissed (archived) entries don't count towards ratings or keywords.
    */
   async adminList(schoolId: string, query: FeedbackQuery) {
     const view = query.view ?? 'pending';
-    const scope: Prisma.FeedbackWhereInput = { schoolId, ...(query.direction && { direction: query.direction }) };
+    const scope: Prisma.FeedbackWhereInput = { schoolId, direction: query.direction ?? { in: STAFF_DIRECTIONS } };
     const counted: Prisma.FeedbackWhereInput = { ...scope, status: { not: 'DISMISSED' } };
     const where: Prisma.FeedbackWhereInput = {
       ...scope,

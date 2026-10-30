@@ -10,6 +10,8 @@ import { FEEDBACK_LIST_LIMIT, FeedbackService, importKeyOf, legacyImportKeyOf, l
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
 const NOW = new Date('2026-10-18T05:00:00Z'); // 10:30 IST, 18 Oct
+/** The All tab: both staff directions, never student feedback. */
+const STAFF = { in: ['TEACHER_TO_MANAGEMENT', 'MANAGEMENT_TO_TEACHER'] };
 const scope = (over: Partial<TeacherScope> = {}): TeacherScope => ({ schoolId: 'school-1', facultyId: 'fac-1', batchIds: [], programIds: [], active: true, ...over });
 const row = (over: Record<string, unknown> = {}) => ({
   id: 'fb1',
@@ -136,12 +138,12 @@ describe('FeedbackService: admin', () => {
       { stars: 1, count: 0 },
     ]);
     const list = prisma.feedback.findMany.mock.calls[0][0];
-    expect(list.where).toEqual({ schoolId: 'school-1', status: { in: ['SUBMITTED', 'REVIEWED'] } });
+    expect(list.where).toEqual({ schoolId: 'school-1', direction: STAFF, status: { in: ['SUBMITTED', 'REVIEWED'] } });
     expect(list.take).toBe(FEEDBACK_LIST_LIMIT);
     // This month counts by the day it was given (1 Oct onwards, India).
-    expect(prisma.feedback.count.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', feedbackDate: { gte: d('2026-10-01') } });
+    expect(prisma.feedback.count.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', direction: STAFF, feedbackDate: { gte: d('2026-10-01') } });
     // Keywords read the last 30 days, leaving out dismissed entries.
-    expect(prisma.feedback.findMany.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', status: { not: 'DISMISSED' }, feedbackDate: { gte: d('2026-09-19') } });
+    expect(prisma.feedback.findMany.mock.calls[1][0].where).toEqual({ schoolId: 'school-1', direction: STAFF, status: { not: 'DISMISSED' }, feedbackDate: { gte: d('2026-09-19') } });
     expect(out.items[0]).toMatchObject({ id: 'fb1', target: { all: false, name: 'Ayush' }, sender: { name: 'Principal Mehta', facultyId: null }, date: '2026-10-18' });
     expect(out.items[1].target).toBeNull();
   });
@@ -236,6 +238,25 @@ describe('FeedbackService: student feedback for admins', () => {
     expect(out.items[0]).toMatchObject({ direction: 'STUDENT_TO_TEACHER', target: { all: false, name: 'Ayush' }, student: { name: 'Aarav Sharma', batchName: 'JEE A' } });
     expect(out.items[1].student).toBeNull();
     expect(DIRECTION_LABELS.STUDENT_TO_TEACHER).toBe('Student -> Teacher');
+  });
+
+  it("the All tab and its numbers leave student feedback out; the Student -> Teacher tab counts only it", async () => {
+    const { service, prisma } = build();
+    await service.adminList('school-1', {});
+    const wheres = [
+      ...prisma.feedback.count.mock.calls.map((c) => c[0].where),
+      ...prisma.feedback.findMany.mock.calls.map((c) => c[0].where),
+      ...prisma.feedback.groupBy.mock.calls.map((c) => c[0].where),
+    ];
+    expect(wheres).toHaveLength(6); // list total, list, this month, ratings, statuses, keywords
+    for (const where of wheres) expect(where).toMatchObject({ schoolId: 'school-1', direction: STAFF });
+
+    prisma.feedback.count.mockClear();
+    prisma.feedback.groupBy.mockClear();
+    await service.adminList('school-1', { direction: 'STUDENT_TO_TEACHER' });
+    for (const where of [...prisma.feedback.count.mock.calls, ...prisma.feedback.groupBy.mock.calls].map((c) => c[0].where)) {
+      expect(where).toMatchObject({ direction: 'STUDENT_TO_TEACHER' });
+    }
   });
 
   it('the list filter accepts Student -> Teacher, but an import row cannot be one', async () => {
