@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { adminSchools, type Me } from './types'
 
@@ -17,6 +17,15 @@ export function useLogout() {
     queryClient.clear()
     navigate('/login', { replace: true })
   }
+}
+
+/**
+ * After a sign-in: nothing cached for whoever used this browser before (their
+ * notifications, students, candidates) may show for the new user, even for
+ * the few seconds before it refetches.
+ */
+export function forgetPreviousUser(queryClient: QueryClient) {
+  queryClient.clear()
 }
 
 /** Where a signed-in user belongs right now. */

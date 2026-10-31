@@ -50,7 +50,8 @@ export function toCsv(rows: (string | number | null | undefined)[][]): string {
         .map((cell) => {
           let text = cell === null || cell === undefined ? '' : String(cell)
           // A number (a negative score) is data, not a formula.
-          if (typeof cell !== 'number' && /^[=+\-@]/.test(text)) text = `'${text}`
+          // A leading tab or carriage return can hide one from a quick look (OWASP CSV injection).
+          if (typeof cell !== 'number' && /^[=+\-@\t\r]/.test(text)) text = `'${text}`
           return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
         })
         .join(','),

@@ -6,7 +6,7 @@ import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
 import { AuthLayout } from './AuthLayout'
 import { AuthCard, AuthFormSide, AuthPanel } from './AuthPanel'
-import { meQueryKey } from './session'
+import { forgetPreviousUser } from './session'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -30,7 +30,7 @@ export function LoginPage() {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       })
-      await queryClient.invalidateQueries({ queryKey: meQueryKey })
+      forgetPreviousUser(queryClient)
       navigate('/app', { replace: true })
     } catch (err) {
       if (err instanceof ApiError && err.code === 'EMAIL_NOT_VERIFIED') {
