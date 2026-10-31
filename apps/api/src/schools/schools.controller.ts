@@ -3,6 +3,7 @@ import { Throttle } from '../throttler/index.js';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
 import { durableThrottle } from '../rate-limit/hybrid-throttler.storage.js';
 import { ConfirmNameDto, CreateSchoolDto, JoinSchoolDto, RegenerateCodeDto } from './schools.dto.js';
+import { MembersService } from './members.service.js';
 import { SchoolsService } from './schools.service.js';
 
 const SchoolId = () => Param('schoolId', ParseUUIDPipe);
@@ -10,7 +11,10 @@ const SchoolId = () => Param('schoolId', ParseUUIDPipe);
 @Controller('schools')
 @UseGuards(SessionGuard)
 export class SchoolsController {
-  constructor(private readonly schools: SchoolsService) {}
+  constructor(
+    private readonly schools: SchoolsService,
+    private readonly members: MembersService,
+  ) {}
 
   @Get()
   mine(@Auth() auth: AuthContext) {
@@ -68,6 +72,24 @@ export class SchoolsController {
     @Body() dto: RegenerateCodeDto,
   ) {
     return this.schools.regenerateCode(auth, schoolId, dto.kind);
+  }
+
+  /** Admins and teachers of the school, for removing someone's access. */
+  @Get(':schoolId/members')
+  listMembers(@Auth() auth: AuthContext, @SchoolId() schoolId: string) {
+    return this.members.list(auth.userId, schoolId);
+  }
+
+  @Post(':schoolId/members/:userId/revoke')
+  @HttpCode(200)
+  revokeMember(@Auth() auth: AuthContext, @SchoolId() schoolId: string, @Param('userId', ParseUUIDPipe) userId: string) {
+    return this.members.revoke(auth.userId, schoolId, userId);
+  }
+
+  @Post(':schoolId/members/:userId/restore')
+  @HttpCode(200)
+  restoreMember(@Auth() auth: AuthContext, @SchoolId() schoolId: string, @Param('userId', ParseUUIDPipe) userId: string) {
+    return this.members.restore(auth.userId, schoolId, userId);
   }
 
   @Get(':schoolId/dashboard')

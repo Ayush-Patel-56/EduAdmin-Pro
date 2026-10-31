@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, CircleCheck, Copy, Hash, Loader2, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from 'lucide-react'
+import { Check, CircleCheck, Copy, Hash, Loader2, Pencil, Plus, RefreshCw, Trash2, TriangleAlert, Users } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBanner } from '@/components/ui/form'
@@ -12,6 +12,7 @@ import { useSchoolOptions, type SchoolFormValues } from '@/features/onboarding/s
 import type { MouStatus } from '../useDashboard'
 import { useAdminContext } from '../adminContext'
 import { RegenerateCodeDialog } from '../RegenerateCodeDialog'
+import { MembersDialog } from './MembersDialog'
 
 type ApiSchool = { id: string; inviteCode: string; adminInviteCode: string; classesLabel: string; mouStatus: MouStatus; isOwner: boolean } &
   Omit<SchoolFormValues, 'mouStartDate' | 'mouEndDate' | 'contactPerson' | 'phone' | 'email' | 'address' | 'gstNumber'> & {
@@ -32,6 +33,7 @@ type Modal =
   | { kind: 'edit'; school: ApiSchool }
   | { kind: 'delete'; school: ApiSchool }
   | { kind: 'clear'; school: ApiSchool }
+  | { kind: 'members'; school: ApiSchool }
   | null
 
 export function SchoolsTab() {
@@ -90,6 +92,7 @@ export function SchoolsTab() {
               onEdit={() => setModal({ kind: 'edit', school })}
               onDelete={() => setModal({ kind: 'delete', school })}
               onClear={() => setModal({ kind: 'clear', school })}
+              onMembers={() => setModal({ kind: 'members', school })}
             />
           ))}
         </div>
@@ -119,6 +122,9 @@ export function SchoolsTab() {
         />
       )}
       {modal?.kind === 'clear' && <ClearDataDialog school={modal.school} onClose={() => setModal(null)} />}
+      {modal?.kind === 'members' && (
+        <MembersDialog schoolId={modal.school.id} schoolName={modal.school.name} callerIsOwner={modal.school.isOwner} onClose={() => setModal(null)} />
+      )}
     </>
   )
 }
@@ -131,9 +137,10 @@ type SchoolCardProps = {
   onEdit: () => void
   onDelete: () => void
   onClear: () => void
+  onMembers: () => void
 }
 
-function SchoolCard({ school, active, switching, onActivate, onEdit, onDelete, onClear }: SchoolCardProps) {
+function SchoolCard({ school, active, switching, onActivate, onEdit, onDelete, onClear, onMembers }: SchoolCardProps) {
   const ownerOnly = school.isOwner ? undefined : 'Only the school owner can do this'
   return (
     <article
@@ -171,6 +178,9 @@ function SchoolCard({ school, active, switching, onActivate, onEdit, onDelete, o
         <CodeRow title="Teacher invite code" code={school.inviteCode} tone="amber" schoolId={school.id} kind="TEACHER" />
         <CodeRow title="Admin invite code" code={school.adminInviteCode} tone="indigo" schoolId={school.id} kind="ADMIN" />
 
+        <button type="button" onClick={onMembers} className={`${btnSecondary} mt-3 h-9 w-full text-xs`}>
+          <Users className="size-3.5" /> Members
+        </button>
         {!active && (
           <button type="button" onClick={onActivate} disabled={switching} className={`${btnSecondary} mt-3 h-9 w-full text-xs`}>
             {switching ? 'Switching…' : 'Switch to this school'}

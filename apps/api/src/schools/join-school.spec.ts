@@ -16,6 +16,8 @@ describe('SchoolsService.joinSchool: the code decides the role', () => {
     schoolMembership: { findUnique: vi.fn(), updateMany: vi.fn(), upsert },
     session: { update: vi.fn() },
     faculty: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+    facultyBatch: { deleteMany: vi.fn() },
+    facultyProgram: { deleteMany: vi.fn() },
     $transaction: vi.fn(),
   };
   let schools: SchoolsService;
@@ -48,6 +50,15 @@ describe('SchoolsService.joinSchool: the code decides the role', () => {
     accountIs('TEACHER');
     await schools.joinSchool(auth, TEACHER_CODE);
     expect(upsert.mock.calls[0][0].create).toMatchObject({ role: 'TEACHER', status: 'ACTIVE' });
+  });
+
+  it('rejoining with an inactive profile reactivates it without its old batches and programs', async () => {
+    accountIs('TEACHER');
+    prisma.faculty.findUnique.mockResolvedValueOnce({ id: 'fac-1', status: 'INACTIVE' });
+    await schools.joinSchool(auth, TEACHER_CODE);
+    expect(prisma.faculty.update).toHaveBeenCalledWith({ where: { id: 'fac-1' }, data: { status: 'ACTIVE' } });
+    expect(prisma.facultyBatch.deleteMany).toHaveBeenCalledWith({ where: { facultyId: 'fac-1', schoolId: 'school-1' } });
+    expect(prisma.facultyProgram.deleteMany).toHaveBeenCalledWith({ where: { facultyId: 'fac-1', schoolId: 'school-1' } });
   });
 
   it('admin code + admin account joins as ADMIN', async () => {
