@@ -55,7 +55,7 @@ All production secrets live in one GitHub Environment named `production`. Only t
    | `PROD_SMTP_PASS` | A Gmail app password made for production. |
    | `PROD_MAIL_FROM` | The From header, e.g. `EduAdmin Pro <you@gmail.com>`. |
    | `PROD_R2_ACCOUNT_ID`, `PROD_R2_ACCESS_KEY_ID`, `PROD_R2_SECRET_ACCESS_KEY`, `PROD_R2_BUCKET` | From the R2 API token for `eduadmin-prod` (Object Read & Write on that bucket only). |
-   | `CRON_SECRET` | A long random string, e.g. the output of `openssl rand -hex 32`. Vercel Cron sends it as a bearer token, and the digest endpoint refuses requests without it. |
+   | `CRON_SECRET` | A long random string, e.g. the output of `openssl rand -hex 32`. Vercel Cron sends it as a bearer token, and the digest endpoint refuses requests without it. **Required in production, at least 32 characters**: the API refuses to start without it, because without the cron the daily clean-up of sessions and codes would stop unnoticed. |
 
 4. Optional: under **Environment variables** (not secrets) add:
    - `TRUST_PROXY` to override the number of proxy hops. Leave it unset for the default of `1` (see [TRUST_PROXY](#trust_proxy)).
@@ -63,7 +63,7 @@ All production secrets live in one GitHub Environment named `production`. Only t
 5. **Delete the old secrets.** Remove any repository-level copies of the secrets above (Settings → Secrets and variables → Actions), so only the `production` environment holds them. Delete **`NEON_API_KEY`** and **`NEON_PROJECT_ID`** there too: they were only for per-PR previews, which are not used. That Neon key can reach every Neon project, so also **revoke it in the Neon console** (Account settings → API keys). Deleting it in GitHub does not disable it.
 6. Merge. The first release sets everything up (see the box above).
 7. Later, after you change a secret or variable, run **Actions → Setup Vercel → Run workflow**. It creates or updates both Vercel projects (root directory, framework, Node 24) and writes the API's environment, and is safe to run again. It prints the project names and the web address, never a value. Vercel applies environment changes only to new deployments, so the live API keeps the old values until the next release: merge the next change, or re-run the latest **Release** run (Actions → Release → the latest run → **Re-run all jobs**). A release writes the environment itself too, so the re-run alone is enough.
-8. Recommended: add a branch protection rule for `main` that requires the `Typecheck, lint, test, build` and `API e2e (Postgres)` checks, so a red PR cannot be merged.
+8. **Protect `main`** (Settings → Rules → Rulesets, or Branches): a push to `main` releases with the production secrets, so require a pull request with 1 approval, the `Typecheck, lint, test, build` and `API e2e (Postgres)` checks and review from code owners (`.github/CODEOWNERS` covers the workflows and the pipeline), and block force-pushes and deletion. On the `production` environment, add yourself as a required reviewer.
 
 ### What a PR runs, and what a merge runs
 
@@ -135,6 +135,20 @@ Once the production web address exists (the first release prints it as `web orig
 - **Retries are thin on Hobby.** With only three digest runs a day, a failed send and the "stop after 5 failed sends in a row" rule get at most three chances. If the third run hits the mail quota, the digests still unsent wait until tomorrow. On Pro the 10-minute schedule removes this: a run that stops early is followed by another ten minutes later.
 - **The cron has the function's default time limit.** `apps/api/vercel.json` sets no `maxDuration`, so the digest run gets Vercel's default for a function with Fluid compute (on by default): 300 seconds (5 minutes) on Hobby, which is also the Hobby maximum (checked against [Vercel's docs](https://vercel.com/docs/functions/configuring-functions/duration) on 2026-10-21). A run that is cut off leaves its unsent digests to the next run. After the first real digest run, look at its duration in the Vercel logs (project `eduadmin-api` → Logs, filter on `/api/internal/cron/digest`) and check that it is well under that limit.
 - On Pro, change `apps/api/vercel.json` to one entry, `*/10 13-18 * * *` (UTC). Nothing else changes.
+
+## Security hardening (October 2026)
+
+No migration. What changes for people and for deploying:
+
+- **Verifying an email needs the password too.** The 6-digit code proves the inbox; the password proves it's the person who signed up, so someone who signs up first with another person's email can't end up owning that account. A new signup on an email that was never verified replaces the pending account.
+- **Sign-in limits.** On top of the per-address limit, one account locks for 15 minutes after 10 failed sign-ins from any address (the lock is keyed by a hash of the email). Verification codes allow 5 tries, counted atomically.
+- **Members.** On each school's card, *Members* lists admins and teachers. Admins remove teachers; the owner removes admins. Removed people lose access at once and can't rejoin with the invite code until someone chooses *Allow to rejoin*. A teacher who rejoins with an inactive profile gets it back without their old batches and programs.
+- **Teachers** with no programs and no batches see no students; teachers search students by name and roll number only.
+- **Requests.** The API refuses state-changing requests that a browser marks as coming from another site (403), and every API answer is `Cache-Control: no-store`.
+- **Clean-up.** The daily cron also deletes ended sessions, verification codes a day past expiry and month-old digest records. `CRON_SECRET` is now required (see above): **check that the production secret is at least 32 characters before merging**, or the release's smoke test will fail and roll back.
+- **Web headers** (`apps/web/vercel.json`): Content-Security-Policy, no framing, nosniff, `Referrer-Policy: same-origin`, Permissions-Policy, HSTS. If a feature ever needs another origin (a CDN, analytics, an embed), add it to the CSP there. The release smoke test checks the CSP and `robots.txt` are served.
+- **Search engines.** `/privacy` and `/terms` are public, `robots.txt` and `sitemap.xml` list only the public pages, and the portals, sign-in screens and `/feedback/` student links are `noindex`. The canonical address is `https://eduadmin-web.vercel.app`; **when you move to a custom domain**, change it in `apps/web/src/features/legal/constants.ts`, `apps/web/public/robots.txt`, `apps/web/public/sitemap.xml` and the `og:url` in `apps/web/index.html`, then submit the sitemap in Google Search Console.
+- **Legal pages.** The Privacy Policy and Terms name no legal entity yet; add the operator's legal name and address before signing contracts with schools, and have a lawyer review both.
 
 ## Before the invite-code migration (`20261011210000_admin_invite_and_email_index`)
 
