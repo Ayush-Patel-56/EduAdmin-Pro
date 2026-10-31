@@ -146,6 +146,8 @@ export function PortalShell({
 
   return (
     <div data-accent={accent} className="min-h-screen bg-slate-50">
+      {/* The portals are private; keep them out of search results. */}
+      <meta name="robots" content="noindex" />
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 bg-white lg:block">{sidebar}</aside>
 

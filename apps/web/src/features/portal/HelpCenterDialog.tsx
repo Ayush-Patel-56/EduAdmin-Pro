@@ -44,6 +44,10 @@ export function HelpCenterDialog({ onClose }: { onClose: () => void }) {
           <a href={`mailto:${SUPPORT_EMAIL}`} className="font-semibold text-brand-600 hover:underline">
             {SUPPORT_EMAIL}
           </a>
+          {' · '}
+          <a href="/privacy" target="_blank" rel="noopener" className="font-semibold text-brand-600 hover:underline">Privacy Policy</a>
+          {' · '}
+          <a href="/terms" target="_blank" rel="noopener" className="font-semibold text-brand-600 hover:underline">Terms</a>
         </p>
       </div>
     </Dialog>

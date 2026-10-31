@@ -18,7 +18,8 @@ type Props = { schoolId: string; schoolName: string; callerIsOwner: boolean; onC
 export function MembersDialog({ schoolId, schoolName, callerIsOwner, onClose }: Props) {
   const client = useQueryClient()
   const key = [schoolId, 'members']
-  const members = useQuery({ queryKey: key, queryFn: () => api<Member[]>(`/schools/${schoolId}/members`) })
+  // Always re-read on open: who has access must be current, not 30 seconds old.
+  const members = useQuery({ queryKey: key, queryFn: () => api<Member[]>(`/schools/${schoolId}/members`), staleTime: 0 })
   const groups: [string, Member[]][] = [
     ['Admins', members.data?.filter((m) => m.role === 'ADMIN') ?? []],
     ['Teachers', members.data?.filter((m) => m.role === 'TEACHER') ?? []],

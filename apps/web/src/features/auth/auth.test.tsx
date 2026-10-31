@@ -72,6 +72,17 @@ describe('auth screens keep their fields and routes', () => {
     expect(afterSignup.some((i) => /type="password"/.test(i))).toBe(false)
   })
 
+  it('every sign-in screen links the Privacy Policy and Terms and is kept out of search results; sign-up says what you agree to', () => {
+    for (const Page of [LoginPage, SignupRolePage, TeacherSignupPage, AdminSignupPage, VerifyEmailPage]) {
+      const html = render(<Page />)
+      expect(hrefs(html)).toEqual(expect.arrayContaining(['/privacy', '/terms']))
+      expect(html).toContain('<meta name="robots" content="noindex"')
+    }
+    for (const Page of [TeacherSignupPage, AdminSignupPage]) {
+      expect(render(<Page />)).toMatch(/By creating an account you agree to the <a[^>]*href="\/terms"/)
+    }
+  })
+
   it('uses the landing design shell and no em dashes', () => {
     for (const Page of [LoginPage, SignupRolePage, TeacherSignupPage, AdminSignupPage, VerifyEmailPage]) {
       const html = render(<Page />)

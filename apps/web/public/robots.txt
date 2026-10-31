@@ -1,0 +1,17 @@
+# Only the public pages belong in search results. The portals need a sign-in,
+# and /feedback/<link> pages are private links schools give their students.
+User-agent: *
+Allow: /$
+Allow: /privacy
+Allow: /terms
+Disallow: /api/
+Disallow: /feedback/
+Disallow: /app
+Disallow: /management
+Disallow: /teacher
+Disallow: /onboarding
+Disallow: /dashboard
+Disallow: /verify-email
+Disallow: /forgot-password
+
+Sitemap: https://eduadmin-web.vercel.app/sitemap.xml
