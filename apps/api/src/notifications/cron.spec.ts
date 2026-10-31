@@ -28,8 +28,9 @@ describe('DigestScheduler on Vercel Cron', () => {
     const digests = { sendDue: vi.fn().mockResolvedValue(3) };
     const notifications = { prune: vi.fn().mockResolvedValue(4) };
     const rateLimit = { prune: vi.fn().mockResolvedValue(5) };
-    const scheduler = new DigestScheduler(config({ DIGEST_HOUR_IST: '19', DIGEST_ENABLED: enabled }), digests as never, notifications as never, rateLimit as never);
-    return { digests, notifications, rateLimit, scheduler };
+    const retention = { prune: vi.fn().mockResolvedValue(6) };
+    const scheduler = new DigestScheduler(config({ DIGEST_HOUR_IST: '19', DIGEST_ENABLED: enabled }), digests as never, notifications as never, rateLimit as never, retention as never);
+    return { digests, notifications, rateLimit, retention, scheduler };
   };
 
   it('the interval scheduler never starts on Vercel', () => {
@@ -57,14 +58,16 @@ describe('DigestScheduler on Vercel Cron', () => {
     }
   });
 
-  it('runDue before the digest hour does nothing; after, sends, prunes notifications and rate limits', async () => {
-    const { digests, notifications, rateLimit, scheduler } = build();
+  it('runDue before the digest hour does nothing; after, sends, prunes notifications, rate limits, ended sessions and old codes', async () => {
+    const { digests, notifications, rateLimit, retention, scheduler } = build();
     // 13:00 UTC is 18:30 IST, before the 19:00 digest hour.
     await expect(scheduler.runDue(new Date('2026-10-20T13:00:00Z'))).resolves.toEqual({ due: false, sent: 0, pruned: 0 });
     expect(digests.sendDue).not.toHaveBeenCalled();
     expect(notifications.prune).not.toHaveBeenCalled();
     expect(rateLimit.prune).not.toHaveBeenCalled();
-    await expect(scheduler.runDue(new Date('2026-10-20T14:00:00Z'))).resolves.toEqual({ due: true, sent: 3, pruned: 9 });
+    expect(retention.prune).not.toHaveBeenCalled();
+    await expect(scheduler.runDue(new Date('2026-10-20T14:00:00Z'))).resolves.toEqual({ due: true, sent: 3, pruned: 15 });
+    expect(retention.prune).toHaveBeenCalledTimes(1);
     expect(digests.sendDue).toHaveBeenCalledTimes(1);
     expect(notifications.prune).toHaveBeenCalledTimes(1);
     expect(rateLimit.prune).toHaveBeenCalledTimes(1);
@@ -72,7 +75,7 @@ describe('DigestScheduler on Vercel Cron', () => {
 
   it('runDue with DIGEST_ENABLED=false sends no digest but still prunes (the cron keeps calling it on Vercel)', async () => {
     const { digests, notifications, rateLimit, scheduler } = build('false');
-    await expect(scheduler.runDue(new Date('2026-10-20T14:00:00Z'))).resolves.toEqual({ due: true, sent: 0, pruned: 9 });
+    await expect(scheduler.runDue(new Date('2026-10-20T14:00:00Z'))).resolves.toEqual({ due: true, sent: 0, pruned: 15 });
     expect(digests.sendDue).not.toHaveBeenCalled();
     expect(notifications.prune).toHaveBeenCalledTimes(1);
     expect(rateLimit.prune).toHaveBeenCalledTimes(1);

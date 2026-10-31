@@ -97,7 +97,7 @@ export class AuthService {
       await this.verification.send(email, fullName, code);
       return { email, emailSent: true };
     } catch (err) {
-      this.logger.error(`Could not send verification email to ${email}`, err as Error);
+      this.logger.error('Could not send a verification email (the user can press Resend code)', err as Error);
       return { email, emailSent: false };
     }
   }
@@ -150,7 +150,7 @@ export class AuthService {
       try {
         await this.verification.send(email, fullName, code);
       } catch (err) {
-        this.logger.error(`Could not send verification email to ${email}`, err as Error);
+        this.logger.error('Could not send a verification email (the user can press Resend code)', err as Error);
       }
     }
     return { email, verificationRequired: code !== null };

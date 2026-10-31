@@ -8,6 +8,7 @@ import type { ConfigService } from '@nestjs/config';
 import { DigestScheduler } from '../src/notifications/digest.scheduler.js';
 import { DigestService } from '../src/notifications/digest.service.js';
 import { RateLimitService } from '../src/rate-limit/rate-limit.service.js';
+import { RetentionService } from '../src/retention/retention.service.js';
 import { NotificationsService } from '../src/notifications/notifications.service.js';
 import { SyllabusService } from '../src/academic/syllabus.service.js';
 import type { SyllabusImportDto } from '../src/academic/academic.dto.js';
@@ -199,6 +200,7 @@ describe('account settings on the database (e2e)', () => {
         digests,
         noPrune as unknown as NotificationsService,
         noPrune as unknown as RateLimitService,
+        noPrune as unknown as RetentionService,
       );
       const sentTo = () => mail.send.mock.calls.map((c) => (c[0] as { to: string }).to).filter((to) => to.includes(ids.school.slice(0, 8)));
       const runs = await Promise.all([scheduler.runDue(digestNow), scheduler.runDue(digestNow)]);

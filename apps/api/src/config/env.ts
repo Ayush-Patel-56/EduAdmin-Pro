@@ -73,6 +73,11 @@ export function validateEnv(env: Env): Env {
     for (const key of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS']) {
       if (!str(key)) errors.push(`${key} is required in production`);
     }
+    // Without it the daily cron is refused, and clean-up of sessions, codes,
+    // read notifications and rate-limit rows stops without anyone noticing.
+    const cronSecret = str('CRON_SECRET');
+    if (!cronSecret) errors.push('CRON_SECRET is required in production');
+    else if (cronSecret.length < 32) errors.push('CRON_SECRET must be at least 32 characters');
   }
 
   if (errors.length > 0) {

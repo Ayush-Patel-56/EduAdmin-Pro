@@ -28,6 +28,7 @@ describe('validateEnv', () => {
       SMTP_HOST: 'smtp.example.com',
       SMTP_USER: 'u',
       SMTP_PASS: 'p',
+      CRON_SECRET: 'c'.repeat(64),
     };
     expect(() => validateEnv({ ...production, REQUIRE_EMAIL_VERIFICATION: 'false' })).toThrow(
       'REQUIRE_EMAIL_VERIFICATION=false is not allowed in production',
@@ -48,8 +49,17 @@ describe('validateEnv', () => {
         SMTP_HOST: 'smtp.example.com',
         SMTP_USER: 'u',
         SMTP_PASS: 'p',
+        CRON_SECRET: 'c'.repeat(64),
       }),
     ).toBeTruthy();
+  });
+
+  it('requires a long CRON_SECRET in production, or the daily clean-up silently stops', () => {
+    const production = { ...base, NODE_ENV: 'production', WEB_ORIGIN: 'https://app.example.com', SMTP_HOST: 'smtp.example.com', SMTP_USER: 'u', SMTP_PASS: 'p' };
+    expect(() => validateEnv(production)).toThrow('CRON_SECRET is required in production');
+    expect(() => validateEnv({ ...production, CRON_SECRET: 'short' })).toThrow('CRON_SECRET must be at least 32 characters');
+    expect(validateEnv({ ...production, CRON_SECRET: 'c'.repeat(32) })).toBeTruthy();
+    expect(validateEnv(base)).toBeTruthy(); // not needed in development
   });
 
   it('takes R2 settings all together or not at all', () => {

@@ -57,7 +57,7 @@ export class FilesController {
         const teacher = await this.access
           .teacherScope(userId)
           .catch(() => null);
-        if (teacher?.facultyId && teacher.schoolId === schoolId) return;
+        if (teacher?.facultyId && teacher.active && teacher.schoolId === schoolId) return;
         await this.access.assertAdmin(userId, schoolId);
         return;
       }

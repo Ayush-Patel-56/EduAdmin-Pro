@@ -1,9 +1,10 @@
 // Issue an admin invite code. Anyone signing up with it gets an admin account.
 //
 // Usage:
-//   pnpm --filter api invite:create -- [note] [--code CLIENT-2026] [--max-uses 5] [--days 14]
+//   pnpm --filter api invite:create -- [note] [--code K7Q2-M9XD-4TWB] [--max-uses 5] [--days 14]
 //
-//   --code      custom code (4-32 letters, digits or "-"); random if omitted
+//   --code      custom code (12-32 letters, digits or "-"; anyone can try codes on the
+//               signup page, so make it random-looking, not a word or a year); random if omitted
 //   --max-uses  how many admins can sign up with it; unlimited if omitted
 //   --days      expires after this many days; never if omitted
 import 'dotenv/config';
@@ -34,8 +35,8 @@ function positiveInt(raw: string | undefined, flag: string): number | null {
 }
 
 const code = values.code ? normalizeCode(values.code) : generateJoinCode(3);
-if (!/^[A-Z0-9-]{4,32}$/.test(code)) {
-  console.error('--code must be 4-32 letters, digits or "-"');
+if (!/^[A-Z0-9-]{12,32}$/.test(code)) {
+  console.error('--code must be 12-32 letters, digits or "-" (leave it out for a random one)');
   process.exit(1);
 }
 const maxUses = positiveInt(values['max-uses'], '--max-uses');

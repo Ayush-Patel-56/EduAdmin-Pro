@@ -60,5 +60,5 @@ describe('POST /api/auth/login rate limit (e2e)', () => {
 
     const row = await prisma.rateLimit.findUnique({ where: { key: rowKey } });
     expect(row?.hits).toBe(12);
-  });
+  }, 20_000); // two API instances and a dozen argon2 checks, each failure also counted per account
 });

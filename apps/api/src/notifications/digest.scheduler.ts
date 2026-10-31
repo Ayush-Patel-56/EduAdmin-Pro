@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@ne
 import { ConfigService } from '@nestjs/config';
 import { DigestService } from './digest.service.js';
 import { RateLimitService } from '../rate-limit/rate-limit.service.js';
+import { RetentionService } from '../retention/retention.service.js';
 import { NotificationsService } from './notifications.service.js';
 
 /** How often the job looks for digests that are due. */
@@ -32,6 +33,7 @@ export class DigestScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly digests: DigestService,
     private readonly notifications: NotificationsService,
     private readonly rateLimit: RateLimitService,
+    private readonly retention: RetentionService,
   ) {
     const hour = Number(config.get<string>('DIGEST_HOUR_IST', '19'));
     this.hour = Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 19;
@@ -61,7 +63,7 @@ export class DigestScheduler implements OnModuleInit, OnModuleDestroy {
   async runDue(now = new Date()) {
     if (!this.isDue(now)) return { due: false, sent: 0, pruned: 0 };
     const sent = this.digestsEnabled ? await this.digests.sendDue(now) : 0;
-    const pruned = (await this.notifications.prune(now)) + (await this.rateLimit.prune(now));
+    const pruned = (await this.notifications.prune(now)) + (await this.rateLimit.prune(now)) + (await this.retention.prune(now));
     if (sent || pruned) this.logger.log(`Sent ${sent} digest(s), pruned ${pruned} row(s)`);
     return { due: true, sent, pruned };
   }
