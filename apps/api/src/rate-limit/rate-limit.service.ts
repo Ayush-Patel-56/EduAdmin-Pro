@@ -29,10 +29,9 @@ export class RateLimitService {
     return { hits: row!.hits, allowed: row!.hits <= limit, resetAt: row!.resetAt };
   }
 
-  /** The key's current window, or null if it has none (or it has ended). Counts nothing. */
-  async current(key: string, now = new Date()): Promise<{ hits: number; resetAt: Date } | null> {
-    const row = await this.prisma.rateLimit.findUnique({ where: { key }, select: { hits: true, resetAt: true } });
-    return row && row.resetAt > now ? row : null;
+  /** Ends the key's window early (e.g. a successful sign-in clears its failures). */
+  async clear(key: string): Promise<void> {
+    await this.prisma.rateLimit.deleteMany({ where: { key } });
   }
 
   /** Deletes the windows that have ended; returns how many. */

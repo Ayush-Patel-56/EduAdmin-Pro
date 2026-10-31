@@ -54,6 +54,11 @@ describe('validateEnv', () => {
     ).toBeTruthy();
   });
 
+  it('refuses a WEB_ORIGIN that is not a list of http(s) addresses (it would block every sign-in)', () => {
+    expect(() => validateEnv({ ...base, WEB_ORIGIN: 'eduadmin-web.vercel.app' })).toThrow(/WEB_ORIGIN/);
+    expect(validateEnv({ ...base, WEB_ORIGIN: 'https://a.example.com, https://www.a.example.com/' })).toBeTruthy();
+  });
+
   it('requires a long CRON_SECRET in production, or the daily clean-up silently stops', () => {
     const production = { ...base, NODE_ENV: 'production', WEB_ORIGIN: 'https://app.example.com', SMTP_HOST: 'smtp.example.com', SMTP_USER: 'u', SMTP_PASS: 'p' };
     expect(() => validateEnv(production)).toThrow('CRON_SECRET is required in production');

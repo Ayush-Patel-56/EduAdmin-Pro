@@ -83,7 +83,7 @@ func setupEnv() map[string]string {
 		"PROD_R2_ACCESS_KEY_ID":     "akid-value",
 		"PROD_R2_SECRET_ACCESS_KEY": "r2-secret-value",
 		"PROD_R2_BUCKET":            "eduadmin-prod",
-		"CRON_SECRET":               "cron-secret-value",
+		"CRON_SECRET":               "cron-secret-value-0123456789abcdef",
 	}
 }
 
@@ -142,7 +142,7 @@ func TestRunSetup(t *testing.T) {
 			t.Errorf("output should mention %q:\n%s", want, printed)
 		}
 	}
-	for _, secret := range []string{"vercel-token-value", "db-pass-value", "smtp-pass-value", "r2-secret-value", "cron-secret-value", "akid-value"} {
+	for _, secret := range []string{"vercel-token-value", "db-pass-value", "smtp-pass-value", "r2-secret-value", "cron-secret-value-0123456789abcdef", "akid-value"} {
 		if strings.Contains(printed, secret) {
 			t.Errorf("output leaked %q:\n%s", secret, printed)
 		}

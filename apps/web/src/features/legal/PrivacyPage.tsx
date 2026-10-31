@@ -76,7 +76,7 @@ export function PrivacyPage() {
         <p><strong>Technical data</strong></p>
         <List
           items={[
-            'To stop abuse (for example password guessing) we count requests per IP address and per account. These counters store only a one-way hash of the IP address or email, and expire within minutes.',
+            'To stop abuse (for example password guessing) we count requests per IP address and per account. The counters hold a hashed (pseudonymised) form of the IP address or email, not the address itself, and are deleted within a day of their window ending.',
             'Our hosting provider records standard request logs (such as IP address, time and page requested) to operate and secure the service.',
           ]}
         />
@@ -100,9 +100,9 @@ export function PrivacyPage() {
         <p>
           Most student records are about children. The school, as Data Fiduciary, is responsible for having a lawful basis for
           recording them, including any verifiable consent from parents or guardians that the DPDP Act requires. Inside EduAdmin Pro,
-          students&apos; records are visible only to that school&apos;s admins and, in part, to its teachers. Teachers see students
-          according to the classes the school assigns them, without contact details. We never track children&apos;s behaviour for
-          advertising.
+          students&apos; records are visible only to that school&apos;s admins and, in part, to its teachers. Which students a teacher
+          sees depends on what the school assigns them (it can be the whole school), and teachers never see students&apos; contact
+          details. We never track children&apos;s behaviour for advertising.
         </p>
         <p>
           A school may share a feedback link with a batch&apos;s students. Anyone who has that link sees the batch&apos;s student names
@@ -163,7 +163,9 @@ export function PrivacyPage() {
         <p>
           We use one essential cookie, which keeps you signed in. It can&apos;t be read by scripts on the page and is sent only to
           EduAdmin Pro. Your browser also remembers a few choices on your device, such as the program and batch you last selected. We use
-          no advertising or analytics cookies and no third-party trackers.
+          no advertising or analytics cookies and no third-party trackers. One exception to note: a profile or student photo can be
+          given as a link to an image on another website; viewing it loads the image from that website, which can see the
+          viewer&apos;s IP address. Uploading photos instead avoids this.
         </p>
       </Section>
 

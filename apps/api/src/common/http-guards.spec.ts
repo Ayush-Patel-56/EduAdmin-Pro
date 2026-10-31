@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { noStore, sameOriginWrites } from './http-guards.js';
+import { noStore, parseOrigins, sameOriginWrites } from './http-guards.js';
 
 const res = () => {
   const r = {
@@ -22,8 +22,24 @@ const res = () => {
 };
 const req = (method: string, headers: Record<string, string> = {}) => ({ method, headers }) as unknown as Request;
 
+describe('parseOrigins', () => {
+  it('reduces each entry to its origin, so spacing, case, a default port or a path never cause a mismatch', () => {
+    expect(parseOrigins(' https://EduAdmin-Web.vercel.app/ , https://www.example.com:443/app ')).toEqual([
+      'https://eduadmin-web.vercel.app',
+      'https://www.example.com',
+    ]);
+    expect(parseOrigins('http://localhost:5173')).toEqual(['http://localhost:5173']);
+  });
+
+  it('refuses anything that is not an http(s) address', () => {
+    expect(() => parseOrigins('eduadmin-web.vercel.app')).toThrow('WEB_ORIGIN');
+    expect(() => parseOrigins('ftp://example.com')).toThrow('WEB_ORIGIN');
+    expect(() => parseOrigins(' , ')).toThrow('WEB_ORIGIN');
+  });
+});
+
 describe('sameOriginWrites', () => {
-  const guard = sameOriginWrites('https://eduadmin-web.vercel.app');
+  const guard = sameOriginWrites(['https://eduadmin-web.vercel.app', 'https://www.example.com']);
   const run = (r: Request) => {
     const response = res();
     const next = vi.fn() as unknown as NextFunction;
@@ -37,8 +53,9 @@ describe('sameOriginWrites', () => {
     expect(run(req('OPTIONS', { origin: 'https://evil.example' })).passed).toBe(true);
   });
 
-  it('lets writes through from the web app, and from tools that send no browser headers', () => {
+  it('lets writes through from the web app (any of its addresses), and from tools that send no browser headers', () => {
     expect(run(req('POST', { origin: 'https://eduadmin-web.vercel.app', 'sec-fetch-site': 'same-origin' })).passed).toBe(true);
+    expect(run(req('POST', { origin: 'https://www.example.com' })).passed).toBe(true);
     expect(run(req('PATCH')).passed).toBe(true);
   });
 

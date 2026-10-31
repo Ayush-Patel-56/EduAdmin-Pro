@@ -8,7 +8,7 @@ import { normalizeEmail } from './tokens.js';
 
 const CODE_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
-const RESEND_COOLDOWN_MS = 60_000;
+export const RESEND_COOLDOWN_MS = 60_000;
 
 type Tx = Prisma.TransactionClient;
 

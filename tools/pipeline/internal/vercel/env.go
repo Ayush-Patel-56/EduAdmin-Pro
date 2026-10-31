@@ -77,6 +77,11 @@ func APIEnv(getenv func(string) string, webOrigin string) (map[string]string, er
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing secrets: %s", strings.Join(missing, ", "))
 	}
+	// The API refuses to start with a shorter one (apps/api/src/config/env.ts);
+	// stop here, before migrating or deploying, rather than after promotion.
+	if len(strings.TrimSpace(getenv("CRON_SECRET"))) < 32 {
+		return nil, fmt.Errorf("CRON_SECRET must be at least 32 characters (e.g. openssl rand -hex 32)")
+	}
 	webOrigin = strings.TrimRight(strings.TrimSpace(webOrigin), "/")
 	if webOrigin == "" {
 		return nil, fmt.Errorf("the web origin is empty")

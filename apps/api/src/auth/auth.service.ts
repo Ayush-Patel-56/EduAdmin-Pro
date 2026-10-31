@@ -22,7 +22,7 @@ import type {
   TeacherSignupDto,
   UpdatePreferencesDto,
 } from './auth.dto.js';
-import { EmailVerificationService } from './email-verification.service.js';
+import { EmailVerificationService, RESEND_COOLDOWN_MS } from './email-verification.service.js';
 import {
   generateToken,
   hashToken,
@@ -31,11 +31,21 @@ import {
 } from './tokens.js';
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-/** Failed sign-ins one account takes before it waits, from any address. */
-export const LOGIN_FAILURE_LIMIT = 10;
+/**
+ * Sign-in attempts per account in a 15-minute window: from one address
+ * (guessing stops there), and from all addresses together (guessing spread
+ * over many addresses stops too, at a level a stranger who only knows the
+ * email can't easily reach to lock its owner out).
+ */
+export const LOGIN_ATTEMPTS_PER_ADDRESS = 10;
+export const LOGIN_ATTEMPTS_PER_ACCOUNT = 100;
 export const LOGIN_LOCK_MS = 15 * 60_000;
-// The email is hashed so the rate-limit table holds no addresses.
-const loginKey = (email: string) => `login-fail:${createHash('sha256').update(email).digest('hex')}`;
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+/** Rate-limit keys for sign-ins; hashed, so the table holds no emails or IP addresses. */
+export const loginKeys = (email: string, ip?: string) => ({
+  account: `login-fail:${sha256(email)}`,
+  address: `login-fail:${sha256(`${email}|${ip ?? 'unknown'}`)}`,
+});
 
 // Verified against when the email is unknown, so response time does not
 // reveal whether an account exists.
@@ -114,15 +124,18 @@ export class AuthService {
         OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
       },
     });
-    if (!invite || (invite.maxUses !== null && invite.uses >= invite.maxUses)) {
+    // Signing up again over one's own pending account reuses the invite use it already took.
+    const reusing = invite ? await this.pendingHoldsInvite(email, invite.id) : false;
+    if (!invite || (!reusing && invite.maxUses !== null && invite.uses >= invite.maxUses)) {
       throw new BadRequestException('Invalid or expired admin invite code');
     }
     const passwordHash = await argon2.hash(dto.password);
 
     const fullName = dto.fullName.trim();
     const code = await this.createUser(async (tx) => {
+      const released = await this.releasePendingEmail(tx, email);
       // Re-check the limit atomically so two signups can't share the last use.
-      const claimed = await tx.adminInviteCode.updateMany({
+      const claimed = released?.adminInviteCodeId === invite.id ? { count: 1 } : await tx.adminInviteCode.updateMany({
         where:
           invite.maxUses === null
             ? { id: invite.id }
@@ -132,7 +145,6 @@ export class AuthService {
       if (claimed.count === 0) {
         throw new BadRequestException('Invalid or expired admin invite code');
       }
-      await this.releasePendingEmail(tx, email);
       const user = await tx.user.create({
         data: {
           email,
@@ -158,19 +170,22 @@ export class AuthService {
 
   async login(dto: LoginDto, client: ClientInfo) {
     const email = normalizeEmail(dto.email);
-    // Per account, on top of the per-address limit: guessing one account's
-    // password from many addresses stops after LOGIN_FAILURE_LIMIT misses.
-    // Counted for unknown emails too, so the lock says nothing about whether one exists.
-    const key = loginKey(email);
-    const lock = await this.rateLimit.current(key);
-    if (lock && lock.hits >= LOGIN_FAILURE_LIMIT) throw tooManyFailures(lock.resetAt);
+    // Each attempt is counted before the password is checked, so a burst of
+    // parallel guesses can't all pass a stale count. Counted for unknown
+    // emails too, so a lock says nothing about whether an account exists.
+    const keys = loginKeys(email, client.ip);
+    const [byAddress, byAccount] = await Promise.all([
+      this.rateLimit.hit(keys.address, LOGIN_LOCK_MS, LOGIN_ATTEMPTS_PER_ADDRESS),
+      this.rateLimit.hit(keys.account, LOGIN_LOCK_MS, LOGIN_ATTEMPTS_PER_ACCOUNT),
+    ]);
+    if (!byAddress.allowed) throw tooManyFailures(byAddress.resetAt);
+    if (!byAccount.allowed) throw tooManyFailures(byAccount.resetAt);
     const user = await this.prisma.user.findUnique({
       where: { email },
       include: { memberships: { where: { status: 'ACTIVE' }, orderBy: { createdAt: 'asc' } } },
     });
     const valid = await argon2.verify(user?.passwordHash ?? DUMMY_HASH, dto.password);
     if (!user || !valid) {
-      await this.rateLimit.hit(key, LOGIN_LOCK_MS, LOGIN_FAILURE_LIMIT);
       throw new UnauthorizedException('Incorrect email or password');
     }
     if (this.requiresVerification(user.accountType) && !user.emailVerified) {
@@ -183,6 +198,8 @@ export class AuthService {
       });
     }
 
+    // A successful sign-in clears this address's count (the account-wide one runs out its window).
+    await this.rateLimit.clear(keys.address);
     const token = generateToken();
     await this.prisma.session.create({
       data: {
@@ -268,8 +285,13 @@ export class AuthService {
 
   /** An email is free if no account has it, or only one that was never verified (see releasePendingEmail). */
   private async assertEmailFree(email: string) {
-    const existing = await this.prisma.user.findUnique({ where: { email }, select: { emailVerified: true, accountType: true } });
+    const existing = await this.prisma.user.findUnique({ where: { email }, select: PENDING_SELECT });
     if (existing && !this.isPending(existing)) throw emailTaken();
+  }
+
+  private async pendingHoldsInvite(email: string, inviteId: string) {
+    const existing = await this.prisma.user.findUnique({ where: { email }, select: { ...PENDING_SELECT, adminInviteCodeId: true } });
+    return !!existing && this.isPending(existing) && existing.adminInviteCodeId === inviteId;
   }
 
   /**
@@ -279,14 +301,33 @@ export class AuthService {
    * code, and verifying also needs the new password.
    */
   private async releasePendingEmail(tx: Tx, email: string) {
-    const existing = await tx.user.findUnique({ where: { email }, select: { id: true, emailVerified: true, accountType: true } });
-    if (!existing) return;
+    const existing = await tx.user.findUnique({
+      where: { email },
+      select: {
+        ...PENDING_SELECT,
+        id: true,
+        adminInviteCodeId: true,
+        verificationTokens: { select: { createdAt: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+    if (!existing) return null;
     if (!this.isPending(existing)) throw emailTaken();
-    await tx.user.delete({ where: { id: existing.id } });
+    // Each signup emails a new code: keep to the resend pace, so signing up
+    // again and again can't flood someone's inbox (or use up the mail quota).
+    const sentAt = existing.verificationTokens[0]?.createdAt.getTime();
+    if (sentAt && Date.now() - sentAt < RESEND_COOLDOWN_MS) {
+      const wait = Math.ceil((RESEND_COOLDOWN_MS - (Date.now() - sentAt)) / 1000);
+      throw new HttpException(`A code was just sent to this email. Please wait ${wait}s and try again.`, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    // Only while still unverified: a verification that lands meanwhile wins.
+    const { count } = await tx.user.deleteMany({ where: { id: existing.id, emailVerified: false } });
+    if (count === 0) throw emailTaken();
+    return existing;
   }
 
-  private isPending(user: { emailVerified: boolean; accountType: 'ADMIN' | 'TEACHER' }) {
-    return !user.emailVerified && this.requiresVerification(user.accountType);
+  /** Never verified, needs to be, and has made nothing (an admin who created a school is kept). */
+  private isPending(user: { emailVerified: boolean; accountType: 'ADMIN' | 'TEACHER'; schoolsCreated: unknown[] }) {
+    return !user.emailVerified && this.requiresVerification(user.accountType) && user.schoolsCreated.length === 0;
   }
 
   private async createUser<T>(steps: (tx: Tx) => Promise<T>): Promise<T> {
@@ -301,6 +342,8 @@ export class AuthService {
     }
   }
 }
+
+const PENDING_SELECT = { emailVerified: true, accountType: true, schoolsCreated: { select: { id: true }, take: 1 } } as const;
 
 function tooManyFailures(resetAt: Date) {
   const minutes = Math.max(1, Math.ceil((resetAt.getTime() - Date.now()) / 60_000));
