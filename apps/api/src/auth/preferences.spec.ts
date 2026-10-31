@@ -1,6 +1,7 @@
 import { BadRequestException, UnauthorizedException, ValidationPipe, type ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
+import { RateLimitService } from '../rate-limit/rate-limit.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuthService } from './auth.service.js';
 import { UpdatePreferencesDto } from './auth.dto.js';
@@ -41,7 +42,7 @@ describe('AuthService.updatePreferences', () => {
     const moduleRef = await Test.createTestingModule({ providers: [AuthService] })
       .useMocker((token) => {
         if (token === PrismaService) return { user: { update } };
-        if (token === ConfigService || token === EmailVerificationService) return {};
+        if (token === ConfigService || token === EmailVerificationService || token === RateLimitService) return {};
       })
       .compile();
     auth = moduleRef.get(AuthService);

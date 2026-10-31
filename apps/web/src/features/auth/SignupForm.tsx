@@ -116,7 +116,7 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
                 ← Back
               </Link>
               <h1 className="mt-4 mb-5">{title}</h1>
-              <OtpVerification email={verifyEmail} />
+              <OtpVerification email={verifyEmail} password={values.password} />
             </div>
           ) : (
           <form onSubmit={handleSubmit} noValidate>

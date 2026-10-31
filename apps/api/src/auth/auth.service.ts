@@ -2,15 +2,19 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
+import { createHash } from 'node:crypto';
 import { linkFacultyProfile } from '../academic/faculty-link.js';
 import { Prisma, type User } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { RateLimitService } from '../rate-limit/rate-limit.service.js';
 import { avatarUrlOf } from './avatar.service.js';
 import type {
   AdminSignupDto,
@@ -27,6 +31,11 @@ import {
 } from './tokens.js';
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Failed sign-ins one account takes before it waits, from any address. */
+export const LOGIN_FAILURE_LIMIT = 10;
+export const LOGIN_LOCK_MS = 15 * 60_000;
+// The email is hashed so the rate-limit table holds no addresses.
+const loginKey = (email: string) => `login-fail:${createHash('sha256').update(email).digest('hex')}`;
 
 // Verified against when the email is unknown, so response time does not
 // reveal whether an account exists.
@@ -44,6 +53,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly verification: EmailVerificationService,
     private readonly config: ConfigService,
+    private readonly rateLimit: RateLimitService,
   ) {}
 
   /**
@@ -63,6 +73,7 @@ export class AuthService {
     const fullName = dto.fullName.trim();
 
     const code = await this.createUser(async (tx) => {
+      await this.releasePendingEmail(tx, email);
       const user = await tx.user.create({
         data: {
           email,
@@ -121,6 +132,7 @@ export class AuthService {
       if (claimed.count === 0) {
         throw new BadRequestException('Invalid or expired admin invite code');
       }
+      await this.releasePendingEmail(tx, email);
       const user = await tx.user.create({
         data: {
           email,
@@ -145,12 +157,20 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, client: ClientInfo) {
+    const email = normalizeEmail(dto.email);
+    // Per account, on top of the per-address limit: guessing one account's
+    // password from many addresses stops after LOGIN_FAILURE_LIMIT misses.
+    // Counted for unknown emails too, so the lock says nothing about whether one exists.
+    const key = loginKey(email);
+    const lock = await this.rateLimit.current(key);
+    if (lock && lock.hits >= LOGIN_FAILURE_LIMIT) throw tooManyFailures(lock.resetAt);
     const user = await this.prisma.user.findUnique({
-      where: { email: normalizeEmail(dto.email) },
+      where: { email },
       include: { memberships: { where: { status: 'ACTIVE' }, orderBy: { createdAt: 'asc' } } },
     });
     const valid = await argon2.verify(user?.passwordHash ?? DUMMY_HASH, dto.password);
     if (!user || !valid) {
+      await this.rateLimit.hit(key, LOGIN_LOCK_MS, LOGIN_FAILURE_LIMIT);
       throw new UnauthorizedException('Incorrect email or password');
     }
     if (this.requiresVerification(user.accountType) && !user.emailVerified) {
@@ -246,9 +266,27 @@ export class AuthService {
     return toPreferences(user);
   }
 
+  /** An email is free if no account has it, or only one that was never verified (see releasePendingEmail). */
   private async assertEmailFree(email: string) {
-    const existing = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
-    if (existing) throw emailTaken();
+    const existing = await this.prisma.user.findUnique({ where: { email }, select: { emailVerified: true, accountType: true } });
+    if (existing && !this.isPending(existing)) throw emailTaken();
+  }
+
+  /**
+   * A signup on an email whose account was never verified replaces that
+   * account: it can't have been used (it can't sign in), and it may have been
+   * made by someone else with this email. Only the inbox's owner gets the new
+   * code, and verifying also needs the new password.
+   */
+  private async releasePendingEmail(tx: Tx, email: string) {
+    const existing = await tx.user.findUnique({ where: { email }, select: { id: true, emailVerified: true, accountType: true } });
+    if (!existing) return;
+    if (!this.isPending(existing)) throw emailTaken();
+    await tx.user.delete({ where: { id: existing.id } });
+  }
+
+  private isPending(user: { emailVerified: boolean; accountType: 'ADMIN' | 'TEACHER' }) {
+    return !user.emailVerified && this.requiresVerification(user.accountType);
   }
 
   private async createUser<T>(steps: (tx: Tx) => Promise<T>): Promise<T> {
@@ -262,6 +300,14 @@ export class AuthService {
       throw err;
     }
   }
+}
+
+function tooManyFailures(resetAt: Date) {
+  const minutes = Math.max(1, Math.ceil((resetAt.getTime() - Date.now()) / 60_000));
+  return new HttpException(
+    `Too many failed sign-ins for this account. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+    HttpStatus.TOO_MANY_REQUESTS,
+  );
 }
 
 function emailTaken() {

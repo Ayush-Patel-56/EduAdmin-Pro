@@ -178,6 +178,24 @@ describe('TestsService: lists', () => {
     await expect(service.list(admin, { from: '2026-10-25', to: '2026-10-19' })).rejects.toThrow("To can't be before from");
   });
 
+  it("a teacher's batch filter can't reach outside their own batches", async () => {
+    const { service, prisma } = build();
+    await service.list(teacher(), { batchId: 'b-other' });
+    expect(prisma.test.findMany.mock.calls[0][0].where.batchId).toEqual({ in: [] });
+    await service.list(teacher(), { batchId: 'b1' });
+    expect(prisma.test.findMany.mock.calls[1][0].where.batchId).toBe('b1');
+    await service.list(admin, { batchId: 'b-other' });
+    expect(prisma.test.findMany.mock.calls[2][0].where.batchId).toBe('b-other');
+  });
+
+  it("only the test's creator (or an admin) can replace its paper", async () => {
+    const { service, tx } = build();
+    tx.$queryRaw.mockResolvedValue(locked({ facultyId: 'fac-2' })); // another teacher's test in the same batch
+    await expect(service.setPaper(teacher(), 't1', { questionIds: [] })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(tx.testQuestion.deleteMany).not.toHaveBeenCalled();
+    expect(tx.testQuestion.createMany).not.toHaveBeenCalled();
+  });
+
   it('the status filter is in the database, so totals and later pages are right past 1,000 tests', async () => {
     const { service, prisma } = build();
     prisma.test.count.mockResolvedValue(1100);

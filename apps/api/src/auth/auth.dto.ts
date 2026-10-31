@@ -70,6 +70,12 @@ export class VerifyEmailDto {
 
   @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code from your email' })
   code: string;
+
+  /** The account's password, so only the person who signed up can verify it. */
+  @IsString({ message: 'Enter your password' })
+  @IsNotEmpty({ message: 'Enter your password' })
+  @MaxLength(200)
+  password: string;
 }
 
 export class ResendVerificationDto {

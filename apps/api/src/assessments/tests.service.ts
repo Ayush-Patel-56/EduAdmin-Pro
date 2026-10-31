@@ -85,8 +85,10 @@ export class TestsService {
   async list(actor: Actor, query: TestQuery) {
     const where: Prisma.TestWhereInput = {
       schoolId: actor.schoolId,
-      ...this.visible(actor),
-      ...(query.batchId && { batchId: query.batchId }),
+      // A teacher's batch filter stays inside their own batches.
+      ...(query.batchId
+        ? { batchId: isTeacher(actor) && !actor.scope.batchIds.includes(query.batchId) ? { in: [] } : query.batchId }
+        : this.visible(actor)),
       ...(query.programId && { batch: { programId: query.programId } }),
       ...(query.type && { type: query.type }),
       ...(query.author === 'admin' ? { facultyId: null } : query.author ? { facultyId: query.author } : {}),
@@ -215,7 +217,7 @@ export class TestsService {
     activeFacultyId(actor);
     await this.find(actor, id);
     return this.prisma.$transaction(async (tx) => {
-      await lockTest(tx, actor.schoolId, id);
+      await this.lockOwned(tx, actor, id);
       const answered = await tx.testAnswer.count({ where: { schoolId: actor.schoolId, testQuestion: { testId: id } } });
       if (answered) throw new ConflictException("Answers are recorded against this paper, so it can't change");
       const current = await tx.testQuestion.findMany({ where: { testId: id, schoolId: actor.schoolId } });

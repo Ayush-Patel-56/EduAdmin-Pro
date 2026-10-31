@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { Check, Hash } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
-import { FormError, SubmitButton } from './AuthInput'
+import { AuthInput, FormError, SubmitButton } from './AuthInput'
 
 const RESEND_COOLDOWN_S = 60
 
@@ -10,11 +10,20 @@ type OtpVerificationProps = {
   email: string
   /** Seconds before "Resend code" is allowed (a code was usually just sent). */
   initialCooldown?: number
+  /**
+   * The password just typed on the signup form. Verifying needs it as well as
+   * the code, so only the person who signed up can activate the account;
+   * without it (the stand-alone page) the step asks for it. Kept in memory
+   * only, never in the URL or navigation state.
+   */
+  password?: string
 }
 
 /** Enter the 6-digit email code; shows the "Email verified" state when done. */
-export function OtpVerification({ email, initialCooldown = RESEND_COOLDOWN_S }: OtpVerificationProps) {
+export function OtpVerification({ email, initialCooldown = RESEND_COOLDOWN_S, password: knownPassword }: OtpVerificationProps) {
   const [code, setCode] = useState('')
+  const [typedPassword, setTypedPassword] = useState('')
+  const password = knownPassword ?? typedPassword
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -33,11 +42,15 @@ export function OtpVerification({ email, initialCooldown = RESEND_COOLDOWN_S }: 
       setError('Enter the 6-digit code from your email')
       return
     }
+    if (!password) {
+      setError('Enter your password')
+      return
+    }
     setError(null)
     setNotice(null)
     setSubmitting(true)
     try {
-      await api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ email, code }) })
+      await api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ email, code, password }) })
       setVerified(true)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
@@ -101,6 +114,20 @@ export function OtpVerification({ email, initialCooldown = RESEND_COOLDOWN_S }: 
         />
         <Hash className="au-ico" />
       </label>
+      {knownPassword === undefined && (
+        <div className="mt-3">
+          <AuthInput
+            label="Your password"
+            type="password"
+            autoComplete="current-password"
+            value={typedPassword}
+            onChange={(e) => {
+              setTypedPassword(e.target.value)
+              setError(null)
+            }}
+          />
+        </div>
+      )}
 
       <FormError message={error} />
       {notice && <p className="au-ok mt-3 mb-0">{notice}</p>}

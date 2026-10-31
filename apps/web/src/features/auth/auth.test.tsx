@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 import { LoginPage } from './LoginPage'
+import { OtpVerification } from './OtpVerification'
 import { PlaceholderPage } from './PlaceholderPage'
 import { AdminSignupPage, TeacherSignupPage } from './SignupPages'
 import { SignupRolePage } from './SignupRolePage'
@@ -62,6 +63,13 @@ describe('auth screens keep their fields and routes', () => {
     expect(verify).toContain('>Send code</button>')
     expect(hrefs(verify)).toContain('/login')
     expect(hrefs(render(<PlaceholderPage title="Forgot password" />))).toContain('/login')
+  })
+
+  it("the code step asks for the password only when it doesn't have it (verifying needs both)", () => {
+    const standalone = inputs(render(<OtpVerification email="a@b.co" />))
+    expect(standalone.some((i) => /type="password"/.test(i) && /current-password/.test(i))).toBe(true)
+    const afterSignup = inputs(render(<OtpVerification email="a@b.co" password="from-the-form" />))
+    expect(afterSignup.some((i) => /type="password"/.test(i))).toBe(false)
   })
 
   it('uses the landing design shell and no em dashes', () => {

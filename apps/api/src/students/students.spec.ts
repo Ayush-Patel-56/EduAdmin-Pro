@@ -109,8 +109,22 @@ describe('StudentsService: what faculty can see', () => {
     await expect(service.teacherGet(scope({ active: false }), 'st-1')).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('no programs assigned: every student of their school (PRD access rule)', () => {
-    expect(service.teacherWhere(scope({ programIds: [], batchIds: [] }))).toEqual({ schoolId: 'school-1' });
+  it('no programs but some batches: every student of their school (PRD access rule)', () => {
+    expect(service.teacherWhere(scope({ programIds: [] }))).toEqual({ schoolId: 'school-1' });
+  });
+
+  it('no programs and no batches (e.g. just joined with the teacher code): no students', async () => {
+    expect(service.teacherWhere(scope({ programIds: [], batchIds: [] }))).toBeNull();
+    await expect(service.teacherList(scope({ programIds: [], batchIds: [] }), {})).resolves.toMatchObject({ total: 0, items: [] });
+  });
+
+  it("a teacher's search matches names and roll numbers only, never the hidden email or admission number", async () => {
+    await service.teacherList(scope({}), { q: 'gmail' });
+    const search = findMany.mock.calls[0][0].where.AND[1].OR;
+    expect(search).toEqual([
+      { fullName: { contains: 'gmail', mode: 'insensitive' } },
+      { rollNumber: { contains: 'gmail', mode: 'insensitive' } },
+    ]);
   });
 
   it('with programs: only students in their programs or batches, and only in their school', async () => {
