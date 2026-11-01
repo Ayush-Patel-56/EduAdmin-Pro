@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 import { LoginPage } from './LoginPage'
 import { OtpVerification } from './OtpVerification'
-import { PlaceholderPage } from './PlaceholderPage'
+import { ForgotPasswordPage } from './ForgotPasswordPage'
 import { AdminSignupPage, TeacherSignupPage } from './SignupPages'
 import { SignupRolePage } from './SignupRolePage'
 import { VerifyEmailPage } from './VerifyEmailPage'
@@ -62,7 +62,11 @@ describe('auth screens keep their fields and routes', () => {
     expect(verify).toContain('Verify Email')
     expect(verify).toContain('>Send code</button>')
     expect(hrefs(verify)).toContain('/login')
-    expect(hrefs(render(<PlaceholderPage title="Forgot password" />))).toContain('/login')
+    const forgot = render(<ForgotPasswordPage />, '/forgot-password')
+    expect(forgot).toContain('Reset your password')
+    expect(inputs(forgot).filter((i) => /type="email"/.test(i))).toHaveLength(1)
+    expect(forgot).toContain('>Send code</button>')
+    expect(hrefs(forgot)).toContain('/login')
   })
 
   it("the code step asks for the password only when it doesn't have it (verifying needs both)", () => {
@@ -73,7 +77,7 @@ describe('auth screens keep their fields and routes', () => {
   })
 
   it('every sign-in screen links the Privacy Policy and Terms and is kept out of search results; sign-up says what you agree to', () => {
-    for (const Page of [LoginPage, SignupRolePage, TeacherSignupPage, AdminSignupPage, VerifyEmailPage]) {
+    for (const Page of [LoginPage, SignupRolePage, TeacherSignupPage, AdminSignupPage, VerifyEmailPage, ForgotPasswordPage]) {
       const html = render(<Page />)
       expect(hrefs(html)).toEqual(expect.arrayContaining(['/privacy', '/terms']))
       expect(html).toContain('<meta name="robots" content="noindex"')
@@ -84,7 +88,7 @@ describe('auth screens keep their fields and routes', () => {
   })
 
   it('uses the landing design shell and no em dashes', () => {
-    for (const Page of [LoginPage, SignupRolePage, TeacherSignupPage, AdminSignupPage, VerifyEmailPage]) {
+    for (const Page of [LoginPage, SignupRolePage, TeacherSignupPage, AdminSignupPage, VerifyEmailPage, ForgotPasswordPage]) {
       const html = render(<Page />)
       expect(html).toContain('class="au"')
       expect(html).toContain('au-panel')

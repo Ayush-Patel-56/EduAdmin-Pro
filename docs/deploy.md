@@ -136,6 +136,15 @@ Once the production web address exists (the first release prints it as `web orig
 - **The cron has the function's default time limit.** `apps/api/vercel.json` sets no `maxDuration`, so the digest run gets Vercel's default for a function with Fluid compute (on by default): 300 seconds (5 minutes) on Hobby, which is also the Hobby maximum (checked against [Vercel's docs](https://vercel.com/docs/functions/configuring-functions/duration) on 2026-10-21). A run that is cut off leaves its unsent digests to the next run. After the first real digest run, look at its duration in the Vercel logs (project `eduadmin-api` → Logs, filter on `/api/internal/cron/digest`) and check that it is well under that limit.
 - On Pro, change `apps/api/vercel.json` to one entry, `*/10 13-18 * * *` (UTC). Nothing else changes.
 
+## Passwords (`20261101090000_password_reset`)
+
+A new table only (`PasswordResetToken`), in a transaction with `lock_timeout = 10s`, so there is nothing to check before deploying.
+
+- **Forgot password** (`/forgot-password`): the account's email gets a 6-digit code (stored hashed, 15 minutes, 5 tries counted atomically, one code a minute). The code and a new password set it, sign the account out everywhere, mark the email verified (the code proves the inbox) and lift any sign-in lock on the account. Asking for a code answers the same whether or not the email has an account.
+- **Change password** (Account Preferences → Security): needs the current password and signs out the other devices.
+- **Sign out other devices** (same place): ends every session but the current one.
+- Every reset or change emails the owner that their password changed, so one they didn't make is noticed. The daily clean-up deletes reset codes a day after they expire.
+
 ## Security hardening (October 2026)
 
 No migration. What changes for people and for deploying:

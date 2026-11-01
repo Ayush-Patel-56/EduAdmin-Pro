@@ -5,11 +5,12 @@ import { AvatarController } from './avatar.controller.js';
 import { AvatarService } from './avatar.service.js';
 import { EmailVerificationService } from './email-verification.service.js';
 import { MailService } from './mail.service.js';
+import { PasswordService } from './password.service.js';
 import { SessionGuard } from './session.guard.js';
 
 @Module({
   controllers: [AuthController, AvatarController],
-  providers: [AuthService, AvatarService, EmailVerificationService, MailService, SessionGuard],
+  providers: [AuthService, AvatarService, EmailVerificationService, MailService, PasswordService, SessionGuard],
   exports: [SessionGuard, MailService],
 })
 export class AuthModule {}

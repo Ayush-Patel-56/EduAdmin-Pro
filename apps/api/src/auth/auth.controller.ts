@@ -20,7 +20,11 @@ import {
   TeacherSignupDto,
   UpdatePreferencesDto,
   VerifyEmailDto,
+  RequestPasswordResetDto,
+  ConfirmPasswordResetDto,
+  ChangePasswordDto,
 } from './auth.dto.js';
+import { PasswordService } from './password.service.js';
 import { durableThrottle } from '../rate-limit/hybrid-throttler.storage.js';
 import { AuthService, SESSION_TTL_MS } from './auth.service.js';
 import { EmailVerificationService } from './email-verification.service.js';
@@ -36,6 +40,7 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly verification: EmailVerificationService,
     private readonly config: ConfigService,
+    private readonly passwords: PasswordService,
   ) {}
 
   @Post('signup/teacher')
@@ -111,6 +116,45 @@ export class AuthController {
   async resendVerification(@Body() dto: ResendVerificationDto) {
     await this.verification.resend(dto.email);
     return { message: 'If that account needs verifying, a new code is on its way.' };
+  }
+
+  /** Forgot password: always the same answer, whether or not the email has an account. */
+  @Post('password-reset/request')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 3, ttl: 60_000 }, ...durableThrottle(3, 60_000) })
+  async requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
+    await this.passwords.requestReset(dto.email);
+    return { message: 'If an account uses that email, a reset code is on its way.' };
+  }
+
+  @Post('password-reset/confirm')
+  @HttpCode(200)
+  @Throttle(STRICT)
+  async confirmPasswordReset(@Body() dto: ConfirmPasswordResetDto) {
+    await this.passwords.confirmReset(dto.email, dto.code, dto.password);
+    return { message: 'Password changed. You can now sign in.' };
+  }
+
+  @Post('password')
+  @HttpCode(200)
+  @Throttle(STRICT)
+  @UseGuards(SessionGuard)
+  changePassword(@Auth() auth: AuthContext, @Body() dto: ChangePasswordDto) {
+    return this.passwords.change(auth.userId, auth.sessionId, dto.currentPassword, dto.newPassword);
+  }
+
+  /** How many other devices are signed in. */
+  @Get('sessions')
+  @UseGuards(SessionGuard)
+  sessions(@Auth() auth: AuthContext) {
+    return this.passwords.otherSessions(auth.userId, auth.sessionId);
+  }
+
+  @Post('sessions/sign-out-others')
+  @HttpCode(200)
+  @UseGuards(SessionGuard)
+  signOutOthers(@Auth() auth: AuthContext) {
+    return this.passwords.signOutOthers(auth.userId, auth.sessionId);
   }
 
   private cookieOptions(): CookieOptions {
