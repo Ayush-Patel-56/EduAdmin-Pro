@@ -225,18 +225,19 @@ model User {
   createdAt          DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime     @updatedAt @db.Timestamptz(3)
 
-  adminInviteCode    AdminInviteCode?         @relation(fields: [adminInviteCodeId], references: [id], onDelete: SetNull)
-  memberships        SchoolMembership[]
-  sessions           Session[]
-  verificationTokens EmailVerificationToken[]
-  schoolsCreated     School[]                 @relation("SchoolCreator")
-  announcements      Announcement[]
-  facultyProfiles    Faculty[]
-  counselingSessions CounselingSession[]
-  markedOccurrences  ClassOccurrence[]
-  avatar             UserAvatar?
-  notifications      Notification[]
-  emailDigests       EmailDigest[]
+  adminInviteCode     AdminInviteCode?         @relation(fields: [adminInviteCodeId], references: [id], onDelete: SetNull)
+  memberships         SchoolMembership[]
+  sessions            Session[]
+  verificationTokens  EmailVerificationToken[]
+  passwordResetTokens PasswordResetToken[]
+  schoolsCreated      School[]                 @relation("SchoolCreator")
+  announcements       Announcement[]
+  facultyProfiles     Faculty[]
+  counselingSessions  CounselingSession[]
+  markedOccurrences   ClassOccurrence[]
+  avatar              UserAvatar?
+  notifications       Notification[]
+  emailDigests        EmailDigest[]
 }
 
 // Opaque login sessions. Only a SHA-256 hash of the cookie token is stored,
@@ -259,6 +260,23 @@ model Session {
 // One-time 6-digit email verification code. Only a hash is stored, keyed to
 // the user, and a code is locked after too many wrong attempts.
 model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  userId    String
+  codeHash  String
+  attempts  Int      @default(0)
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// A "forgot password" code: 6 digits emailed to the account, stored only as a
+// hash, valid 15 minutes and for 5 tries. Using it sets a new password and
+// signs the account out everywhere. Deleted with the user, and by the daily
+// clean-up a day after it expires.
+model PasswordResetToken {
   id        String   @id @default(uuid())
   userId    String
   codeHash  String

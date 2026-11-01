@@ -42,7 +42,7 @@ export function PrivacyPage() {
             'Name, email address and a password (stored only as a one-way hash; we can never read it).',
             'Optional details you add: department or subject, employee ID, profile picture, and preferences such as email notifications and theme.',
             'Sign-in sessions: when they started and expire, the browser or device description and the IP address they came from.',
-            'Email verification codes (stored as a one-way hash) and records of which daily digest emails were sent.',
+            'Email verification and password-reset codes (stored as a one-way hash) and records of which daily digest emails were sent.',
           ]}
         />
         <p><strong>Records a school enters or imports</strong></p>
@@ -138,7 +138,7 @@ export function PrivacyPage() {
         <List
           items={[
             "School records stay for as long as the school uses EduAdmin Pro. The school's admins can delete individual records, and its owner can clear all of the school's data or delete the school; deleted data is removed from the live database at once.",
-            'Sign-in sessions end after 30 days and are deleted daily once ended. Verification codes are deleted a day after they expire. Read notifications are deleted after 60 days, and records of sent digest emails after 30 days.',
+            'Sign-in sessions end after 30 days and are deleted daily once ended. Verification and password-reset codes are deleted a day after they expire. Read notifications are deleted after 60 days, and records of sent digest emails after 30 days.',
             'Copies may remain in our providers’ backups for a limited period before they are overwritten.',
           ]}
         />
