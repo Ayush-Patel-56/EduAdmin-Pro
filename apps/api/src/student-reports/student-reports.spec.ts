@@ -217,6 +217,16 @@ describe('MarksService: access and writes', () => {
     await expect(service.roster(teacher(), 'b-other')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it("an admin asking for another school's batch is told it doesn't exist, not shown an empty list", async () => {
+    const prisma = prismaMock();
+    const service = new MarksService(prisma as unknown as PrismaService);
+    prisma.batch.findFirst.mockResolvedValue(null);
+    await expect(service.roster(admin, 'b-elsewhere')).rejects.toThrow(new NotFoundException('Batch not found'));
+    await expect(service.set(admin, { batchId: 'b-elsewhere', year: 2026, term: 'TERM_1', subject: 'Physics' })).rejects.toThrow(new NotFoundException('Batch not found'));
+    expect(prisma.batch.findFirst).toHaveBeenCalledWith({ where: { id: 'b-elsewhere', schoolId: 'school-1' }, select: { id: true } });
+    expect(prisma.student.findMany).not.toHaveBeenCalled();
+  });
+
   const year = (() => {
     const now = new Date(Date.now() + 5.5 * 3_600_000);
     return now.getUTCMonth() + 1 >= 4 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;

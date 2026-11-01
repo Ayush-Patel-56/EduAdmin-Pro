@@ -109,8 +109,12 @@ describe('StudentsService: what faculty can see', () => {
     await expect(service.teacherGet(scope({ active: false }), 'st-1')).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('no programs but some batches: every student of their school (PRD access rule)', () => {
-    expect(service.teacherWhere(scope({ programIds: [] }))).toEqual({ schoolId: 'school-1' });
+  it('no programs but some batches: only the students of their batches, never the whole school', async () => {
+    expect(service.teacherWhere(scope({ programIds: [] }))).toEqual({ schoolId: 'school-1', batchId: { in: ['b1'] } });
+    // So a student of another batch is a 404 for them, and can't be picked for a counseling note (same rule).
+    findFirst.mockResolvedValue(null);
+    await expect(service.teacherGet(scope({ programIds: [] }), 'st-other-batch')).rejects.toBeInstanceOf(NotFoundException);
+    expect(findFirst.mock.calls[0][0].where).toEqual({ AND: [{ schoolId: 'school-1', batchId: { in: ['b1'] } }, { id: 'st-other-batch' }] });
   });
 
   it('no programs and no batches (e.g. just joined with the teacher code): no students', async () => {

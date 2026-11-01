@@ -321,16 +321,16 @@ export class StudentsService {
   // Faculty (read-only)
 
   /**
-   * Which students a teacher sees (PRD access rules): none for an inactive
-   * profile, or one with no programs and no batches yet (anyone with the
-   * teacher code can join, so joining alone shows nothing); every student of
-   * the school when they have batches but no programs; otherwise students in
-   * their programs or batches.
+   * Which students a teacher sees: none for an inactive profile, or one with
+   * no programs and no batches yet (anyone with the teacher code can join, so
+   * joining alone shows nothing); only their batches' students when they have
+   * no programs; otherwise students in their programs or batches. Counseling
+   * notes use the same rule, so a teacher can't write about anyone else.
    */
   teacherWhere(scope: TeacherScope): Prisma.StudentWhereInput | null {
     if (!scope.active || !scope.facultyId) return null;
     if (scope.programIds.length === 0 && scope.batchIds.length === 0) return null;
-    if (scope.programIds.length === 0) return { schoolId: scope.schoolId };
+    if (scope.programIds.length === 0) return { schoolId: scope.schoolId, batchId: { in: scope.batchIds } };
     return {
       schoolId: scope.schoolId,
       OR: [

@@ -82,9 +82,16 @@ export class MarksService {
     };
   }
 
+  /** A batch id from the request that isn't this school's is "not found", never an empty answer. */
+  private async requireBatch(actor: Actor, batchId: string) {
+    const batch = await this.prisma.batch.findFirst({ where: { id: batchId, schoolId: actor.schoolId }, select: { id: true } });
+    if (!batch) throw new NotFoundException('Batch not found');
+  }
+
   /** A batch's students, for the Generate Progress Report picker. */
   async roster(actor: Actor, batchId: string) {
     requireBatchAccess(actor, batchId);
+    await this.requireBatch(actor, batchId);
     return this.prisma.student.findMany({
       where: { schoolId: actor.schoolId, batchId },
       select: { id: true, fullName: true, rollNumber: true, status: true },
@@ -189,6 +196,7 @@ export class MarksService {
   /** One sheet's rows: each student's marks, percentage and grade. */
   async set(actor: Actor, query: MarkSetQuery) {
     requireBatchAccess(actor, query.batchId);
+    await this.requireBatch(actor, query.batchId);
     const rows = await this.prisma.studentMark.findMany({
       where: { schoolId: actor.schoolId, batchId: query.batchId, academicYear: query.year, term: query.term, subject: query.subject },
       select: { marks: true, maxMarks: true, attendance: true, remarks: true, source: true, enteredBy: true, updatedAt: true, student: { select: { id: true, fullName: true, rollNumber: true } } },

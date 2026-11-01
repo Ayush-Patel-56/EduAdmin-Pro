@@ -101,7 +101,7 @@ export function PrivacyPage() {
           Most student records are about children. The school, as Data Fiduciary, is responsible for having a lawful basis for
           recording them, including any verifiable consent from parents or guardians that the DPDP Act requires. Inside EduAdmin Pro,
           students&apos; records are visible only to that school&apos;s admins and, in part, to its teachers. Which students a teacher
-          sees depends on what the school assigns them (it can be the whole school), and teachers never see students&apos; contact
+          sees is limited to the programs and batches the school assigns them, and teachers never see students&apos; contact
           details. We never track children&apos;s behaviour for advertising.
         </p>
         <p>
