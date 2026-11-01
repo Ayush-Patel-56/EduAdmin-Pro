@@ -1,3 +1,4 @@
+import { printPdf } from '@/lib/printPdf'
 import { shortDay, type PtmNote } from './api'
 
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'student'
@@ -77,17 +78,9 @@ export async function ptmReportPdf(note: PtmNote) {
   return { doc, fileName: `ptm-${slug(note.student.fullName)}-${note.date}.pdf` }
 }
 
-/**
- * Print: opens the report in a new tab with the print dialog. The tab is
- * opened right away (inside the click), so popup blockers allow it, and gets
- * the PDF once it is ready.
- */
+/** Print: the report opens in the browser's print dialog, without leaving the page. */
 export async function printPtmReport(note: PtmNote) {
-  const tab = window.open('', '_blank')
   const { doc, fileName } = await ptmReportPdf(note)
   doc.setProperties({ title: fileName })
-  doc.autoPrint()
-  const url = doc.output('bloburl') as unknown as string
-  if (tab) tab.location.href = url
-  else window.open(url, '_blank')
+  printPdf(doc.output('blob'), fileName)
 }

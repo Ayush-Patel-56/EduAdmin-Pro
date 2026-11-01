@@ -7,6 +7,9 @@ const TEACHER_CODE = 'TEAC-1111';
 const ADMIN_CODE = 'ADMN-2222';
 const school = { id: 'school-1', name: 'Test School', inviteCode: TEACHER_CODE, adminInviteCode: ADMIN_CODE };
 const auth = { userId: 'user-1', sessionId: 'session-1', activeSchoolId: null };
+let schoolsInDb = [school];
+const lookup = (where: Record<string, string>) =>
+  schoolsInDb.find((s) => Object.entries(where).every(([k, v]) => s[k as keyof typeof s] === v)) ?? null;
 
 describe('SchoolsService.joinSchool: the code decides the role', () => {
   const upsert = vi.fn();
@@ -16,6 +19,8 @@ describe('SchoolsService.joinSchool: the code decides the role', () => {
     schoolMembership: { findUnique: vi.fn(), updateMany: vi.fn(), upsert },
     session: { update: vi.fn() },
     faculty: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+    facultyBatch: { deleteMany: vi.fn() },
+    facultyProgram: { deleteMany: vi.fn() },
     $transaction: vi.fn(),
   };
   let schools: SchoolsService;
@@ -31,7 +36,8 @@ describe('SchoolsService.joinSchool: the code decides the role', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    prisma.school.findFirst.mockResolvedValue(school);
+    schoolsInDb = [school];
+    prisma.school.findFirst.mockImplementation(({ where }: { where: Record<string, string> }) => Promise.resolve(lookup(where)));
     prisma.schoolMembership.findUnique.mockResolvedValue(null);
     prisma.faculty.findUnique.mockResolvedValue(null);
     // Works for both the array and the callback form of $transaction.
@@ -48,6 +54,15 @@ describe('SchoolsService.joinSchool: the code decides the role', () => {
     accountIs('TEACHER');
     await schools.joinSchool(auth, TEACHER_CODE);
     expect(upsert.mock.calls[0][0].create).toMatchObject({ role: 'TEACHER', status: 'ACTIVE' });
+  });
+
+  it('rejoining with an inactive profile reactivates it without its old batches and programs', async () => {
+    accountIs('TEACHER');
+    prisma.faculty.findUnique.mockResolvedValueOnce({ id: 'fac-1', status: 'INACTIVE' });
+    await schools.joinSchool(auth, TEACHER_CODE);
+    expect(prisma.faculty.update).toHaveBeenCalledWith({ where: { id: 'fac-1' }, data: { status: 'ACTIVE' } });
+    expect(prisma.facultyBatch.deleteMany).toHaveBeenCalledWith({ where: { facultyId: 'fac-1', schoolId: 'school-1' } });
+    expect(prisma.facultyProgram.deleteMany).toHaveBeenCalledWith({ where: { facultyId: 'fac-1', schoolId: 'school-1' } });
   });
 
   it('admin code + admin account joins as ADMIN', async () => {
@@ -75,12 +90,19 @@ describe('SchoolsService.joinSchool: the code decides the role', () => {
     await expect(schools.joinSchool(auth, 'NOPE-0000')).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('looks a code up in both columns', async () => {
+  it("looks a code up only in the column for the account's kind, so one code can never mean two schools", async () => {
+    // Say one school's teacher code were another's admin code.
+    const other = { id: 'school-2', name: 'Other School', inviteCode: 'OTHR-3333', adminInviteCode: TEACHER_CODE };
+    schoolsInDb = [school, other];
     accountIs('TEACHER');
     await schools.joinSchool(auth, TEACHER_CODE);
-    expect(prisma.school.findFirst.mock.calls[0][0].where).toEqual({
-      OR: [{ inviteCode: TEACHER_CODE }, { adminInviteCode: TEACHER_CODE }],
-    });
+    expect(prisma.school.findFirst.mock.calls[0][0].where).toEqual({ inviteCode: TEACHER_CODE });
+    expect(upsert.mock.calls[0][0].create).toMatchObject({ schoolId: 'school-1', role: 'TEACHER' });
+
+    upsert.mockClear();
+    accountIs('ADMIN');
+    await schools.joinSchool(auth, TEACHER_CODE);
+    expect(upsert.mock.calls[0][0].create).toMatchObject({ schoolId: 'school-2', role: 'ADMIN' });
   });
 
   it('refuses an existing member regardless of code', async () => {

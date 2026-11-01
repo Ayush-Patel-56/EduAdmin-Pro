@@ -5,7 +5,10 @@ type Tx = Prisma.TransactionClient;
 /**
  * Gives a teacher who joins a school a faculty profile there. An imported
  * profile with the same email is claimed (linked to the login) rather than
- * duplicated; rejoining reactivates their old profile.
+ * duplicated; rejoining reactivates their old profile. A profile that was
+ * inactive comes back without its old batches and programs, so leaving and
+ * rejoining (or a deactivation by an admin) never restores access to
+ * students by itself: an admin assigns them again.
  */
 export async function linkFacultyProfile(
   tx: Tx,
@@ -19,9 +22,13 @@ export async function linkFacultyProfile(
 ) {
   const existing = await tx.faculty.findUnique({
     where: { schoolId_userId: { schoolId, userId: user.id } },
-    select: { id: true },
+    select: { id: true, status: true },
   });
   if (existing) {
+    if (existing.status === 'INACTIVE') {
+      await tx.facultyBatch.deleteMany({ where: { facultyId: existing.id, schoolId } });
+      await tx.facultyProgram.deleteMany({ where: { facultyId: existing.id, schoolId } });
+    }
     await tx.faculty.update({
       where: { id: existing.id },
       data: { status: 'ACTIVE' },

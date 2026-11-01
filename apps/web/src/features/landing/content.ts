@@ -15,7 +15,7 @@ export const FAQ = [
   },
   {
     q: 'What if a code gets shared with the wrong person?',
-    a: 'Any admin can regenerate either code from the dashboard. The old one stops working immediately, and existing members keep their access.',
+    a: "Any admin can regenerate either code from the dashboard. The old one stops working immediately, and existing members keep their access. To take someone's access away, open Members on the school's card and remove them.",
   },
   {
     q: 'Will I be flooded with emails?',

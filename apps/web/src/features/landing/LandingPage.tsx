@@ -1,5 +1,6 @@
 import { useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { Link } from 'react-router-dom'
+import { SITE_URL } from '@/features/legal/constants'
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
 import '@fontsource/inter/600.css'
@@ -26,6 +27,7 @@ export function LandingPage() {
 
   return (
     <div className="lp" ref={root}>
+      <link rel="canonical" href={`${SITE_URL}/`} />
       <a className="skip" href="#main">Skip to content</a>
       <nav id="nav"><div className="wrap">
        <a className="logo" href="#top" aria-label="EduAdmin Pro home"><b>EA</b><span>EduAdmin Pro<small>School Management</small></span></a>
@@ -187,7 +189,7 @@ export function LandingPage() {
         <div><h4>Set up my school</h4><Link to="/signup" viewTransition onClick={morphIntoCard}>Create your account →</Link><p className="hint">New schools need an admin invite code. <a href={INVITE_MAILTO}>Ask us for one</a>.</p></div>
         <div><h4>Questions</h4><a href="mailto:academicplanningsystem@gmail.com?subject=Question%20about%20EduAdmin%20Pro">Write to us →</a></div>
        </div>
-       <div className="foot"><a className="logo" href="#top"><b>EA</b><span>EduAdmin Pro</span></a><span>© {year} EduAdmin Pro</span></div>
+       <div className="foot"><a className="logo" href="#top"><b>EA</b><span>EduAdmin Pro</span></a><span>© {year} EduAdmin Pro · <Link to="/privacy">Privacy Policy</Link> · <Link to="/terms">Terms of Service</Link></span></div>
       </div></footer>
     </div>
   )

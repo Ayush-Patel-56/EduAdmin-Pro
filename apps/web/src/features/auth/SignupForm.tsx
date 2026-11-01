@@ -116,7 +116,7 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
                 ← Back
               </Link>
               <h1 className="mt-4 mb-5">{title}</h1>
-              <OtpVerification email={verifyEmail} />
+              <OtpVerification email={verifyEmail} password={values.password} />
             </div>
           ) : (
           <form onSubmit={handleSubmit} noValidate>
@@ -145,6 +145,10 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
             </div>
 
             {hint && <p className="au-sub mt-2 text-[13px]">{hint}</p>}
+            <p className="au-sub mt-3 text-[12px]">
+              By creating an account you agree to the <Link to="/terms" className="underline">Terms of Service</Link> and the{' '}
+              <Link to="/privacy" className="underline">Privacy Policy</Link>.
+            </p>
 
             <FormError message={error} />
             <SubmitButton busy={submitting} label="Create Account" busyLabel="Creating account…" />

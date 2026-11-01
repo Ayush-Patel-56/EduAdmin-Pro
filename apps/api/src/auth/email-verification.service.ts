@@ -1,4 +1,5 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import * as argon2 from 'argon2';
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -7,7 +8,7 @@ import { normalizeEmail } from './tokens.js';
 
 const CODE_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
-const RESEND_COOLDOWN_MS = 60_000;
+export const RESEND_COOLDOWN_MS = 60_000;
 
 type Tx = Prisma.TransactionClient;
 
@@ -44,7 +45,14 @@ export class EmailVerificationService {
     await this.mail.sendVerificationCode({ to, name: firstName(fullName), code, ttlMinutes: CODE_TTL_MINUTES });
   }
 
-  async verify(rawEmail: string, code: string) {
+  /**
+   * Verifies the email with the code sent to it and the account's password:
+   * the code proves the inbox, the password proves this is the person who
+   * signed up (so a signup made with someone else's email can't be finished
+   * by them for the signer). Each try uses up an attempt before anything is
+   * compared, so parallel guesses can't get past the limit.
+   */
+  async verify(rawEmail: string, code: string, password: string) {
     const user = await this.prisma.user.findUnique({
       where: { email: normalizeEmail(rawEmail) },
       include: { verificationTokens: { orderBy: { createdAt: 'desc' }, take: 1 } },
@@ -56,19 +64,18 @@ export class EmailVerificationService {
     if (token.expiresAt < new Date()) {
       throw new BadRequestException('This code has expired. Request a new one.');
     }
-    if (token.attempts >= MAX_ATTEMPTS) {
-      throw new BadRequestException('Too many wrong attempts. Request a new code.');
-    }
+    const [claimed] = await this.prisma.$queryRaw<{ attempts: number }[]>`
+      UPDATE "EmailVerificationToken" SET "attempts" = "attempts" + 1
+      WHERE "id" = ${token.id} AND "attempts" < ${MAX_ATTEMPTS}
+      RETURNING "attempts"`;
+    if (!claimed) throw new BadRequestException('Too many wrong attempts. Request a new code.');
 
-    if (!sameHash(token.codeHash, hashCode(user.id, code))) {
-      const { attempts } = await this.prisma.emailVerificationToken.update({
-        where: { id: token.id },
-        data: { attempts: { increment: 1 } },
-      });
-      const left = MAX_ATTEMPTS - attempts;
+    const passwordOk = await argon2.verify(user.passwordHash, password);
+    if (!passwordOk || !sameHash(token.codeHash, hashCode(user.id, code))) {
+      const left = MAX_ATTEMPTS - claimed.attempts;
       throw new BadRequestException(
         left > 0
-          ? `Incorrect code. ${left} attempt${left === 1 ? '' : 's'} left.`
+          ? `Incorrect code or password. ${left} attempt${left === 1 ? '' : 's'} left.`
           : 'Too many wrong attempts. Request a new code.',
       );
     }

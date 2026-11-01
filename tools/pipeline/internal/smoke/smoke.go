@@ -69,6 +69,7 @@ type site struct {
 
 var checks = []check{
 	{"web shell", (*site).webShell},
+	{"site headers", (*site).siteHeaders},
 	{"api ready", (*site).apiReady},
 	{"auth refuses", (*site).authRefuses},
 	{"security headers", (*site).securityHeaders},
@@ -296,6 +297,35 @@ func (s *site) authRefuses(ctx context.Context) error {
 		return err
 	}
 	return expectRefusal(path, r)
+}
+
+// siteHeaders: the web pages carry their own CSP (no framing) and nosniff, from
+// apps/web/vercel.json, and robots.txt is the real file, not the app shell
+// (which search engines would read as "index everything", student links
+// included).
+func (s *site) siteHeaders(ctx context.Context) error {
+	r, err := s.get(ctx, s.web+"/", nil)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(r.header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		return fmt.Errorf("/: content-security-policy is missing or allows framing")
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.header.Get("X-Content-Type-Options")), "nosniff") {
+		return fmt.Errorf("/: missing x-content-type-options: nosniff")
+	}
+	const robots = "/robots.txt"
+	r, err = s.get(ctx, s.web+robots, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(robots, r, http.StatusOK); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(r.header.Get("Content-Type"), "text/plain") || !strings.Contains(string(r.body), "Disallow: /feedback/") {
+		return fmt.Errorf("%s: not the robots file (is apps/web/public/robots.txt deployed?)", robots)
+	}
+	return nil
 }
 
 // securityHeaders: helmet's headers survive the rewrite.

@@ -121,16 +121,18 @@ export class SchoolsService {
       select: { id: true, accountType: true, email: true, fullName: true, department: true },
     });
     const { accountType } = user;
-    const school = await this.prisma.school.findFirst({
-      where: { OR: [{ inviteCode }, { adminInviteCode: inviteCode }] },
-    });
-    if (!school) throw new BadRequestException('Invalid invite code');
-    const isAdminCode = school.adminInviteCode === inviteCode;
-    if (isAdminCode && accountType !== 'ADMIN') {
-      throw new ForbiddenException('That code is for school administrators. Ask your school for the teacher code.');
-    }
-    if (!isAdminCode && accountType === 'ADMIN') {
-      throw new ForbiddenException('That is the teacher code. Ask the school owner for the school’s admin invite code.');
+    // Look the code up only among codes of the account's kind, so the school
+    // and the role always come from the same match; the other kind is
+    // checked only to say why the code didn't work.
+    const asAdmin = accountType === 'ADMIN';
+    const school = await this.prisma.school.findFirst({ where: asAdmin ? { adminInviteCode: inviteCode } : { inviteCode } });
+    if (!school) {
+      const otherKind = await this.prisma.school.findFirst({ where: asAdmin ? { inviteCode } : { adminInviteCode: inviteCode }, select: { id: true } });
+      if (otherKind && asAdmin) {
+        throw new ForbiddenException('That is the teacher code. Ask the school owner for the school’s admin invite code.');
+      }
+      if (otherKind) throw new ForbiddenException('That code is for school administrators. Ask your school for the teacher code.');
+      throw new BadRequestException('Invalid invite code');
     }
 
     const existing = await this.prisma.schoolMembership.findUnique({

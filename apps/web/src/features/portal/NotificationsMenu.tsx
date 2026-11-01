@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { timeAgo } from '@/lib/dates'
 import { useDismiss } from '@/components/ui/useDismiss'
+import { isAppPath } from '@/lib/paths'
 
 export type NotificationItem = {
   id: string
@@ -42,7 +43,8 @@ export function NotificationsMenu() {
       client.setQueryData<Notifications>(KEY, (old) => old && { unread: Math.max(0, old.unread - 1), items: old.items.map((i) => (i.id === n.id ? { ...i, readAt: new Date().toISOString() } : i)) })
       void api(`/notifications/${n.id}/read`, { method: 'PATCH' }).catch(() => client.invalidateQueries({ queryKey: KEY }))
     }
-    if (n.link) navigate(n.link)
+    // Links come from the server; only ever follow ones inside the app.
+    if (n.link && isAppPath(n.link)) navigate(n.link)
   }
 
   return (

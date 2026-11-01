@@ -260,7 +260,22 @@ func fullEnv() map[string]string {
 		"PROD_R2_ACCESS_KEY_ID":     "akid",
 		"PROD_R2_SECRET_ACCESS_KEY": "r2-secret",
 		"PROD_R2_BUCKET":            "eduadmin-prod",
-		"CRON_SECRET":               "cron-secret",
+		"CRON_SECRET":               cronSecret,
+	}
+}
+
+// 32 characters: the shortest CRON_SECRET the API accepts in production.
+const cronSecret = "cron-secret-0123456789abcdefghij"
+
+func TestAPIEnvRefusesAShortCronSecret(t *testing.T) {
+	env := fullEnv()
+	env["CRON_SECRET"] = "too-short"
+	_, err := vercel.APIEnv(envOf(env), "https://web.vercel.app")
+	if err == nil || !strings.Contains(err.Error(), "CRON_SECRET must be at least 32 characters") {
+		t.Fatalf("a short CRON_SECRET must stop the release before anything changes, got %v", err)
+	}
+	if strings.Contains(err.Error(), "too-short") {
+		t.Error("the error must not print the secret")
 	}
 }
 
@@ -286,7 +301,7 @@ func TestAPIEnvValues(t *testing.T) {
 		"R2_BUCKET":                  "eduadmin-prod",
 		"DIGEST_ENABLED":             "true",
 		"DIGEST_HOUR_IST":            "19",
-		"CRON_SECRET":                "cron-secret",
+		"CRON_SECRET":                cronSecret,
 	}
 	for k, v := range want {
 		if env[k] != v {

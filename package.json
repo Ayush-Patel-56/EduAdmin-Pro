@@ -8,5 +8,13 @@
     "dev:api": "pnpm --filter api start:dev",
     "build": "pnpm -r run build",
     "lint": "pnpm -r run lint"
+  },
+  "pnpm": {
+    "overrides": {
+      "body-parser": "^2.4.0",
+      "multer": "^2.5.0",
+      "qs": "^6.16.1",
+      "fast-uri": "^3.1.9"
+    }
   }
 }

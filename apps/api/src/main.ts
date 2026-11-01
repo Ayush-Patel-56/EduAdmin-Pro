@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import type { RequestHandler } from 'express';
 import * as helmetModule from 'helmet';
 import { AppModule } from './app.module.js';
+import { noStore, parseOrigins, sameOriginWrites } from './common/http-guards.js';
 
 // helmet ships separate CommonJS and ES module typings, and Vercel's builder
 // type-checks with the CommonJS ones, where the default import is the module
@@ -22,6 +23,9 @@ async function bootstrap() {
   // Nest's default 100 KB limit would answer those with a 413.
   app.useBodyParser('json', { limit: '2mb' });
   app.use(helmet());
+  const webOrigins = parseOrigins(process.env.WEB_ORIGIN ?? 'http://localhost:5173');
+  app.use(noStore);
+  app.use(sameOriginWrites(webOrigins));
   app.setGlobalPrefix('api');
   app.use(cookieParser());
   app.useGlobalPipes(
@@ -37,7 +41,7 @@ async function bootstrap() {
     }),
   );
   app.enableCors({
-    origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
+    origin: webOrigins,
     credentials: true,
   });
   // On SIGTERM (deploys), stop accepting requests, let in-flight ones finish

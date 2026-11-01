@@ -1,5 +1,6 @@
 import { downloadFile, toCsv } from '@/lib/spreadsheet'
 import { dateTimeIst, longDay, type AdminDay, type DailyReport } from '@/features/daily-reports/api'
+import { printPdf } from '@/lib/printPdf'
 
 const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'school'
 const HEADER = ['Date', 'Teacher', 'Program', 'Batch', 'Subject', 'Chapter', 'Status', 'Submitted At', 'Topics Covered', 'Homework Given', 'Observations']
@@ -53,7 +54,7 @@ export async function exportReportsPdf(school: string, day: AdminDay, items: Dai
   doc.save(fileName(school, day, 'pdf'))
 }
 
-/** One report as a printable A4 page, opened with the browser's print dialog (nothing is downloaded). */
+/** One report as a printable A4 page, opened with the browser's print dialog (nothing is downloaded unless the browser can't print it). */
 export async function printReport(school: string, r: DailyReport & { flag?: { by: string; reason: string | null; at: string } | null }) {
   const { jsPDF } = await import('jspdf')
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
@@ -83,6 +84,5 @@ export async function printReport(school: string, r: DailyReport & { flag?: { by
     line(text, 10.5, { gap: 10 })
   }
   if (r.flag) line(`Flagged by ${r.flag.by} on ${dateTimeIst(r.flag.at)}${r.flag.reason ? `: ${r.flag.reason}` : ''}`, 9.5, { color: 150 })
-  doc.autoPrint()
-  window.open(doc.output('bloburl'), '_blank', 'noopener')
+  printPdf(doc.output('blob'), `daily-report-${r.date}.pdf`)
 }

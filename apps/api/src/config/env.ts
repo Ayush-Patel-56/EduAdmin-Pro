@@ -1,3 +1,5 @@
+import { parseOrigins } from '../common/http-guards.js';
+
 // Checked once at boot by ConfigModule so a missing or malformed variable
 // stops the API immediately instead of failing on the first request.
 
@@ -30,10 +32,12 @@ export function validateEnv(env: Env): Env {
   if (str('SMTP_PORT') && !isPort(str('SMTP_PORT'))) {
     errors.push('SMTP_PORT must be a number between 1 and 65535');
   }
-  if (str('WEB_ORIGIN') && !isHttpUrl(str('WEB_ORIGIN'))) {
-    errors.push(
-      'WEB_ORIGIN must be an http(s) URL, e.g. http://localhost:5173',
-    );
+  if (str('WEB_ORIGIN')) {
+    try {
+      parseOrigins(str('WEB_ORIGIN'));
+    } catch {
+      errors.push('WEB_ORIGIN must be an http(s) URL (or a comma-separated list), e.g. http://localhost:5173');
+    }
   }
   if (
     str('REQUIRE_EMAIL_VERIFICATION') &&
@@ -73,6 +77,11 @@ export function validateEnv(env: Env): Env {
     for (const key of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS']) {
       if (!str(key)) errors.push(`${key} is required in production`);
     }
+    // Without it the daily cron is refused, and clean-up of sessions, codes,
+    // read notifications and rate-limit rows stops without anyone noticing.
+    const cronSecret = str('CRON_SECRET');
+    if (!cronSecret) errors.push('CRON_SECRET is required in production');
+    else if (cronSecret.length < 32) errors.push('CRON_SECRET must be at least 32 characters');
   }
 
   if (errors.length > 0) {
@@ -86,12 +95,4 @@ export function validateEnv(env: Env): Env {
 function isPort(value: string) {
   const n = Number(value);
   return Number.isInteger(n) && n >= 1 && n <= 65_535;
-}
-
-function isHttpUrl(value: string) {
-  try {
-    return ['http:', 'https:'].includes(new URL(value).protocol);
-  } catch {
-    return false;
-  }
 }

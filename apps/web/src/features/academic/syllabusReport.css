@@ -1,0 +1,24 @@
+/* The syllabus coverage report, printed from a frame. A file of its own
+   (not inline) because the site's Content-Security-Policy allows only
+   same-origin stylesheets. */
+* { box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; color: #0f172a; margin: 32px; }
+header { background: linear-gradient(135deg, #4f46e5, #059669); color: white; border-radius: 14px; padding: 20px 24px; }
+header h1 { margin: 0 0 4px; font-size: 22px; }
+header p { margin: 0; opacity: .9; font-size: 13px; }
+section { margin-top: 24px; break-inside: avoid; }
+.subject { display: flex; justify-content: space-between; align-items: baseline; }
+.subject h2 { margin: 0; font-size: 16px; }
+.subject span { font-size: 12px; color: #475569; }
+.bar { height: 8px; background: #e2e8f0; border-radius: 99px; margin: 8px 0 10px; overflow: hidden; }
+.bar div { height: 100%; background: #10b981; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; background: #f8fafc; color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+th, td { padding: 7px 8px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+.pill { padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.empty { margin-top: 24px; color: #64748b; }
+footer { margin-top: 28px; font-size: 10px; color: #94a3b8; }
+@media print { body { margin: 12mm; } header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .bar div, .pill { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+.pill.NOT_STARTED { background: #f1f5f9; color: #475569; }
+.pill.IN_PROGRESS { background: #eef2ff; color: #4338ca; }
+.pill.COMPLETED { background: #ecfdf5; color: #047857; }

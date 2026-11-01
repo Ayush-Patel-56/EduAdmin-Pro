@@ -1,0 +1,5 @@
+# Changes to the release workflow and the pipeline run with production secrets,
+# so they need the owner's review (enforced once branch protection on main
+# requires code-owner review).
+/.github/         @Ayush-Patel-56
+/tools/pipeline/  @Ayush-Patel-56

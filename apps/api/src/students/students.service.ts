@@ -321,13 +321,16 @@ export class StudentsService {
   // Faculty (read-only)
 
   /**
-   * Which students a teacher sees (PRD access rules): none for an inactive
-   * profile; every student of the school when they have no programs
-   * assigned; otherwise students in their programs or batches.
+   * Which students a teacher sees: none for an inactive profile, or one with
+   * no programs and no batches yet (anyone with the teacher code can join, so
+   * joining alone shows nothing); only their batches' students when they have
+   * no programs; otherwise students in their programs or batches. Counseling
+   * notes use the same rule, so a teacher can't write about anyone else.
    */
   teacherWhere(scope: TeacherScope): Prisma.StudentWhereInput | null {
     if (!scope.active || !scope.facultyId) return null;
-    if (scope.programIds.length === 0) return { schoolId: scope.schoolId };
+    if (scope.programIds.length === 0 && scope.batchIds.length === 0) return null;
+    if (scope.programIds.length === 0) return { schoolId: scope.schoolId, batchId: { in: scope.batchIds } };
     return {
       schoolId: scope.schoolId,
       OR: [
@@ -342,7 +345,7 @@ export class StudentsService {
     const pageSize = query.pageSize ?? 50;
     if (!visible) return { total: 0, page: 1, pageSize, items: [] };
     const result = await this.page(
-      { AND: [visible, filtersWhere(query)] },
+      { AND: [visible, filtersWhere(query, { teacher: true })] },
       query,
     );
     // Faculty get the roster without contact details.
@@ -610,7 +613,7 @@ export class StudentsService {
 }
 
 /** The roster filters as a Prisma where (school scoping is added by callers). */
-export function filtersWhere(query: StudentListQuery): Prisma.StudentWhereInput {
+export function filtersWhere(query: StudentListQuery, { teacher = false } = {}): Prisma.StudentWhereInput {
   const q = query.q?.trim();
   return {
     ...(query.classLevel && { classLevel: query.classLevel }),
@@ -620,12 +623,18 @@ export function filtersWhere(query: StudentListQuery): Prisma.StudentWhereInput 
     }),
     ...(query.status && { status: query.status }),
     ...(q && {
-      OR: [
-        { fullName: { contains: q, mode: 'insensitive' } },
-        { admissionNumber: { contains: q, mode: 'insensitive' } },
-        { rollNumber: { contains: q, mode: 'insensitive' } },
-        { email: { contains: q, mode: 'insensitive' } },
-      ],
+      // Teachers don't see emails or admission numbers, so they can't search them either.
+      OR: teacher
+        ? [
+            { fullName: { contains: q, mode: 'insensitive' } },
+            { rollNumber: { contains: q, mode: 'insensitive' } },
+          ]
+        : [
+            { fullName: { contains: q, mode: 'insensitive' } },
+            { admissionNumber: { contains: q, mode: 'insensitive' } },
+            { rollNumber: { contains: q, mode: 'insensitive' } },
+            { email: { contains: q, mode: 'insensitive' } },
+          ],
     }),
   };
 }

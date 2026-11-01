@@ -101,7 +101,7 @@ export class AuthController {
   @HttpCode(200)
   @Throttle(STRICT)
   async verifyEmail(@Body() dto: VerifyEmailDto) {
-    await this.verification.verify(dto.email, dto.code);
+    await this.verification.verify(dto.email, dto.code, dto.password);
     return { message: 'Email verified. You can now sign in.' };
   }
 

@@ -43,6 +43,7 @@ type fake struct {
 	readyBody                      string
 	meStatus                       int
 	noNosniff, noCSP               bool
+	noSiteHeaders, robotsIsHTML    bool
 	corsReflect                    bool
 	ipMode                         string // "", "forged", "loopback", "private", "empty", "vary", "garbage", "edge" (through the web only)
 	directIP                       string // what the API origin's /api/health/ip answers; "" means realIP
@@ -74,6 +75,11 @@ func (f *fake) web() http.Handler {
 		f.record(r)
 		switch r.URL.Path {
 		case "/", "/dashboard":
+			// vercel.json headers apply to every page response, a 404 too.
+			if !f.noSiteHeaders {
+				w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+			}
 			if (r.URL.Path == "/" && f.noRoot) || (r.URL.Path == "/dashboard" && f.noDashboard) {
 				http.NotFound(w, r)
 				return
@@ -84,6 +90,15 @@ func (f *fake) web() http.Handler {
 				return
 			}
 			w.Write([]byte(indexHTML))
+		case "/robots.txt":
+			if f.robotsIsHTML {
+				// What the SPA rewrite serves when the file is missing.
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write([]byte(indexHTML))
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte("User-agent: *\nDisallow: /feedback/\n"))
 		case "/assets/index-abc.js":
 			f.asset(w, "text/javascript")
 		case "/assets/index-abc.css":
@@ -227,7 +242,7 @@ func byName(results []Result) map[string]error {
 	return m
 }
 
-var allChecks = []string{"web shell", "api ready", "auth refuses", "security headers", "cors", "client ip", "cron locked"}
+var allChecks = []string{"web shell", "site headers", "api ready", "auth refuses", "security headers", "cors", "client ip", "cron locked"}
 
 func TestHealthySitePasses(t *testing.T) {
 	web, api := start(t, &fake{})
@@ -259,6 +274,8 @@ func TestEachBreakageFailsOnlyItsCheck(t *testing.T) {
 		{"no root div", "web shell", func(f *fake) { f.noRootDiv = true }},
 		{"asset 404", "web shell", func(f *fake) { f.missingAsset = true }},
 		{"asset served as html", "web shell", func(f *fake) { f.assetIsHTML = true }},
+		{"site without csp", "site headers", func(f *fake) { f.noSiteHeaders = true }},
+		{"robots.txt missing (the app page instead)", "site headers", func(f *fake) { f.robotsIsHTML = true }},
 		{"ready 503", "api ready", func(f *fake) { f.readyStatus = 503 }},
 		{"database down", "api ready", func(f *fake) { f.readyBody = `{"status":"ok","database":"down"}` }},
 		{"ready not json", "api ready", func(f *fake) { f.readyBody = `<html>oops</html>` }},

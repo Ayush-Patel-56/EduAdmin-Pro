@@ -10,6 +10,7 @@ import { VerifyEmailPage } from '@/features/auth/VerifyEmailPage'
 import { AdminLayout } from '@/features/admin/AdminLayout'
 import { DashboardPage } from '@/features/admin/DashboardPage'
 import { adminExtraSections, adminNav, legacyAdminTarget } from '@/features/admin/nav'
+import { NotFoundPage } from '@/features/legal/NotFoundPage'
 import { RouteError } from '@/features/portal/RouteError'
 import { SectionPlaceholder } from '@/features/portal/SectionPlaceholder'
 import { CreateSchoolPage } from '@/features/onboarding/CreateSchoolPage'
@@ -22,6 +23,8 @@ import { TeacherLayout } from '@/features/teacher/TeacherLayout'
 
 // Heavy pages load on first visit instead of in the initial bundle.
 const LandingPage = lazy(() => import('@/features/landing/LandingPage').then((m) => ({ default: m.LandingPage })))
+const PrivacyPage = lazy(() => import('@/features/legal/PrivacyPage').then((m) => ({ default: m.PrivacyPage })))
+const TermsPage = lazy(() => import('@/features/legal/TermsPage').then((m) => ({ default: m.TermsPage })))
 const StudentFeedbackPage = lazy(() =>
   import('@/features/public-feedback/StudentFeedbackPage').then((m) => ({ default: m.StudentFeedbackPage })),
 )
@@ -129,6 +132,9 @@ export const routes: RouteObject[] = [
       // Sends a signed-in user to their portal (or to /login); used after sign-in.
       { path: '/app', element: <HomeRedirect /> },
       { path: '/login', element: <LoginPage /> },
+      // Public and indexed, next to the landing page.
+      { path: '/privacy', element: <Suspense fallback={<FullPageSpinner />}><PrivacyPage /></Suspense> },
+      { path: '/terms', element: <Suspense fallback={<FullPageSpinner />}><TermsPage /></Suspense> },
       // A batch's student feedback link: no login, the token is the key.
       {
         path: '/feedback/:token',
@@ -177,7 +183,7 @@ export const routes: RouteObject[] = [
           })),
         ],
       },
-      { path: '*', element: <Navigate to="/" replace /> },
+      { path: '*', element: <NotFoundPage /> },
     ],
   },
 ]

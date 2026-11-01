@@ -29,6 +29,11 @@ export class RateLimitService {
     return { hits: row!.hits, allowed: row!.hits <= limit, resetAt: row!.resetAt };
   }
 
+  /** Ends the key's window early (e.g. a successful sign-in clears its failures). */
+  async clear(key: string): Promise<void> {
+    await this.prisma.rateLimit.deleteMany({ where: { key } });
+  }
+
   /** Deletes the windows that have ended; returns how many. */
   async prune(now = new Date()): Promise<number> {
     const { count } = await this.prisma.rateLimit.deleteMany({ where: { resetAt: { lte: now } } });
