@@ -4,13 +4,42 @@
 
 export const MAX_IMPORT_ROWS = 1000
 
-/** RFC 4180 CSV: quoted fields, escaped quotes, commas and newlines inside quotes. */
+const DELIMITERS = [',', '\t', ';'] as const
+type Delimiter = (typeof DELIMITERS)[number]
+
+/** Picks comma, tab or semicolon from the first line, counting only outside quotes. */
+function detectDelimiter(input: string): Delimiter {
+  const counts: Record<Delimiter, number> = { ',': 0, '\t': 0, ';': 0 }
+  let quoted = false
+  for (let i = 0; i < input.length; i++) {
+    const c = input[i]
+    if (quoted) {
+      if (c === '"' && input[i + 1] === '"') i++
+      else if (c === '"') quoted = false
+    } else if (c === '"') quoted = true
+    else if (c === '\n' || c === '\r') break
+    else if (c === ',' || c === '\t' || c === ';') counts[c]++
+  }
+  let best: Delimiter = ','
+  let bestCount = 0
+  for (const d of DELIMITERS) {
+    if (counts[d] > bestCount) {
+      best = d
+      bestCount = counts[d]
+    }
+  }
+  return best
+}
+
+/** RFC 4180 CSV: quoted fields, escaped quotes, commas and newlines inside quotes.
+ *  Also accepts tab- or semicolon-separated files (Excel often saves these as .csv). */
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = []
   let row: string[] = []
   let field = ''
   let quoted = false
-  const input = text.replace(/^﻿/, '')
+  const input = text.replace(/^\uFEFF/, '')
+  const delimiter = detectDelimiter(input)
   for (let i = 0; i < input.length; i++) {
     const c = input[i]
     if (quoted) {
@@ -20,7 +49,7 @@ export function parseCsv(text: string): string[][] {
       } else if (c === '"') quoted = false
       else field += c
     } else if (c === '"') quoted = true
-    else if (c === ',') {
+    else if (c === delimiter) {
       row.push(field)
       field = ''
     } else if (c === '\n' || c === '\r') {
@@ -81,10 +110,22 @@ function cellText(cell: unknown): string {
   return String(cell)
 }
 
+/** Excel "Unicode Text" is UTF-16 with a BOM; otherwise treat the bytes as UTF-8. */
+function decodeSpreadsheetText(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(bytes)
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(bytes)
+  }
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
 /** Reads a .csv or .xlsx file into rows of text cells (first row = headers). */
 export async function readSpreadsheet(file: File): Promise<string[][]> {
   const name = file.name.toLowerCase()
-  if (name.endsWith('.csv')) return parseCsv(await file.text())
+  if (name.endsWith('.csv')) return parseCsv(decodeSpreadsheetText(await file.arrayBuffer()))
   if (name.endsWith('.xlsx')) {
     const { readSheet } = await import('read-excel-file/browser')
     const rows = await readSheet(file)
