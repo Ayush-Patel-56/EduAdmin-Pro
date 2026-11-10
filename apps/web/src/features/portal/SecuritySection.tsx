@@ -39,6 +39,7 @@ export function SecuritySection() {
   return (
     <fieldset>
       <legend className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">Security</legend>
+      <p className="mt-1 text-[11px] text-slate-500">These take effect right away; Save Preferences and Cancel don&apos;t apply to them.</p>
       <div className="mt-3 divide-y divide-slate-100 rounded-xl border border-slate-200">
         <div className="px-4 py-3">
           <div className="flex items-center justify-between gap-4">

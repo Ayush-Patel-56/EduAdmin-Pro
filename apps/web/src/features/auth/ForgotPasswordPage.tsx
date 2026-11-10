@@ -34,7 +34,8 @@ export function ForgotPasswordPage() {
     return () => clearTimeout(timer)
   }, [cooldown])
 
-  async function sendCode(address: string) {
+  /** True once the request went through, so callers only confirm what really happened. */
+  async function sendCode(address: string): Promise<boolean> {
     setError(null)
     setBusy(true)
     try {
@@ -42,8 +43,10 @@ export function ForgotPasswordPage() {
       setSentTo(address)
       setNotice(null)
       setCooldown(RESEND_COOLDOWN_S)
+      return true
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
+      return false
     } finally {
       setBusy(false)
     }
@@ -127,7 +130,7 @@ export function ForgotPasswordPage() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => void sendCode(sentTo).then(() => setNotice('A new code is on its way.'))}
+                      onClick={() => void sendCode(sentTo).then((sent) => sent && setNotice('A new code is on its way.'))}
                       className="font-semibold text-[#4f46e5] hover:underline"
                     >
                       Send a new code

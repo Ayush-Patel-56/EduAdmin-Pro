@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
+import { afterResponse } from '../common/after-response.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RateLimitService } from '../rate-limit/rate-limit.service.js';
 import { loginKeys } from './auth.service.js';
@@ -10,7 +11,13 @@ import { normalizeEmail } from './tokens.js';
 const CODE_TTL_MINUTES = 15;
 const MAX_ATTEMPTS = 5;
 const RESEND_COOLDOWN_MS = 60_000;
+/** Codes one account can get in a day (5 tries each), so guessing from many addresses stays hopeless. */
+const CODES_PER_DAY = 5;
+const DAY_MS = 86_400_000;
 const INVALID = 'Invalid or expired code. Request a new one.';
+
+/** The daily count of reset codes per account; hashed, so the table holds no email. */
+export const resetCodeKey = (email: string) => `reset-codes:${createHash('sha256').update(email).digest('hex')}`;
 
 /** Salted with the user id (and a purpose) so the same code never hashes alike twice. */
 const hashCode = (userId: string, code: string) => createHash('sha256').update(`reset:${userId}:${code}`).digest('hex');
@@ -34,17 +41,29 @@ export class PasswordService {
   ) {}
 
   /**
-   * Emails a reset code. Silent for an unknown email, and within a minute of
-   * the last code, so the answer never says whether an account exists.
+   * Answers at once and sends the code after the response, so neither the
+   * answer nor how long it takes says whether the email has an account.
    */
   async requestReset(rawEmail: string): Promise<void> {
+    afterResponse(
+      this.sendResetCode(rawEmail).catch((err: unknown) => this.logger.error('Could not issue a password reset code', err as Error)),
+    );
+  }
+
+  /**
+   * Emails a reset code. Nothing for an unknown email, within a minute of the
+   * last code, or past the account's codes for the day.
+   */
+  async sendResetCode(rawEmail: string): Promise<void> {
+    const email = normalizeEmail(rawEmail);
     const user = await this.prisma.user.findUnique({
-      where: { email: normalizeEmail(rawEmail) },
+      where: { email },
       select: { id: true, email: true, fullName: true, passwordResetTokens: { select: { createdAt: true }, orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     if (!user) return;
     const last = user.passwordResetTokens[0];
     if (last && Date.now() - last.createdAt.getTime() < RESEND_COOLDOWN_MS) return;
+    if (!(await this.rateLimit.hit(resetCodeKey(email), DAY_MS, CODES_PER_DAY)).allowed) return;
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
     await this.prisma.$transaction([
       this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id } }),
@@ -102,13 +121,15 @@ export class PasswordService {
     if (!(await argon2.verify(user.passwordHash, currentPassword))) throw new BadRequestException('Your current password is incorrect');
     if (currentPassword === newPassword) throw new BadRequestException('Choose a password different from your current one');
     const passwordHash = await argon2.hash(newPassword);
-    const [, signedOut] = await this.prisma.$transaction([
+    const { others } = await this.otherSessions(userId, sessionId);
+    await this.prisma.$transaction([
       this.prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
       this.prisma.session.deleteMany({ where: { userId, id: { not: sessionId } } }),
       this.prisma.passwordResetToken.deleteMany({ where: { userId } }),
     ]);
     await this.notifyChanged(user);
-    return { signedOut: signedOut.count };
+    // Devices, as otherSessions counts them; ended sessions go too but aren't devices.
+    return { signedOut: others };
   }
 
   /** How many other devices are signed in to this account. */
@@ -117,10 +138,11 @@ export class PasswordService {
     return { others };
   }
 
-  /** Signs out every other device; this one stays signed in. */
+  /** Signs out every other device; this one stays signed in. Reports devices as otherSessions counts them. */
   async signOutOthers(userId: string, sessionId: string): Promise<{ signedOut: number }> {
-    const { count } = await this.prisma.session.deleteMany({ where: { userId, id: { not: sessionId } } });
-    return { signedOut: count };
+    const { others } = await this.otherSessions(userId, sessionId);
+    await this.prisma.session.deleteMany({ where: { userId, id: { not: sessionId } } });
+    return { signedOut: others };
   }
 
   private async notifyChanged(user: { email: string; fullName: string }) {
