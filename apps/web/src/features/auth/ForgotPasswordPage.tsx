@@ -37,11 +37,11 @@ export function ForgotPasswordPage() {
   /** True once the request went through, so callers only confirm what really happened. */
   async function sendCode(address: string): Promise<boolean> {
     setError(null)
+    setNotice(null)
     setBusy(true)
     try {
       await api('/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email: address }) })
       setSentTo(address)
-      setNotice(null)
       setCooldown(RESEND_COOLDOWN_S)
       return true
     } catch (err) {
