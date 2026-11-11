@@ -22,8 +22,12 @@ import type {
 
 type Tx = Prisma.TransactionClient;
 
+/** The linked teacher's account picture: uploaded (its date versions the URL) or a link. */
+const accountPicture = { select: { avatarUrl: true, avatar: { select: { updatedAt: true } } } } as const;
+
 const detailInclude = {
   photo: { select: { key: true, originalName: true, contentType: true } },
+  user: accountPicture,
   programAssignments: {
     include: { program: { select: { id: true, name: true } } },
   },
@@ -149,6 +153,7 @@ export class FacultyProfileService {
       orderBy: { name: 'asc' },
       include: {
         photo: { select: { key: true, originalName: true, contentType: true } },
+        user: accountPicture,
         _count: { select: { batchAssignments: true } },
       },
     });
@@ -164,18 +169,47 @@ export class FacultyProfileService {
         status: f.status,
         designation: f.designation,
         linked: f.userId !== null,
-        photoUrl: f.photo ? await this.files.url(f.photo) : f.profileImageUrl,
+        photoUrl: await this.photoUrl(schoolId, f, { orAccountPicture: true }),
       })),
     );
   }
 
+  /** A profile as admins see it: with no photo of its own, the linked teacher's account picture shows. */
   async get(schoolId: string, facultyId: string) {
+    return this.toDetail(schoolId, await this.detail(schoolId, facultyId), { orAccountPicture: true });
+  }
+
+  /** Whose account picture the admin's picture route serves: the profile's linked teacher, in this school. */
+  async linkedUserId(schoolId: string, facultyId: string): Promise<string> {
+    const faculty = await this.prisma.faculty.findFirst({ where: { id: facultyId, schoolId }, select: { userId: true } });
+    if (!faculty?.userId) throw new NotFoundException('No picture');
+    return faculty.userId;
+  }
+
+  private async detail(schoolId: string, facultyId: string) {
     const faculty = await this.prisma.faculty.findFirst({
       where: { id: facultyId, schoolId },
       include: detailInclude,
     });
     if (!faculty) throw new NotFoundException('Faculty member not found');
-    return this.toDetail(faculty);
+    return faculty;
+  }
+
+  /**
+   * The profile's own photo (uploaded, or a link). Admins' views fall back to
+   * the linked teacher's account picture, so a teacher who changes theirs in
+   * the Faculty Portal shows with it; an uploaded one is served through the
+   * admin-only picture route, since the account route serves only its owner.
+   */
+  private async photoUrl(
+    schoolId: string,
+    f: { id: string; photo: { key: string } | null; profileImageUrl: string | null; user: { avatarUrl: string | null; avatar: { updatedAt: Date } | null } | null },
+    { orAccountPicture }: { orAccountPicture: boolean },
+  ): Promise<string | null> {
+    if (f.photo) return this.files.url(f.photo as Parameters<FilesService['url']>[0]);
+    if (f.profileImageUrl || !orAccountPicture || !f.user) return f.profileImageUrl;
+    if (f.user.avatar) return `/api/schools/${schoolId}/teacher-portal/faculty/${f.id}/avatar?v=${f.user.avatar.updatedAt.getTime()}`;
+    return f.user.avatarUrl;
   }
 
   /** Edit Faculty: every field, plus the batch list (new ones join as Primary). */
@@ -310,8 +344,9 @@ export class FacultyProfileService {
 
   // The teacher's own profile
 
+  /** The teacher's own profile form: only the profile's photo (their account picture is set elsewhere). */
   async own(schoolId: string, facultyId: string) {
-    return this.get(schoolId, facultyId);
+    return this.toDetail(schoolId, await this.detail(schoolId, facultyId), { orAccountPicture: false });
   }
 
   async updateOwn(schoolId: string, userId: string, facultyId: string, dto: OwnProfileDto) {
@@ -363,7 +398,7 @@ export class FacultyProfileService {
     }
   }
 
-  private async toDetail(f: DetailRow) {
+  private async toDetail(schoolId: string, f: DetailRow, picture: { orAccountPicture: boolean }) {
     return {
       id: f.id,
       name: f.name,
@@ -389,7 +424,7 @@ export class FacultyProfileService {
       bio: f.bio,
       profileImageUrl: f.profileImageUrl,
       photoFileId: f.photoFileId,
-      photoUrl: f.photo ? await this.files.url(f.photo) : f.profileImageUrl,
+      photoUrl: await this.photoUrl(schoolId, f, picture),
       linked: f.userId !== null,
       programs: f.programAssignments.map((p) => p.program),
       batches: f.batchAssignments.map((a) => ({

@@ -55,7 +55,7 @@ const call = (controller: object, name: string, ...args: unknown[]) =>
   );
 
 describe.each([
-  ['TeacherPortalController', (a: AccessService) => new TeacherPortalController(a, untouched() as never), 8],
+  ['TeacherPortalController', (a: AccessService) => new TeacherPortalController(a, untouched() as never, untouched() as never), 9],
   ['AdminCounselingController', (a: AccessService) => new AdminCounselingController(a, untouched() as never), 6],
   ['AdminWorkspaceController', (a: AccessService) => new AdminWorkspaceController(a, untouched() as never), 2],
   ['AdminScheduleController', (a: AccessService) => new AdminScheduleController(a, untouched() as never), 9],

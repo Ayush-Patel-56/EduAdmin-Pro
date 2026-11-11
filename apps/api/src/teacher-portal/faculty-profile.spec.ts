@@ -10,7 +10,7 @@ const dto = (over: Partial<FacultyDto> = {}) =>
 
 function build() {
   const prisma = {
-    faculty: { findFirst: vi.fn(), update: vi.fn() },
+    faculty: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
     batch: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn() },
     facultyBatch: { findFirst: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), upsert: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     facultyProgram: { upsert: vi.fn(), deleteMany: vi.fn() },
@@ -22,6 +22,59 @@ function build() {
 }
 
 const current = (over = {}) => ({ id: 'f1', userId: null, email: null, subjects: ['Chemistry'], photoFileId: null, photo: null, batchAssignments: [], ...over });
+
+describe("FacultyProfileService: a teacher's picture in the admin's views", () => {
+  const AT = new Date('2026-11-11T05:00:00Z');
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: 'f1', name: 'Ayush', email: 'a@s.example', phone: null, primarySubject: null, subjects: ['CSE'], joiningDate: null, status: 'ACTIVE',
+    designation: null, userId: 'u-t', photo: null, photoFileId: null, profileImageUrl: null, user: null, _count: { batchAssignments: 0 },
+    programAssignments: [], batchAssignments: [], ...over,
+  });
+
+  it("with no photo of its own, a linked profile shows the teacher's account picture (uploaded: through the admin route; linked: as is)", async () => {
+    const { service, prisma } = build();
+    prisma.faculty.findMany.mockResolvedValue([
+      row({ user: { avatarUrl: null, avatar: { updatedAt: AT } } }),
+      row({ id: 'f2', user: { avatarUrl: 'https://img.example/me.png', avatar: null } }),
+      row({ id: 'f3', userId: null }),
+    ]);
+    const out = await service.directory('school-1');
+    expect(out.map((f) => f.photoUrl)).toEqual([
+      `/api/schools/school-1/teacher-portal/faculty/f1/avatar?v=${AT.getTime()}`,
+      'https://img.example/me.png',
+      null,
+    ]);
+    expect(prisma.faculty.findMany.mock.calls[0][0].include.user).toEqual({ select: { avatarUrl: true, avatar: { select: { updatedAt: true } } } });
+  });
+
+  it('a photo set on the profile itself still comes first', async () => {
+    const { service, prisma, files } = build();
+    files.url.mockResolvedValue('https://r2.example/signed');
+    prisma.faculty.findMany.mockResolvedValue([
+      row({ photo: { key: 'k' }, user: { avatarUrl: null, avatar: { updatedAt: AT } } }),
+      row({ id: 'f2', profileImageUrl: 'https://img.example/profile.png', user: { avatarUrl: null, avatar: { updatedAt: AT } } }),
+    ]);
+    expect((await service.directory('school-1')).map((f) => f.photoUrl)).toEqual(['https://r2.example/signed', 'https://img.example/profile.png']);
+  });
+
+  it("the admin's profile view falls back the same way; the teacher's own profile form shows only the profile's photo", async () => {
+    const { service, prisma } = build();
+    prisma.faculty.findFirst.mockResolvedValue(row({ user: { avatarUrl: null, avatar: { updatedAt: AT } } }));
+    expect((await service.get('school-1', 'f1')).photoUrl).toBe(`/api/schools/school-1/teacher-portal/faculty/f1/avatar?v=${AT.getTime()}`);
+    expect((await service.own('school-1', 'f1')).photoUrl).toBeNull();
+  });
+
+  it("the picture route reads only a linked profile of this school", async () => {
+    const { service, prisma } = build();
+    prisma.faculty.findFirst.mockResolvedValueOnce({ userId: 'u-t' });
+    await expect(service.linkedUserId('school-1', 'f1')).resolves.toBe('u-t');
+    expect(prisma.faculty.findFirst.mock.calls[0][0].where).toEqual({ id: 'f1', schoolId: 'school-1' });
+    prisma.faculty.findFirst.mockResolvedValueOnce({ userId: null });
+    await expect(service.linkedUserId('school-1', 'f3')).rejects.toBeInstanceOf(NotFoundException);
+    prisma.faculty.findFirst.mockResolvedValueOnce(null);
+    await expect(service.linkedUserId('school-1', 'f-other-school')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
 
 describe('FacultyProfileService', () => {
   it("another school's profile is a 404 everywhere (looked up with the school)", async () => {
