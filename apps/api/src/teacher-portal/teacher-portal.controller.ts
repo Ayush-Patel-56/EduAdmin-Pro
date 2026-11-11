@@ -9,9 +9,12 @@ import {
   Patch,
   Post,
   Put,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AccessService } from '../academic/access.service.js';
+import { AvatarService } from '../auth/avatar.service.js';
 import { Auth, type AuthContext, SessionGuard } from '../auth/session.guard.js';
 import {
   BATCH_ROLES,
@@ -34,6 +37,7 @@ export class TeacherPortalController {
   constructor(
     private readonly access: AccessService,
     private readonly profiles: FacultyProfileService,
+    private readonly avatars: AvatarService,
   ) {}
 
   @Get('overview')
@@ -62,6 +66,19 @@ export class TeacherPortalController {
   ) {
     await this.access.assertAdmin(auth.userId, schoolId);
     return this.profiles.get(schoolId, facultyId);
+  }
+
+  /**
+   * A linked teacher's uploaded account picture, for this school's admins
+   * (the account's own route serves only the teacher). Shown when the profile
+   * has no photo of its own; never cached by the browser, like the account route.
+   */
+  @Get('faculty/:facultyId/avatar')
+  async avatar(@Auth() auth: AuthContext, @Id('schoolId') schoolId: string, @Id('facultyId') facultyId: string, @Res() res: Response) {
+    await this.access.assertAdmin(auth.userId, schoolId);
+    const { contentType, data } = await this.avatars.read(await this.profiles.linkedUserId(schoolId, facultyId));
+    res.set({ 'Content-Type': contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
+    res.send(data);
   }
 
   @Patch('faculty/:facultyId')
