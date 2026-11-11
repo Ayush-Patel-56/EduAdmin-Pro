@@ -104,3 +104,38 @@ export class UpdatePreferencesDto {
   @IsIn([...ACCENT_THEMES, null], { message: 'Unknown accent theme' })
   accentTheme?: (typeof ACCENT_THEMES)[number] | null;
 }
+
+/** "Forgot password": where to send the code. */
+export class RequestPasswordResetDto {
+  @IsEmail({}, { message: 'Please enter a valid email address' })
+  @MaxLength(254)
+  email: string;
+}
+
+/** The emailed code and the new password. */
+export class ConfirmPasswordResetDto {
+  @IsEmail({}, { message: 'Please enter a valid email address' })
+  @MaxLength(254)
+  email: string;
+
+  @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code from your email' })
+  code: string;
+
+  @IsString()
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(128)
+  password: string;
+}
+
+/** Changing the password while signed in: the current one, then the new one. */
+export class ChangePasswordDto {
+  @IsString({ message: 'Enter your current password' })
+  @IsNotEmpty({ message: 'Enter your current password' })
+  @MaxLength(200)
+  currentPassword: string;
+
+  @IsString()
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(128)
+  newPassword: string;
+}

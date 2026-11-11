@@ -7,6 +7,7 @@ import { FormError } from '@/features/auth/AuthInput'
 import { meQueryKey } from '@/features/auth/session'
 import { preferencesOf, type AccentTheme, type Me, type Preferences } from '@/features/auth/types'
 import { Avatar } from './Avatar'
+import { SecuritySection } from './SecuritySection'
 
 const ACCENTS: { value: AccentTheme; label: string; swatch: string }[] = [
   { value: 'INDIGO', label: 'Indigo', swatch: 'bg-[#4f46e5]' },
@@ -58,7 +59,7 @@ export function PreferencesDialog({ me, defaultAccent, roleLabel, onClose }: Pre
   }
 
   return (
-    <Dialog title="Account Preferences" description="Notifications and appearance for your account" onClose={onClose}>
+    <Dialog title="Account Preferences" description="Notifications, appearance and security for your account" onClose={onClose}>
       <div className="space-y-6 px-6 py-5">
         <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
           <Avatar me={me} className="size-11 shrink-0 rounded-full bg-brand-600 text-sm" />
@@ -125,6 +126,8 @@ export function PreferencesDialog({ me, defaultAccent, roleLabel, onClose }: Pre
             })}
           </div>
         </fieldset>
+
+        <SecuritySection />
 
         <FormError message={error} />
       </div>

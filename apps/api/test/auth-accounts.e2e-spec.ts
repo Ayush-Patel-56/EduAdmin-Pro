@@ -54,7 +54,7 @@ describe('accounts and verification on the database (e2e)', () => {
     expect(status(await auth.login({ email: victim, password: 'attacker-password-1' }, {}).catch((e: unknown) => e))).toBe(401);
     await expect(auth.login({ email: victim, password: 'owner-password-1' }, {})).resolves.toEqual(expect.any(String));
     expect((await prisma.user.findUniqueOrThrow({ where: { email: victim } })).fullName).toBe('Real Owner');
-  });
+  }, 20_000); // several argon2 checks, which are slow on purpose
 
   it('a verified account is never replaced by a new signup', async () => {
     const owner = email('verified');

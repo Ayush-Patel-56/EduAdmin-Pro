@@ -2,7 +2,7 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { Navigate, useParams, type RouteObject } from 'react-router-dom'
 import { LoginPage } from '@/features/auth/LoginPage'
-import { PlaceholderPage } from '@/features/auth/PlaceholderPage'
+import { ForgotPasswordPage } from '@/features/auth/ForgotPasswordPage'
 import { FullPageSpinner, HomeRedirect, PageSpinner, RequireAuth } from '@/features/auth/guards'
 import { AdminSignupPage, TeacherSignupPage } from '@/features/auth/SignupPages'
 import { SignupRolePage } from '@/features/auth/SignupRolePage'
@@ -148,7 +148,7 @@ export const routes: RouteObject[] = [
       { path: '/signup/teacher', element: <TeacherSignupPage /> },
       { path: '/signup/admin', element: <AdminSignupPage /> },
       { path: '/verify-email', element: <VerifyEmailPage /> },
-      { path: '/forgot-password', element: <PlaceholderPage title="Forgot password" /> },
+      { path: '/forgot-password', element: <ForgotPasswordPage /> },
 
       { path: '/onboarding', element: adminOnly(<OnboardingPage />) },
       { path: '/onboarding/create', element: adminOnly(<CreateSchoolPage />) },
