@@ -130,6 +130,7 @@ describe('both ways of removing a program use it', () => {
           board: 'CBSE',
           classes: ['11th'],
           programs: [],
+          mouStartDate: '2026-04-01', contactPerson: 'A', phone: '9876543210', email: 'a@s.example',
         } as CreateSchoolDto,
       ),
     ).rejects.toThrow(/Physics › Fluids/);
