@@ -6,11 +6,14 @@ import { todayIst } from '@/lib/dates'
 import { ConfirmDialog, ErrorBanner } from '@/components/ui/form'
 import { inputClass, textareaClass } from '@/components/ui/formStyles'
 import { Select } from '@/components/ui/Select'
+import { STATUS_LABELS, useSyllabus } from '@/features/academic/api'
 import {
   dateTimeIst,
   emptyForm,
   formOf,
   formProblem,
+  isSyllabusChapter,
+  syllabusChapters,
   shortDay,
   TEACHER_PATH,
   toPayload,
@@ -60,7 +63,9 @@ function DailyClassReport() {
   const top = useRef<HTMLDivElement>(null)
   const f = form ?? emptyForm(today)
   const set = <K extends keyof ReportForm>(key: K, value: ReportForm[K]) => {
-    setForm((prev) => ({ ...(prev ?? emptyForm(today)), [key]: value }))
+    // A chapter belongs to a batch's subject: picking another batch or subject clears it.
+    const clearsChapter = key === 'batchId' || key === 'subject'
+    setForm((prev) => ({ ...(prev ?? emptyForm(today)), [key]: value, ...(clearsChapter && { chapter: '' }) }))
     setError(null)
     setSaved(null)
   }
@@ -151,7 +156,14 @@ function DailyClassReport() {
             <Select id="dr-subject" value={f.subject || null} options={subjectOptions} onChange={(v) => set('subject', v)} placeholder="Select subject..." disabled={!canSubmit} />
           </Labelled>
           <Labelled id="dr-chapter" label="Chapter">
-            <input id="dr-chapter" value={f.chapter} maxLength={150} onChange={(e) => set('chapter', e.target.value)} placeholder="Enter chapter name..." className={`${inputClass()} h-11`} />
+            <ChapterField
+              key={`${editing?.id ?? 'new'}|${f.batchId}|${f.subject}`}
+              batchId={f.batchId}
+              subject={f.subject}
+              value={f.chapter}
+              onChange={(chapter) => set('chapter', chapter)}
+              disabled={!canSubmit}
+            />
           </Labelled>
           <Labelled id="dr-topics" label="Topics Covered" required className="sm:col-span-2">
             <textarea id="dr-topics" value={f.topics} maxLength={4000} rows={4} onChange={(e) => set('topics', e.target.value)} placeholder="Briefly describe the topics discussed..." className={`${textareaClass()} min-h-28 bg-slate-50/60`} />
@@ -279,6 +291,69 @@ function DailyClassReport() {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * The chapters on the batch's syllabus for the chosen subject (Academic
+ * Planning), to pick from. A chapter that isn't on the syllabus can still be
+ * typed, so a missing chapter never blocks a report, and one typed earlier
+ * shows as typed when the report is edited.
+ */
+function ChapterField({ batchId, subject, value, onChange, disabled }: { batchId: string; subject: string; value: string; onChange: (chapter: string) => void; disabled: boolean }) {
+  // The whole batch's syllabus, matched to the subject here (however each side spells its case).
+  const syllabus = useSyllabus({ kind: 'teacher' }, batchId || null, '')
+  const chapters = useMemo(() => syllabusChapters(syllabus.data, subject), [syllabus.data, subject])
+  const [typing, setTyping] = useState(false)
+  const typeInput = (hint: ReactNode) => (
+    <>
+      <input id="dr-chapter" value={value} maxLength={150} onChange={(e) => onChange(e.target.value)} placeholder="Enter chapter name..." className={`${inputClass()} h-11`} />
+      <p className="mt-1 text-[11px] text-slate-500">{hint}</p>
+    </>
+  )
+
+  if (!batchId || !subject) {
+    return <Select id="dr-chapter" value={null} options={[]} onChange={onChange} placeholder="Pick a batch and subject first" disabled />
+  }
+  if (syllabus.isPending) {
+    return <Select id="dr-chapter" value={null} options={[]} onChange={onChange} placeholder="Loading chapters…" disabled />
+  }
+  if (syllabus.error) return typeInput("Couldn't load the syllabus, so type the chapter.")
+  if (chapters.length === 0) return typeInput(`No ${subject} chapters on this batch's syllabus yet. Type it, or add chapters in Academic Planning.`)
+  if (typing || !isSyllabusChapter(value, chapters)) {
+    return typeInput(
+      <button
+        type="button"
+        onClick={() => {
+          setTyping(false)
+          if (!isSyllabusChapter(value, chapters)) onChange('')
+        }}
+        className="font-semibold text-brand-600 hover:underline"
+      >
+        Choose from the syllabus instead
+      </button>,
+    )
+  }
+  const selected = chapters.find((c) => c.title.toLowerCase() === value.trim().toLowerCase())?.title ?? null
+  return (
+    <Select
+      id="dr-chapter"
+      value={selected}
+      options={chapters.map((c) => ({ value: c.title, label: `${c.title} · ${STATUS_LABELS[c.status]}` }))}
+      onChange={onChange}
+      placeholder="Select chapter..."
+      disabled={disabled}
+      footer={[
+        ...(selected ? [{ label: 'No chapter', onSelect: () => onChange('') }] : []),
+        {
+          label: '+ Type a chapter not on the syllabus',
+          onSelect: () => {
+            setTyping(true)
+            onChange('')
+          },
+        },
+      ]}
+    />
   )
 }
 
