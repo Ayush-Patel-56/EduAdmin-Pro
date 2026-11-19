@@ -1,5 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import type { SyllabusItem } from '@/features/academic/api'
 
 export type ReportStatus = 'ON_TIME' | 'LATE' | 'FLAGGED'
 
@@ -141,3 +142,31 @@ export const shortDay = (isoDate: string) =>
 
 /** "Batch 1A · General · Chapter 1" */
 export const classLine = (r: Pick<DailyReport, 'batch' | 'subject' | 'chapter'>) => [r.batch.name, r.subject, r.chapter].filter(Boolean).join(' · ')
+
+/** One chapter on a batch's syllabus, as the Daily Report's Chapter dropdown offers it. */
+export type SyllabusChapter = { title: string; status: SyllabusItem['status'] }
+
+const subjectKey = (subject: string) => subject.trim().toLowerCase()
+
+/**
+ * The chapters on the batch's syllabus (Academic Planning) for the report's
+ * subject, in the board's order and once each. The subject matches however
+ * it's typed, since reports and the syllabus name subjects separately.
+ */
+export function syllabusChapters(items: SyllabusItem[] | undefined, subject: string): SyllabusChapter[] {
+  const key = subjectKey(subject)
+  if (!key || !items) return []
+  const seen = new Set<string>()
+  const chapters: SyllabusChapter[] = []
+  for (const item of items) {
+    const title = item.title.trim()
+    if (subjectKey(item.subject) !== key || seen.has(title.toLowerCase())) continue
+    seen.add(title.toLowerCase())
+    chapters.push({ title, status: item.status })
+  }
+  return chapters
+}
+
+/** Whether a chapter (blank counts) is one of the syllabus's, so the dropdown can show it; anything else was typed. */
+export const isSyllabusChapter = (chapter: string, chapters: SyllabusChapter[]) =>
+  !chapter.trim() || chapters.some((c) => c.title.toLowerCase() === chapter.trim().toLowerCase())
