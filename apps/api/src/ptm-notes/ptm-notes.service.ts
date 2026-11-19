@@ -4,7 +4,7 @@ import { istToday, parseDate, toIsoDate } from '../common/dates.js';
 import { likeEscape } from '../common/like-escape.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import type { PtmNoteDto, PtmNoteQuery } from './ptm-notes.dto.js';
+import type { AdminPtmNoteQuery, PtmNoteDto, PtmNoteQuery } from './ptm-notes.dto.js';
 
 /** The log shows a teacher's newest this many notes; a search narrows it. */
 export const PTM_LIST_LIMIT = 200;
@@ -15,10 +15,12 @@ const include = {
 type NoteRow = Prisma.PtmNoteGetPayload<{ include: typeof include }>;
 
 /**
- * Parent Meeting Notes & Action Items (PRD 5.8), faculty only. A teacher logs
- * meetings with the parents of students in their own batches, and reads and
- * corrects the notes they logged. The notes are kept for the student's record
- * (the 5-in-1 report), so they name the batch and teacher as they were.
+ * Parent Meeting Notes & Action Items (PRD 5.8). A teacher logs meetings with
+ * the parents of students in their own batches, and reads and corrects the
+ * notes they logged. The school's admins read every teacher's notes (they
+ * don't change them: they are the teacher's record). The notes are kept for
+ * the student's record (the 5-in-1 report), so they name the batch and
+ * teacher as they were.
  */
 @Injectable()
 export class PtmNotesService {
@@ -55,6 +57,37 @@ export class PtmNotesService {
     ]);
     return { total, items: rows.map(toNote) };
   }
+
+  // Admins (read-only)
+
+  /** Every teacher's notes in the school, newest meeting first; by program, batch, teacher and search. */
+  async adminList(schoolId: string, query: AdminPtmNoteQuery) {
+    const where: Prisma.PtmNoteWhereInput = {
+      schoolId,
+      ...(query.programId && { batch: { programId: query.programId } }),
+      ...(query.batchId && { batchId: query.batchId }),
+      ...(query.facultyId && { facultyId: query.facultyId }),
+      ...searchWhere(query.q, { teacher: true }),
+    };
+    const [total, rows] = await Promise.all([
+      this.prisma.ptmNote.count({ where }),
+      this.prisma.ptmNote.findMany({ where, include, orderBy: [{ meetingDate: 'desc' }, { createdAt: 'desc' }], take: PTM_LIST_LIMIT }),
+    ]);
+    return { total, items: rows.map(toNote) };
+  }
+
+  /** The admins' teacher filter: the teachers who have logged notes here (programs and batches come from the sidebar). */
+  async adminOptions(schoolId: string) {
+    const teachers = await this.prisma.ptmNote.findMany({
+      where: { schoolId, facultyId: { not: null } },
+      select: { facultyId: true, teacherName: true },
+      distinct: ['facultyId'],
+      orderBy: { teacherName: 'asc' },
+    });
+    return { teachers: teachers.filter((t) => t.facultyId).map((t) => ({ id: t.facultyId!, name: t.teacherName })) };
+  }
+
+  // Teachers
 
   async create(scope: TeacherScope, dto: PtmNoteDto) {
     const facultyId = requireTeacher(scope);
@@ -209,7 +242,8 @@ async function studentGone<T>(write: () => Promise<T>): Promise<T> {
 }
 
 /** Student name or roll number, parent name, notes, action items or batch, in any letter case. */
-function searchWhere(q: string | null | undefined): Prisma.PtmNoteWhereInput {
+/** A search over the student, parent, notes and batch; admins also search by teacher. */
+function searchWhere(q: string | null | undefined, { teacher = false } = {}): Prisma.PtmNoteWhereInput {
   const text = q?.trim();
   if (!text) return {};
   const like = { contains: likeEscape(text), mode: 'insensitive' } as const;
@@ -221,6 +255,7 @@ function searchWhere(q: string | null | undefined): Prisma.PtmNoteWhereInput {
       { discussion: like },
       { actionItems: like },
       { batchName: like },
+      ...(teacher ? [{ teacherName: like }] : []),
     ],
   };
 }

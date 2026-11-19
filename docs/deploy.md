@@ -409,7 +409,7 @@ A new table (`FeedbackLink`), four nullable columns on `Feedback` and a new dire
 
 A new table only (parent-teacher meeting notes), wrapped in a transaction with `lock_timeout = 10s`, so there is nothing to check before deploying.
 
-- **Faculty only.** Teachers log meetings with the parents of students in their own batches, and read, correct or delete only the notes they logged. There is no admin screen; the notes are kept for the student's record (the 5-in-1 report).
+- **Teachers write, admins read.** Teachers log meetings with the parents of students in their own batches, and read, correct or delete only the notes they logged. The school's admins read and print every teacher's notes under *PTM Notes* (by the sidebar's program and batch, a teacher, or a search) but can't change them: they are the teacher's record, kept for the student's record (the 5-in-1 report).
 - **Checks.** Discussion notes are required, a meeting can't be logged for a day still to come (API), and a CHECK keeps the follow-up date on or after the meeting.
 - **Kept as records.** A note names its batch and teacher as they were, so it still reads right after either is deleted (the links become null). Deleting a student removes their notes, as it does their counseling sessions (the delete confirmation says how many); Clear All Data removes them with the rest.
 - **`20261019110000_ptm_note_school_keys`** ties a note's batch and faculty links to its school (composite keys, like the student link), with `ON DELETE SET NULL ("batchId")` / `("facultyId")` so deleting a batch or profile still nulls only that link. Needs PostgreSQL 15+ (Neon runs 18). Notes are only written through the API, which never crosses schools, so nothing should fail; to check first:
