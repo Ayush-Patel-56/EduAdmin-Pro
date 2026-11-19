@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type DragEvent } from 'react'
 import { Check, Download, Folder, Info, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { MAX_IMPORT_ROWS, readSpreadsheet, rowsToRecords } from '@/lib/spreadsheet'
@@ -27,6 +27,7 @@ export function ImportMarksDialog({ base, options, onClose }: { base: string; op
   const [batchId, setBatchId] = useState('')
   const [subject, setSubject] = useState('')
   const [term, setTerm] = useState('')
+  const [dragging, setDragging] = useState(false)
   const [year, setYear] = useState(options.currentYear)
   const [file, setFile] = useState<File | null>(null)
   const [records, setRecords] = useState<Record<string, string>[] | null>(null)
@@ -136,10 +137,27 @@ export function ImportMarksDialog({ base, options, onClose }: { base: string; op
           aria-disabled={!picked}
           onClick={() => (picked ? inputRef.current?.click() : setError('Select the class, subject and term first'))}
           onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && picked && inputRef.current?.click()}
-          className={`flex flex-col items-center rounded-xl border-2 border-dashed px-4 py-7 text-center transition ${picked ? 'cursor-pointer border-slate-300 bg-slate-50/50 hover:bg-slate-50' : 'cursor-not-allowed border-slate-200 bg-slate-50/30 opacity-70'}`}
+          // A dropped file goes through choose() like a selected one, so the class, subject and term are still needed first.
+          onDragOver={(e: DragEvent) => {
+            e.preventDefault()
+            setDragging(true)
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e: DragEvent) => {
+            e.preventDefault()
+            setDragging(false)
+            void choose(e.dataTransfer.files[0])
+          }}
+          className={`flex flex-col items-center rounded-xl border-2 border-dashed px-4 py-7 text-center transition ${
+            dragging && picked
+              ? 'cursor-copy border-emerald-400 bg-emerald-50'
+              : picked
+                ? 'cursor-pointer border-slate-300 bg-slate-50/50 hover:bg-slate-50'
+                : 'cursor-not-allowed border-slate-200 bg-slate-50/30 opacity-70'
+          }`}
         >
           <span className="flex size-11 items-center justify-center rounded-full bg-emerald-100">{busy ? <Loader2 className="size-5 animate-spin text-emerald-600" /> : <Folder className="size-5 text-emerald-600" />}</span>
-          <p className="mt-2 text-sm font-bold text-slate-800">{file ? file.name : picked ? 'Select the Excel / CSV file' : 'Pick the class, subject and term, then select the file'}</p>
+          <p className="mt-2 text-sm font-bold text-slate-800">{file ? file.name : picked ? 'Drag & drop the Excel / CSV file here, or click to select it' : 'Pick the class, subject and term, then drag the file here or click to select it'}</p>
           <p className="mt-1 text-xs text-slate-500">.xlsx or .csv (save an old .xls as .xlsx first)</p>
           <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={(e) => { void choose(e.target.files?.[0]); e.target.value = '' }} />
         </div>
