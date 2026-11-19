@@ -31,6 +31,7 @@ import { downloadCv } from './cv'
 import { EditFacultyDialog } from './EditFacultyDialog'
 import { FacultyProfileDialog } from './FacultyProfileDialog'
 import { UploadsDialog } from './UploadsDialog'
+import { UploadsLinks } from './UploadsLinks'
 
 const STATUS_BADGE: Record<FacultyStatus, string> = {
   ACTIVE: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -225,7 +226,7 @@ export function TeacherPortalPage() {
         <div className="space-y-6">
           <Card
             title="Recent Study Material Uploads"
-            action={overview.data?.recentMaterials.length ? <button type="button" onClick={() => setUploads('materials')} className="text-xs font-semibold text-indigo-600 hover:underline">View all</button> : undefined}
+            action={<UploadsLinks onOpen={setUploads} />}
           >
             {!overview.data ? (
               <Loader2 className="mx-auto my-10 size-5 animate-spin text-slate-300" aria-label="Loading" />
@@ -255,10 +256,7 @@ export function TeacherPortalPage() {
             action={
               <FloatingMenu label="Counseling options">
                 {(close) => (
-                  <>
-                    <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); navigate('/management/counseling') }}>Open Counseling</button>
-                    <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); setUploads('assignments') }}>View assignments</button>
-                  </>
+                  <button type="button" className={`${menuItem} text-slate-700`} onClick={() => { close(); navigate('/management/counseling') }}>Open Counseling</button>
                 )}
               </FloatingMenu>
             }

@@ -24,6 +24,10 @@ const trimOrUndefined = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() || undefined : value;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Creating or editing a school. Everything is required except the MOU end
+ * date (blank for an ongoing MOU), the address and the GST number.
+ */
 export class CreateSchoolDto {
   @Transform(trim)
   @IsString()
@@ -43,17 +47,17 @@ export class CreateSchoolDto {
   @IsIn(CLASS_OPTIONS, { each: true, message: 'Unknown class selected' })
   classes: string[];
 
-  // 1 = January … 12 = December. Defaults to April when omitted.
-  @IsOptional()
+  // 1 = January … 12 = December. The form always sends one (April by default).
   @IsInt({ message: 'Academic year start month is invalid' })
   @Min(1, { message: 'Academic year start month is invalid' })
   @Max(12, { message: 'Academic year start month is invalid' })
-  academicYearStartMonth?: number;
+  @IsNotEmpty({ message: 'Academic year start month is required' })
+  academicYearStartMonth: number;
 
-  @Transform(trimOrUndefined)
-  @IsOptional()
+  @Transform(trim)
   @Matches(ISO_DATE, { message: 'MOU start date is invalid' })
-  mouStartDate?: string;
+  @IsNotEmpty({ message: 'MOU start date is required' })
+  mouStartDate: string;
 
   @Transform(trimOrUndefined)
   @IsOptional()
@@ -64,28 +68,29 @@ export class CreateSchoolDto {
     Array.isArray(value) ? value.map((v) => (typeof v === 'string' ? v.trim() : v)) : value,
   )
   @IsArray()
+  @ArrayMinSize(1, { message: 'Select at least one program' })
   @ArrayMaxSize(20, { message: 'Too many programs' })
   @IsString({ each: true })
   @IsNotEmpty({ each: true, message: 'Program names cannot be empty' })
   @MaxLength(40, { each: true, message: 'Program names must be 40 characters or less' })
   programs: string[];
 
-  @Transform(trimOrUndefined)
-  @IsOptional()
-  @IsString()
+  @Transform(trim)
   @MaxLength(120)
-  contactPerson?: string;
+  @IsString({ message: 'Contact person is required' })
+  @IsNotEmpty({ message: 'Contact person is required' })
+  contactPerson: string;
 
-  @Transform(trimOrUndefined)
-  @IsOptional()
+  @Transform(trim)
   @IsIndianMobile()
-  phone?: string;
+  @IsNotEmpty({ message: 'Phone is required' })
+  phone: string;
 
-  @Transform(trimOrUndefined)
-  @IsOptional()
-  @IsEmail({}, { message: 'Please enter a valid email address' })
+  @Transform(trim)
   @MaxLength(254)
-  email?: string;
+  @IsEmail({}, { message: 'Please enter a valid email address' })
+  @IsNotEmpty({ message: 'Email is required' })
+  email: string;
 
   @Transform(trimOrUndefined)
   @IsOptional()
