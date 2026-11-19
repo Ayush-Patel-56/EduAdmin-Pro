@@ -68,3 +68,21 @@ export class PtmNoteQuery {
   @MaxLength(100)
   q?: string | null;
 }
+
+/** The admins' list: a search, and optionally one program (the sidebar's), batch and teacher. */
+export class AdminPtmNoteQuery extends PtmNoteQuery {
+  @Transform(blankToNull)
+  @IsOptional()
+  @IsUUID('all', { message: 'Select a program' })
+  programId?: string | null;
+
+  @Transform(blankToNull)
+  @IsOptional()
+  @IsUUID('all', { message: 'Select a batch' })
+  batchId?: string | null;
+
+  @Transform(blankToNull)
+  @IsOptional()
+  @IsUUID('all', { message: 'Select a teacher' })
+  facultyId?: string | null;
+}

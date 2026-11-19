@@ -18,6 +18,7 @@ import { CalendarController } from '../calendar/calendar.controller.js';
 import { AdminAssessmentsController, TeacherAssessmentsController } from '../assessments/assessments.controller.js';
 import { AdminDailyReportsController, TeacherDailyReportsController } from '../daily-reports/daily-reports.controller.js';
 import { AdminFeedbackController, TeacherFeedbackController } from '../feedback/feedback.controller.js';
+import { AdminPtmNotesController } from '../ptm-notes/ptm-notes.controller.js';
 import { TeacherPtmNotesController } from '../ptm-notes/ptm-notes.controller.js';
 import {
   AdminScheduleController,
@@ -72,6 +73,8 @@ describe.each([
   ['AdminDailyReportsController', (a: AccessService) => new AdminDailyReportsController(a, untouched() as never), 1],
   // Feedback Management: reads, sending, imports, the review workflow and the student feedback links are all admin only.
   ['AdminFeedbackController', (a: AccessService) => new AdminFeedbackController(a, untouched() as never, untouched() as never), 9],
+  // PTM notes: admins read every teacher's notes (and change none).
+  ['AdminPtmNotesController', (a: AccessService) => new AdminPtmNotesController(a, untouched() as never), 2],
 ])('%s: admin routes of /schools/:schoolId', (_name, build, minimum) => {
   const assertAdmin = vi.fn();
   const controller = build({ assertAdmin } as unknown as AccessService);

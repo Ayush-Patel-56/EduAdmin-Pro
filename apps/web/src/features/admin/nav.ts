@@ -10,6 +10,7 @@ import {
   HeartHandshake,
   LayoutGrid,
   MessageSquare,
+  NotebookPen,
   ScrollText,
   UserCircle,
   UserPlus,
@@ -34,6 +35,7 @@ export const adminNav: NavItem[] = [
   { path: 'attendance', label: 'Attendance', icon: CalendarCheck },
   { path: 'feedback', label: 'Feedback', icon: MessageSquare },
   { path: 'counseling', label: 'Counseling', icon: HeartHandshake },
+  { path: 'ptm-notes', label: 'PTM Notes', icon: NotebookPen },
   { path: 'meetings', label: 'Meetings', icon: Users },
   { path: 'calendar', label: 'Calendar', icon: CalendarDays },
 ]
