@@ -1,5 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { ALL } from '@/features/academic/filters'
 
 export type PtmNote = {
   id: string
@@ -47,6 +48,39 @@ export function usePtmNotes(q: string) {
     queryKey: ['teacher-ptm', 'notes', q],
     queryFn: () => api<{ total: number; items: PtmNote[] }>(`${PTM_PATH}${q ? `?q=${encodeURIComponent(q)}` : ''}`),
     placeholderData: keepPreviousData,
+  })
+}
+
+/** The admins' filters: the sidebar's program and batch (ALL for every one), a teacher, a search. */
+export type AdminPtmFilters = { programId: string; batchId: string; facultyId: string; q: string }
+
+/** The admins' list request: only the filters that narrow it. */
+export function adminPtmQuery(f: AdminPtmFilters): string {
+  const params = new URLSearchParams()
+  if (f.programId && f.programId !== ALL) params.set('programId', f.programId)
+  if (f.batchId && f.batchId !== ALL) params.set('batchId', f.batchId)
+  if (f.facultyId) params.set('facultyId', f.facultyId)
+  if (f.q.trim()) params.set('q', f.q.trim())
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+const adminPtmPath = (schoolId: string) => `/schools/${schoolId}/ptm-notes`
+
+/** Every teacher's PTM notes in the school, read only (admins). */
+export function useAdminPtmNotes(schoolId: string, f: AdminPtmFilters) {
+  return useQuery({
+    queryKey: [schoolId, 'ptm-notes', f],
+    queryFn: () => api<{ total: number; items: PtmNote[] }>(`${adminPtmPath(schoolId)}${adminPtmQuery(f)}`),
+    placeholderData: keepPreviousData,
+  })
+}
+
+/** The teachers who have logged PTM notes in the school, for the admins' filter. */
+export function useAdminPtmTeachers(schoolId: string) {
+  return useQuery({
+    queryKey: [schoolId, 'ptm-notes', 'options'],
+    queryFn: () => api<{ teachers: { id: string; name: string }[] }>(`${adminPtmPath(schoolId)}/options`),
   })
 }
 

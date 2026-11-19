@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { emptyPtmForm, ptmFormOf, ptmProblem, shortDay, studentLabel, toPtmPayload, type PtmNote } from './api'
+import { emptyPtmForm, ptmFormOf, ptmProblem, shortDay, studentLabel, toPtmPayload, type PtmNote, adminPtmQuery } from './api'
+import { ALL } from '@/features/academic/filters'
 import { removalLines } from '@/features/students/api'
 import { ptmReportPdf } from './ptmReport'
 
@@ -69,5 +70,13 @@ describe('Parent-Teacher Meeting Report', () => {
     expect(short.doc.getNumberOfPages()).toBe(1)
     const long = await ptmReportPdf({ ...note, discussion: 'Long discussion line. '.repeat(400), actionItems: 'Daily self-study. '.repeat(100), followUpDate: '2026-11-01' })
     expect(long.doc.getNumberOfPages()).toBeGreaterThan(1)
+  })
+})
+
+describe("the admins' PTM list request", () => {
+  it('sends only the filters that narrow it: the sidebar program and batch (not "All"), a teacher and a search', () => {
+    expect(adminPtmQuery({ programId: ALL, batchId: ALL, facultyId: '', q: '' })).toBe('')
+    expect(adminPtmQuery({ programId: 'p1', batchId: 'b1', facultyId: 'f1', q: ' Aadhya ' })).toBe('?programId=p1&batchId=b1&facultyId=f1&q=Aadhya')
+    expect(adminPtmQuery({ programId: 'p1', batchId: ALL, facultyId: '', q: 'R&D' })).toBe('?programId=p1&q=R%26D')
   })
 })

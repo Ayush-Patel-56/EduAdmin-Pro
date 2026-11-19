@@ -4,7 +4,7 @@ import { validate } from 'class-validator';
 import { Prisma } from '../generated/prisma/client.js';
 import type { TeacherScope } from '../academic/access.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import { PtmNoteDto } from './ptm-notes.dto.js';
+import { AdminPtmNoteQuery, PtmNoteDto } from './ptm-notes.dto.js';
 import { PTM_LIST_LIMIT, PtmNotesService } from './ptm-notes.service.js';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -31,7 +31,7 @@ function build() {
     },
     school: { findUniqueOrThrow: vi.fn().mockResolvedValue({ createdAt: new Date('2026-06-01T05:00:00Z') }) },
     student: { findFirst: vi.fn().mockResolvedValue({ id: 'st-1' }) },
-    faculty: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }) },
+    faculty: { findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Ayush' }), findMany: vi.fn().mockResolvedValue([]) },
   };
   return { prisma, service: new PtmNotesService(prisma as unknown as PrismaService) };
 }
@@ -297,5 +297,45 @@ describe('PtmNoteDto', () => {
     expect(out.actionItems).toBeNull();
     expect(out.parentName).toBeNull();
     expect(out.followUpDate).toBeNull();
+  });
+});
+
+describe("PtmNotesService: the school's PTM notes for admins (read-only)", () => {
+  const note = { id: 'n1', meetingDate: d('2026-10-18'), student: { id: 'st-1', fullName: 'Aadhya Shah', rollNumber: '52' }, batchId: 'b1', batchName: 'J-b1', facultyId: 'fac-1', teacherName: 'Ayush', parentName: 'Jaymin', parentAttended: true, discussion: 'Nothing discussed', actionItems: null, followUpDate: null, createdAt: new Date('2026-10-18T05:00:00Z') };
+
+  it("lists every teacher's notes of this school only, newest meeting first, with who logged each", async () => {
+    const { service, prisma } = build();
+    prisma.ptmNote.count.mockResolvedValue(1);
+    prisma.ptmNote.findMany.mockResolvedValue([note]);
+    await expect(service.adminList('school-1', {})).resolves.toEqual({
+      total: 1,
+      items: [{ id: 'n1', date: '2026-10-18', student: note.student, batch: { id: 'b1', name: 'J-b1' }, teacherName: 'Ayush', parentName: 'Jaymin', parentAttended: true, discussion: 'Nothing discussed', actionItems: null, followUpDate: null, createdAt: '2026-10-18T05:00:00.000Z' }],
+    });
+    const call = prisma.ptmNote.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ schoolId: 'school-1' });
+    expect(call).toMatchObject({ orderBy: [{ meetingDate: 'desc' }, { createdAt: 'desc' }], take: PTM_LIST_LIMIT });
+    expect(prisma.ptmNote.count.mock.calls[0][0].where).toEqual(call.where);
+  });
+
+  it('narrows by program, batch, teacher and a search that also matches the teacher', async () => {
+    const { service, prisma } = build();
+    await service.adminList('school-1', { programId: 'p1', batchId: 'b1', facultyId: 'fac-2', q: 'jay' });
+    const where = prisma.ptmNote.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ schoolId: 'school-1', batch: { programId: 'p1' }, batchId: 'b1', facultyId: 'fac-2' });
+    expect(where.OR).toContainEqual({ teacherName: { contains: 'jay', mode: 'insensitive' } });
+    expect(where.OR).toContainEqual({ parentName: { contains: 'jay', mode: 'insensitive' } });
+  });
+
+  it('the teacher filter offers the teachers who have logged notes in this school', async () => {
+    const { service, prisma } = build();
+    prisma.ptmNote.findMany.mockResolvedValue([{ facultyId: 'fac-1', teacherName: 'Ayush' }, { facultyId: null, teacherName: 'Left Teacher' }]);
+    await expect(service.adminOptions('school-1')).resolves.toEqual({ teachers: [{ id: 'fac-1', name: 'Ayush' }] });
+    expect(prisma.ptmNote.findMany.mock.calls[0][0]).toMatchObject({ where: { schoolId: 'school-1', facultyId: { not: null } }, distinct: ['facultyId'] });
+  });
+
+  it('the filter query takes only ids', async () => {
+    const errors = await validate(plainToInstance(AdminPtmNoteQuery, { programId: 'p', batchId: 'not-a-uuid', facultyId: 'x' }));
+    expect(errors.map((e) => e.property).sort()).toEqual(['batchId', 'facultyId', 'programId']);
+    expect(await validate(plainToInstance(AdminPtmNoteQuery, { programId: '', batchId: '', facultyId: '', q: '' }))).toEqual([]);
   });
 });
