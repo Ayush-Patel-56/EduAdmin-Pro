@@ -47,12 +47,12 @@ export class CreateSchoolDto {
   @IsIn(CLASS_OPTIONS, { each: true, message: 'Unknown class selected' })
   classes: string[];
 
-  // 1 = January … 12 = December. Defaults to April when omitted.
-  @IsOptional()
+  // 1 = January … 12 = December. The form always sends one (April by default).
   @IsInt({ message: 'Academic year start month is invalid' })
   @Min(1, { message: 'Academic year start month is invalid' })
   @Max(12, { message: 'Academic year start month is invalid' })
-  academicYearStartMonth?: number;
+  @IsNotEmpty({ message: 'Academic year start month is required' })
+  academicYearStartMonth: number;
 
   @Transform(trim)
   @Matches(ISO_DATE, { message: 'MOU start date is invalid' })

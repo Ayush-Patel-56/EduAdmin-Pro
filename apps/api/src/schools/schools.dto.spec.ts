@@ -6,6 +6,7 @@ const complete = {
   name: 'PST School',
   board: 'State Board',
   classes: ['6th', '7th'],
+  academicYearStartMonth: 4,
   mouStartDate: '2026-04-01',
   programs: ['JEE'],
   contactPerson: 'Anita Rao',
@@ -37,5 +38,12 @@ describe('CreateSchoolDto (create and edit)', () => {
       expect(await messages(without)).toContain(message);
     }
     expect(await messages({ ...complete, programs: [] })).toContain('Select at least one program');
+  });
+
+  it('requires the month the academic year starts in, as the form does', async () => {
+    const { academicYearStartMonth: _month, ...withoutMonth } = complete;
+    expect(await messages(withoutMonth)).toContain('Academic year start month is required');
+    expect(await messages({ ...complete, academicYearStartMonth: null })).toContain('Academic year start month is required');
+    expect(await messages({ ...complete, academicYearStartMonth: 13 })).toContain('Academic year start month is invalid');
   });
 });

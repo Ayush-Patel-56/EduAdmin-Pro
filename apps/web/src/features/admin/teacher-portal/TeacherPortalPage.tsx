@@ -31,6 +31,7 @@ import { downloadCv } from './cv'
 import { EditFacultyDialog } from './EditFacultyDialog'
 import { FacultyProfileDialog } from './FacultyProfileDialog'
 import { UploadsDialog } from './UploadsDialog'
+import { UploadsLinks } from './UploadsLinks'
 
 const STATUS_BADGE: Record<FacultyStatus, string> = {
   ACTIVE: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -78,7 +79,7 @@ export function TeacherPortalPage() {
   const closeFilter = useCallback(() => setFilterOpen(false), [])
   useDismiss(filterRef, filterOpen, closeFilter)
   const [importing, setImporting] = useState(false)
-  const [uploadsOpen, setUploadsOpen] = useState(false)
+  const [uploads, setUploads] = useState<'materials' | 'assignments' | null>(null)
   const [editing, setEditing] = useState<FacultyDetail | null>(null)
   const [deleting, setDeleting] = useState<DirectoryRow | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -225,7 +226,7 @@ export function TeacherPortalPage() {
         <div className="space-y-6">
           <Card
             title="Recent Study Material Uploads"
-            action={overview.data?.recentMaterials.length ? <button type="button" onClick={() => setUploadsOpen(true)} className="text-xs font-semibold text-indigo-600 hover:underline">View all</button> : undefined}
+            action={<UploadsLinks onOpen={setUploads} />}
           >
             {!overview.data ? (
               <Loader2 className="mx-auto my-10 size-5 animate-spin text-slate-300" aria-label="Loading" />
@@ -284,7 +285,7 @@ export function TeacherPortalPage() {
       </div>
 
       {importing && <ImportFacultyDialog schoolId={schoolId} onImported={refresh} onClose={() => setImporting(false)} />}
-      {uploadsOpen && <UploadsDialog schoolId={schoolId} structure={structure} initialTab="materials" onClose={() => setUploadsOpen(false)} />}
+      {uploads && <UploadsDialog schoolId={schoolId} structure={structure} initialTab={uploads} onClose={() => setUploads(null)} />}
       {profileId && !editing && (
         <FacultyProfileDialog schoolId={schoolId} facultyId={profileId} schoolName={schoolName} structure={structure} onChanged={refresh} onClose={() => openProfile(null)} />
       )}
