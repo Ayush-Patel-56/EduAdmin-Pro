@@ -18,19 +18,18 @@ const messages = async (body: object) =>
   (await validate(plainToInstance(CreateSchoolDto, body))).flatMap((e) => Object.values(e.constraints ?? {}));
 
 describe('CreateSchoolDto (create and edit)', () => {
-  it('accepts a school without a GST number, an MOU end date or an address', async () => {
+  it('accepts a school without a GST number or an MOU end date', async () => {
     expect(await messages(complete)).toEqual([]);
-    expect(await messages({ ...complete, gstNumber: '', mouEndDate: '', address: '' })).toEqual([]);
-    const { address: _address, ...noAddress } = complete;
-    expect(await messages(noAddress)).toEqual([]);
+    expect(await messages({ ...complete, gstNumber: '', mouEndDate: '' })).toEqual([]);
   });
 
-  it('requires the MOU start date, a program, and the contact person, phone and email', async () => {
+  it('requires the MOU start date, a program, and the contact person, phone, email and address', async () => {
     for (const [field, message] of [
       ['mouStartDate', 'MOU start date is required'],
       ['contactPerson', 'Contact person is required'],
       ['phone', 'Phone is required'],
       ['email', 'Email is required'],
+      ['address', 'Address is required'],
     ] as const) {
       expect(await messages({ ...complete, [field]: '   ' })).toContain(message);
       const without: Record<string, unknown> = { ...complete };

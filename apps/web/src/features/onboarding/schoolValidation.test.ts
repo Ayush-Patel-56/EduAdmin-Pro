@@ -18,21 +18,27 @@ const complete: SchoolFormValues = {
 }
 
 describe('validateSchool', () => {
-  it('needs every field except the GST number, the MOU end date and the address', () => {
+  it('needs every field except the GST number and the MOU end date', () => {
     expect(validateSchool(complete)).toEqual({})
-    expect(validateSchool({ ...complete, gstNumber: '', mouEndDate: '', address: '' })).toEqual({})
+    expect(validateSchool({ ...complete, gstNumber: '', mouEndDate: '' })).toEqual({})
+  })
+
+  it('needs the address; spaces alone are not one', () => {
+    expect(validateSchool({ ...complete, address: '' })).toEqual({ address: 'Address is required' })
+    expect(validateSchool({ ...complete, address: '   ' })).toEqual({ address: 'Address is required' })
   })
 
   it('names each missing required field, in the order they appear on the form', () => {
     const blank = { ...complete, name: '', board: ' ', classes: [], mouStartDate: '', programs: [], contactPerson: ' ', phone: '', email: '', address: '' }
     const errors = validateSchool(blank)
-    expect(Object.keys(errors)).toEqual(['name', 'board', 'classes', 'mouStartDate', 'programs', 'contactPerson', 'phone', 'email'])
+    expect(Object.keys(errors)).toEqual(['name', 'board', 'classes', 'mouStartDate', 'programs', 'contactPerson', 'phone', 'email', 'address'])
     expect(errors).toMatchObject({
       mouStartDate: 'MOU start date is required',
       programs: 'Select at least one program',
       contactPerson: 'Contact person is required',
       phone: 'Phone is required',
       email: 'Email is required',
+      address: 'Address is required',
     })
   })
 

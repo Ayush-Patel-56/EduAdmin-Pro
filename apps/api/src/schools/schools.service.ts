@@ -80,7 +80,7 @@ export class SchoolsService {
           contactPerson: dto.contactPerson ?? null,
           phone: dto.phone ? normalizeIndianMobile(dto.phone) : null,
           email: dto.email?.toLowerCase() ?? null,
-          address: dto.address ?? null,
+          address: dto.address,
           gstNumber: dto.gstNumber ?? null,
           createdById: auth.userId,
         },
@@ -375,7 +375,7 @@ export class SchoolsService {
           contactPerson: dto.contactPerson ?? null,
           phone: dto.phone ? normalizeIndianMobile(dto.phone) : null,
           email: dto.email?.toLowerCase() ?? null,
-          address: dto.address ?? null,
+          address: dto.address,
           gstNumber: dto.gstNumber ?? null,
         },
       });
