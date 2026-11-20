@@ -10,6 +10,7 @@ import { ImportMarksDialog } from './ImportMarksDialog'
 import { Card, Empty, GradePill, Kpi, Meter, Pager, Spinner } from './ui'
 import { selectClass, toneOf, toolButton } from './styles'
 
+const pickFirst = <p className="text-xs text-slate-400">Pick a class first.</p>
 const PALETTE = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#0ea5e9', '#a855f7', '#14b8a6', '#64748b']
 
 /** Uploaded Reports Overview (PRD 4.5 / 5.4): the report sheets and class analytics over them. */
@@ -34,9 +35,13 @@ export function ClassOverview({ base, school }: { base: string; school: string }
     return () => clearTimeout(t)
   }, [q])
   const filters = { year, batchId, term, subject }
-  const overview = useClassOverview(base, filters)
-  const sets = useMarkSets(base, { ...filters, q: debounced, page })
-  const v = overview.data
+  // There's no "All classes": a trend averaged over every class means little, so nothing is loaded or
+  // shown until a class is picked.
+  const picked = batchId !== ''
+  const overview = useClassOverview(base, filters, picked)
+  const sets = useMarkSets(base, { ...filters, q: debounced, page }, picked)
+  const v = picked ? overview.data : undefined
+  const sheets = picked ? sets.data : undefined
   const teacher = base.startsWith('/teacher')
 
   async function exportOverview(format: 'pdf' | 'csv') {
@@ -48,7 +53,7 @@ export function ClassOverview({ base, school }: { base: string; school: string }
       all.push(...part.items)
       if (p * part.pageSize >= part.total) break
     }
-    const label = [o?.years.find((y) => y.year === (year ?? o?.currentYear))?.label, o?.batches.find((b) => b.id === batchId)?.name ?? 'All classes', o?.terms.find((t) => t.key === term)?.label ?? 'All terms', subject || 'All subjects'].filter(Boolean).join(' · ')
+    const label = [o?.years.find((y) => y.year === (year ?? o?.currentYear))?.label, o?.batches.find((b) => b.id === batchId)?.name, o?.terms.find((t) => t.key === term)?.label ?? 'All terms', subject || 'All subjects'].filter(Boolean).join(' · ')
     const rows = all.map((s) => [s.batch.name, s.termLabel, s.subject, s.students, s.average, s.grade, s.highest, s.lowest, s.enteredBy, dayLabel(s.updatedAt.slice(0, 10))])
     const header = ['Class', 'Term', 'Subject', 'Students', 'Average %', 'Grade', 'Highest %', 'Lowest %', 'Entered by', 'Updated']
     if (format === 'csv') {
@@ -73,16 +78,16 @@ export function ClassOverview({ base, school }: { base: string; school: string }
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-wrap gap-2">
           <select aria-label="Academic year" value={year ?? o?.currentYear ?? ''} onChange={(e) => { setYear(Number(e.target.value)); setPage(1) }} className={selectClass}>{o?.years.map((y) => <option key={y.year} value={y.year}>{y.label}</option>)}</select>
-          <select aria-label="Class" value={batchId} onChange={(e) => { setBatchId(e.target.value); setPage(1) }} className={selectClass}><option value="">All classes</option>{o?.batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
+          <select aria-label="Class" value={batchId} onChange={(e) => { setBatchId(e.target.value); setPage(1) }} className={selectClass}><option value="" disabled>Select a class</option>{o?.batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
           <select aria-label="Term" value={term} onChange={(e) => { setTerm(e.target.value); setPage(1) }} className={selectClass}><option value="">All terms</option>{o?.terms.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</select>
           <select aria-label="Subject" value={subject} onChange={(e) => { setSubject(e.target.value); setPage(1) }} className={selectClass}><option value="">All subjects</option>{o?.subjects.map((s) => <option key={s} value={s}>{s}</option>)}</select>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => setExporting(true)} disabled={!v || !sets.data?.total} className={toolButton}><Download className="size-4" /> Export</button>
+          <button type="button" onClick={() => setExporting(true)} disabled={!v || !sheets?.total} className={toolButton}><Download className="size-4" /> Export</button>
           {o?.canWrite && <button type="button" onClick={() => setUploading(true)} className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-white shadow-sm hover:bg-ink-hover"><Upload className="size-4" /> {teacher ? 'Upload Report' : 'Import Student Report'}</button>}
         </div>
       </div>
-      <ErrorBanner message={overview.error?.message ?? sets.error?.message ?? options.error?.message} />
+      <ErrorBanner message={(picked ? (overview.error?.message ?? sets.error?.message) : undefined) ?? options.error?.message} />
 
       <div className="mt-5 grid gap-4 sm:grid-cols-3">
         <Kpi icon={UsersRound} iconClass="bg-sky-50 text-sky-600" value={v?.kpis.students} label="Students reported" sub={v ? v.year.label : ' '} />
@@ -93,13 +98,13 @@ export function ClassOverview({ base, school }: { base: string; school: string }
       <div className="mt-5 grid gap-5 xl:grid-cols-3">
         <div className="min-w-0 space-y-5 xl:col-span-2">
           <Card title="Class Performance Trend" sub="Average % by subject across the year's terms">
-            {!v ? <Spinner /> : v.trend.length === 0 ? <Empty icon={TrendingUp} title="No report sheets yet" sub="Upload a sheet of term marks to see the trend." /> : <TrendChart overview={v} />}
+            {!picked ? <Empty icon={TrendingUp} title="Pick a class to see its performance trend" sub="Choose a class from the Class list above; each class's trend is shown on its own." /> : !v ? <Spinner /> : v.trend.length === 0 ? <Empty icon={TrendingUp} title="No report sheets yet" sub="Upload a sheet of term marks to see the trend." /> : <TrendChart overview={v} />}
           </Card>
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-900">{teacher ? 'Recent Reports' : 'Uploaded Reports'}</h3>
-                <p className="mt-0.5 text-xs text-slate-500">{sets.data ? `${sets.data.total} sheet${sets.data.total === 1 ? '' : 's'}` : 'Loading…'}</p>
+                <p className="mt-0.5 text-xs text-slate-500">{!picked ? 'Pick a class first' : sheets ? `${sheets.total} sheet${sheets.total === 1 ? '' : 's'}` : 'Loading…'}</p>
               </div>
               <label className="relative">
                 <span className="sr-only">Search reports</span>
@@ -107,14 +112,16 @@ export function ClassOverview({ base, school }: { base: string; school: string }
                 <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search class or subject" className="h-9 w-full rounded-lg border border-slate-200 pr-3 pl-9 text-sm focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 focus:outline-none sm:w-56" />
               </label>
             </div>
-            {!sets.data ? (
+            {!picked ? (
+              <Empty icon={FileSpreadsheet} title="Pick a class to see its report sheets" />
+            ) : !sheets ? (
               <Spinner />
-            ) : sets.data.items.length === 0 ? (
+            ) : sheets.items.length === 0 ? (
               <Empty icon={FileSpreadsheet} title="No report sheets match" sub={o?.canWrite ? 'Upload a sheet of term marks (Name, Roll No, Marks, Max Marks).' : undefined} />
             ) : (
               <>
                 <ul className="divide-y divide-slate-100">
-                  {sets.data.items.map((s) => (
+                  {sheets.items.map((s) => (
                     <li key={`${s.batch.id}|${s.term}|${s.subject}`}>
                       <button type="button" onClick={() => setOpen(s)} className="flex w-full flex-col gap-2 px-5 py-3.5 text-left hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
@@ -130,14 +137,14 @@ export function ClassOverview({ base, school }: { base: string; school: string }
                     </li>
                   ))}
                 </ul>
-                <Pager page={page} pageSize={sets.data.pageSize} total={sets.data.total} onPage={setPage} />
+                <Pager page={page} pageSize={sheets.pageSize} total={sheets.total} onPage={setPage} />
               </>
             )}
           </section>
         </div>
         <div className="min-w-0 space-y-5">
           <Card title="Top Performers" sub="By overall percentage in these filters">
-            {!v ? <Spinner /> : v.topPerformers.length === 0 ? <p className="text-xs text-slate-400">No marks yet.</p> : (
+            {!picked ? pickFirst : !v ? <Spinner /> : v.topPerformers.length === 0 ? <p className="text-xs text-slate-400">No marks yet.</p> : (
               <ol className="space-y-3">
                 {v.topPerformers.map((t, i) => (
                   <li key={t.student.id} className="flex items-center gap-3">
@@ -150,7 +157,7 @@ export function ClassOverview({ base, school }: { base: string; school: string }
             )}
           </Card>
           <Card title="Needs Attention" sub={`Subjects averaging below ${o?.needsAttentionPercent ?? 65}%`}>
-            {!v ? <Spinner /> : v.needsAttention.length === 0 ? <p className="text-xs text-slate-400">{v.subjectAverages.length ? `Every subject averages ${o?.needsAttentionPercent ?? 65}% or more.` : 'No marks yet.'}</p> : (
+            {!picked ? pickFirst : !v ? <Spinner /> : v.needsAttention.length === 0 ? <p className="text-xs text-slate-400">{v.subjectAverages.length ? `Every subject averages ${o?.needsAttentionPercent ?? 65}% or more.` : 'No marks yet.'}</p> : (
               <ul className="space-y-3">
                 {v.needsAttention.map((s) => (
                   <li key={s.subject}>
@@ -163,7 +170,7 @@ export function ClassOverview({ base, school }: { base: string; school: string }
             )}
           </Card>
           <Card title="Mistake Analysis" sub="Test topics most often wrong or skipped this year">
-            {!v ? <Spinner /> : v.mistakes.length === 0 ? <p className="text-xs text-slate-400">Shown once tests are graded question by question.</p> : (
+            {!picked ? pickFirst : !v ? <Spinner /> : v.mistakes.length === 0 ? <p className="text-xs text-slate-400">Shown once tests are graded question by question.</p> : (
               <ul className="space-y-3">
                 {v.mistakes.map((m) => (
                   <li key={`${m.subject}|${m.topic}`} className="text-sm">

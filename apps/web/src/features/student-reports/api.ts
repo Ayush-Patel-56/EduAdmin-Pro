@@ -210,12 +210,12 @@ export function useStudentReport(base: string, studentId: string | null, year: n
 
 export type OverviewFilters = { year?: number | null; term?: string; batchId?: string; subject?: string }
 
-export function useClassOverview(base: string, f: OverviewFilters) {
-  return useQuery({ queryKey: [base, 'overview', f], queryFn: () => api<ClassOverview>(`${base}/overview?${query(f)}`), placeholderData: keepPreviousData })
+export function useClassOverview(base: string, f: OverviewFilters, enabled = true) {
+  return useQuery({ queryKey: [base, 'overview', f], queryFn: () => api<ClassOverview>(`${base}/overview?${query(f)}`), placeholderData: keepPreviousData, enabled })
 }
 
-export function useMarkSets(base: string, f: OverviewFilters & { q?: string; page?: number }) {
-  return useQuery({ queryKey: [base, 'sets', f], queryFn: () => api<Page<MarkSet>>(`${base}/marks/sets?${query(f)}`), placeholderData: keepPreviousData })
+export function useMarkSets(base: string, f: OverviewFilters & { q?: string; page?: number }, enabled = true) {
+  return useQuery({ queryKey: [base, 'sets', f], queryFn: () => api<Page<MarkSet>>(`${base}/marks/sets?${query(f)}`), placeholderData: keepPreviousData, enabled })
 }
 
 export function useMarkSet(base: string, key: { batchId: string; year: number; term: Term; subject: string } | null) {
