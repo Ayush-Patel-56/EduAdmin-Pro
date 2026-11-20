@@ -451,7 +451,10 @@ export class MarksService {
     requireWritableYear(await yearContext(this.prisma, actor.schoolId), dto.year);
     const subjects = dto.subjects.map((s) => s.subject);
     if (new Set(subjects).size !== subjects.length) throw new BadRequestException('Each subject can be on the report once');
-    for (const s of dto.subjects) if (s.marks > s.maxMarks) throw new BadRequestException(`${s.subject}: marks obtained can't be more than the total marks`);
+    for (const s of dto.subjects) {
+      if (s.marks > s.maxMarks) throw new BadRequestException(`${s.subject}: marks obtained can't be more than the total marks`);
+      if (s.marks < -s.maxMarks) throw new BadRequestException(`${s.subject}: marks obtained can't be less than minus the total marks (${-s.maxMarks})`);
+    }
     const updatedBy = await actorName(this.prisma, actor);
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -581,19 +584,25 @@ export function sameName(rosterName: string, sheetName: string): boolean {
   return !!a && a === words(sheetName);
 }
 
-/** A number cell: blank is null; up to two decimals; "92%" reads as 92 where a percentage is allowed. */
+/**
+ * A number cell: blank is null; up to two decimals, with an optional leading
+ * minus (the typed "-" or the "−" / "–" that some apps write); "92%" reads as
+ * 92 where a percentage is allowed. Each caller checks the range.
+ */
 function numberCell(value: string | undefined, label: string, errors: string[], opts: { required: boolean; percentSign?: boolean }): number | null {
-  let text = clean(value).replace(/,/g, '');
+  let text = clean(value).replace(/,/g, '').replace(/^[−–]/, '-');
   if (opts.percentSign) text = text.replace(/%$/, '').trim();
   if (!text) {
     if (opts.required) errors.push(`${label} is required`);
     return null;
   }
-  if (!/^\d+(\.\d{1,2})?$/.test(text)) {
+  const match = /^(-?) ?(\d+(\.\d{1,2})?)$/.exec(text);
+  if (!match) {
     errors.push(`${label} must be a number with up to two decimals`);
     return null;
   }
-  return Number(text);
+  const n = Number(match[2]);
+  return match[1] && n ? -n : n; // "-0" is 0
 }
 
 /**
@@ -628,10 +637,13 @@ export function checkSheet(
     else if (roll) seen.set(roll, row);
     const marks = numberCell(r.marks, 'Marks', errors, { required: true });
     const maxMarks = numberCell(r.maxMarks, 'Max Marks', errors, { required: true });
-    if (maxMarks !== null && (maxMarks <= 0 || maxMarks > MAX_MAX_MARKS)) errors.push(`Max Marks must be more than 0 and at most ${MAX_MAX_MARKS}`);
-    if (marks !== null && maxMarks !== null && marks > maxMarks) errors.push(`Marks (${marks}) can't be more than Max Marks (${maxMarks})`);
+    const maxOk = maxMarks !== null && maxMarks > 0 && maxMarks <= MAX_MAX_MARKS;
+    if (maxMarks !== null && !maxOk) errors.push(`Max Marks must be more than 0 and at most ${MAX_MAX_MARKS}`);
+    if (marks !== null && maxOk && marks > maxMarks) errors.push(`Marks (${marks}) can't be more than Max Marks (${maxMarks})`);
+    // Negative marking can take a score below 0, never below minus the paper's total.
+    if (marks !== null && maxOk && marks < -maxMarks) errors.push(`Marks (${marks}) can't be less than minus Max Marks (${-maxMarks})`);
     const attendance = numberCell(r.attendance, 'Attendance', errors, { required: false, percentSign: true });
-    if (attendance !== null && attendance > 100) errors.push('Attendance must be a percentage from 0 to 100');
+    if (attendance !== null && (attendance < 0 || attendance > 100)) errors.push('Attendance must be a percentage from 0 to 100');
     const remarks = clean(r.remarks) || null;
     if (remarks && remarks.length > MAX_REMARKS) errors.push(`Remarks must be at most ${MAX_REMARKS} characters`);
     const prior = student ? existing.get(student.id) : undefined;

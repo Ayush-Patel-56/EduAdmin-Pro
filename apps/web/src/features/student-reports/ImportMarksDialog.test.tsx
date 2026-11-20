@@ -17,6 +17,16 @@ const options: ReportOptions = {
 }
 
 describe('Import student report', () => {
+  it('says marks can be negative (negative marking), down to minus Max Marks', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } })
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <ImportMarksDialog base="/schools/s1/student-reports" options={options} onClose={() => {}} />
+      </QueryClientProvider>,
+    )
+    expect(html).toContain('can be negative (negative marking), down to minus Max Marks')
+  })
+
   it('says the sheet can be dragged in as well as selected', () => {
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } })
     const html = renderToStaticMarkup(

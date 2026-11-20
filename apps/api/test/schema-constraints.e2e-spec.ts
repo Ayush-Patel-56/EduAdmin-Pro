@@ -52,7 +52,7 @@ describe('student report CHECK constraints (e2e)', () => {
 
   it.each([
     ['DailyRating_levels_check', 'CHECK ((((attitude >= 1) AND (attitude <= 5)) AND ((behaviour >= 1) AND (behaviour <= 5)) AND ((focus >= 1) AND (focus <= 5)) AND ((interaction >= 1) AND (interaction <= 5))))'],
-    ['StudentMark_marks_check', 'CHECK ((("maxMarks" > (0)::numeric) AND (marks >= (0)::numeric) AND (marks <= "maxMarks")))'],
+    ['StudentMark_marks_check', 'CHECK ((("maxMarks" > (0)::numeric) AND (marks >= (- "maxMarks")) AND (marks <= "maxMarks")))'],
     ['StudentMark_attendance_check', 'CHECK (((attendance IS NULL) OR ((attendance >= (0)::numeric) AND (attendance <= (100)::numeric))))'],
     ['StudentMark_year_check', 'CHECK ((("academicYear" >= 2000) AND ("academicYear" <= 2100)))'],
     ['ProgressReport_year_check', 'CHECK ((("academicYear" >= 2000) AND ("academicYear" <= 2100)))'],

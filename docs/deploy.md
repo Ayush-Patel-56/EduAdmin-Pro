@@ -145,6 +145,14 @@ A new table only (`PasswordResetToken`), in a transaction with `lock_timeout = 1
 - **Sign out other devices** (same place): ends every session but the current one.
 - Every reset or change emails the owner that their password changed, so one they didn't make is noticed. The daily clean-up deletes reset codes a day after they expire.
 
+## Negative marks (`20261120090000_student_mark_negative`)
+
+Only widens a check, in a transaction with `lock_timeout = 10s`: `StudentMark_marks_check` now allows marks from minus the paper's total up to the total (it was 0 up to the total). Every existing row already passes, so there is nothing to check before deploying.
+
+- **Import student report** and **Generate / Edit Progress Report** accept a negative "Marks" (negative marking), with the typed `-` or the Unicode `−`, down to minus Max Marks; below that the row is refused with the reason. Max Marks still has to be more than 0, and attendance 0 to 100.
+- A negative score reads as a negative percentage and grade F everywhere; the progress bars and the trend chart stop at 0.
+- **Rolling back** to the old check needs every negative mark gone first: `SELECT count(*) FROM "StudentMark" WHERE "marks" < 0;` must be 0.
+
 ## Security hardening (October 2026)
 
 No migration. What changes for people and for deploying:

@@ -8,6 +8,7 @@ import { labelClass, textareaClass } from '@/components/ui/formStyles'
 import { fileSlug, pct, query, reportsBase, useInvalidateReports, useProgressList, useReportOptions, useRoster, type Grade, type ProgressCard, type ProgressOne, type ReportOptions, type Term } from './api'
 import { Empty, GradePill, Kpi, Pager, Spinner } from './ui'
 import { selectClass, toolButton } from './styles'
+import { markNumber, subjectMarksError, type MarksRow } from './marksForm'
 
 const gradeFor = (scale: ReportOptions['gradeScale'], percent: number | null): Grade | null => (percent === null ? null : (scale.find((g) => percent >= g.min)?.grade ?? 'F'))
 
@@ -218,7 +219,7 @@ async function progressPdf(c: ProgressCard, school: string) {
   doc.save(`progress-report-${fileSlug(c.student.fullName)}-${fileSlug(c.termLabel)}-${c.year}.pdf`)
 }
 
-type Row = { subject: string; marks: string; maxMarks: string }
+type Row = MarksRow
 
 /**
  * Generate / Edit Progress Report: batch, student and term first; then the
@@ -258,8 +259,6 @@ function ReportDialog({ base, options, card, year: initialYear, onSaved, onClose
   )
 }
 
-const numberOk = (s: string) => /^\d+(\.\d{1,2})?$/.test(s.trim())
-
 function MarksForm({ base, options, report, keyOf, isNew, onSaved, onClose }: { base: string; options: ReportOptions; report: ProgressOne; keyOf: { studentId: string; year: number; term: Term }; isNew: boolean; onSaved: () => Promise<unknown>; onClose: () => void }) {
   const [rows, setRows] = useState<Row[]>(() => (report.exists ? report.subjects.map((s) => ({ subject: s.subject, marks: String(s.marks), maxMarks: String(s.maxMarks) })) : [{ subject: '', marks: '', maxMarks: '100' }]))
   const [teacherRemarks, setTeacherRemarks] = useState(report.teacherRemarks ?? '')
@@ -274,19 +273,13 @@ function MarksForm({ base, options, report, keyOf, isNew, onSaved, onClose }: { 
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    if (!rows.length) return setError('Add at least one subject')
-    for (const r of rows) {
-      if (!r.subject) return setError('Select each subject')
-      if (!numberOk(r.marks) || !numberOk(r.maxMarks)) return setError(`${r.subject}: enter marks as numbers with up to two decimals`)
-      if (Number(r.maxMarks) <= 0) return setError(`${r.subject}: total marks must be more than 0`)
-      if (Number(r.marks) > Number(r.maxMarks)) return setError(`${r.subject}: marks obtained can’t be more than the total`)
-    }
-    if (new Set(rows.map((r) => r.subject)).size !== rows.length) return setError('Each subject can be on the report once')
+    const problem = subjectMarksError(rows)
+    if (problem) return setError(problem)
     setBusy(true)
     try {
       await api(`${base}/progress-reports`, {
         method: 'PUT',
-        body: JSON.stringify({ ...keyOf, subjects: rows.map((r) => ({ subject: r.subject, marks: Number(r.marks), maxMarks: Number(r.maxMarks) })), teacherRemarks, principalRemarks }),
+        body: JSON.stringify({ ...keyOf, subjects: rows.map((r) => ({ subject: r.subject, marks: markNumber(r.marks), maxMarks: markNumber(r.maxMarks) })), teacherRemarks, principalRemarks }),
       })
       await onSaved()
       onClose()
@@ -296,8 +289,8 @@ function MarksForm({ base, options, report, keyOf, isNew, onSaved, onClose }: { 
     }
   }
 
-  const total = rows.reduce((a, r) => a + (numberOk(r.marks) ? Number(r.marks) : 0), 0)
-  const max = rows.reduce((a, r) => a + (numberOk(r.maxMarks) ? Number(r.maxMarks) : 0), 0)
+  const total = rows.reduce((a, r) => a + (markNumber(r.marks) ?? 0), 0)
+  const max = rows.reduce((a, r) => a + (markNumber(r.maxMarks) ?? 0), 0)
   const overall = max > 0 ? Math.round((total / max) * 10000) / 100 : null
   return (
     <form onSubmit={submit} noValidate className="space-y-4">
@@ -306,11 +299,13 @@ function MarksForm({ base, options, report, keyOf, isNew, onSaved, onClose }: { 
         <p className={labelClass}>Subject marks *</p>
         <div className="space-y-2">
           {rows.map((r, i) => {
-            const p = numberOk(r.marks) && numberOk(r.maxMarks) && Number(r.maxMarks) > 0 ? Math.round((Number(r.marks) / Number(r.maxMarks)) * 10000) / 100 : null
+            const obtained = markNumber(r.marks)
+            const outOf = markNumber(r.maxMarks)
+            const p = obtained !== null && outOf !== null && outOf > 0 ? Math.round((obtained / outOf) * 10000) / 100 : null
             return (
               <div key={i} className="grid grid-cols-[1fr_72px_72px_44px_32px] items-center gap-2">
                 <select aria-label="Subject" value={r.subject} onChange={(e) => set(i, { subject: e.target.value })} className={`${selectClass} min-w-0`}><option value="">Subject</option>{options.subjects.filter((s) => s === r.subject || !used.has(s)).map((s) => <option key={s} value={s}>{s}</option>)}</select>
-                <input aria-label="Obtained" inputMode="decimal" value={r.marks} onChange={(e) => set(i, { marks: e.target.value })} placeholder="Obtained" className={`${selectClass} min-w-0 px-2`} />
+                <input aria-label="Obtained" inputMode="text" value={r.marks} onChange={(e) => set(i, { marks: e.target.value })} placeholder="Obtained" className={`${selectClass} min-w-0 px-2`} />
                 <input aria-label="Total" inputMode="decimal" value={r.maxMarks} onChange={(e) => set(i, { maxMarks: e.target.value })} placeholder="Total" className={`${selectClass} min-w-0 px-2`} />
                 <GradePill grade={gradeFor(options.gradeScale, p)} />
                 <button type="button" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} disabled={rows.length === 1} aria-label="Remove subject" className="flex size-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"><X className="size-4" /></button>

@@ -125,6 +125,22 @@ describe('Import student report: each row checked against the batch', () => {
     ]);
   });
 
+  it('negative marks (negative marking): a minus sign, typed or the Unicode one, down to minus the Max Marks', () => {
+    const at = (marks: string, maxMarks = '10') => checkSheet([{ rollNo: 'R01', name: 'Aarav Mehta', marks, maxMarks }], { id: 'b-mine', name: 'JEE A' }, roster, new Map(), null);
+    expect(at('-5').ready).toEqual([{ studentId: 's1', marks: -5, maxMarks: 10, attendance: null, remarks: null }]);
+    expect(at('−2.5').ready[0].marks).toBe(-2.5);
+    expect(at(' - 1.25 ').ready[0].marks).toBe(-1.25);
+    expect(at('-10').ready[0].marks).toBe(-10);
+    expect(Object.is(at('-0').ready[0].marks, 0)).toBe(true);
+    expect(at('-1,000', '1000').ready[0].marks).toBe(-1000);
+    expect(at('-10.5').rows[0].errors).toEqual(["Marks (-10.5) can't be less than minus Max Marks (-10)"]);
+    for (const bad of ['--5', '5-', '-', '-.5', '-1.234']) expect(at(bad).rows[0].errors).toEqual(['Marks must be a number with up to two decimals']);
+    // Only marks can be negative.
+    expect(at('5', '-10').rows[0].errors).toEqual(['Max Marks must be more than 0 and at most 10000']);
+    const attendance = checkSheet([{ rollNo: 'R01', name: 'Aarav Mehta', marks: '5', maxMarks: '10', attendance: '-5%' }], { id: 'b-mine', name: 'JEE A' }, roster, new Map(), null);
+    expect(attendance.rows[0].errors).toEqual(['Attendance must be a percentage from 0 to 100']);
+  });
+
   it('a student who already has marks for the term and subject is an update', () => {
     const prior = new Map([['s1', { batchId: 'b-mine', batchName: 'JEE A', enteredBy: 'Ms Rao' }]]);
     expect(checkSheet([{ rollNo: 'R01', name: 'Aarav Mehta', marks: '5', maxMarks: '10' }], { id: 'b-mine', name: 'JEE A' }, roster, prior, null).rows[0]).toMatchObject({ action: 'update', label: 'R01 · Aarav Mehta' });
@@ -240,6 +256,14 @@ describe('MarksService: access and writes', () => {
     await expect(service.saveProgress(admin, report({ subjects: [{ subject: 'Physics', marks: 6, maxMarks: 5 }] }))).rejects.toThrow("Physics: marks obtained can't be more than the total marks");
     const errors = validateSync(plainToInstance(ProgressReportDto, { ...reportBody, studentId: '5f0c9a35-1d6b-4f8e-9c7a-2b1e3d4c5a6b', subjects: [{ subject: 'Art', marks: -1, maxMarks: 0 }] }));
     expect(errors.map((e) => e.property)).toEqual(['subjects']);
+  });
+
+  it('a progress report keeps negative marks (negative marking), down to minus the total', async () => {
+    const body = (marks: number) => plainToInstance(ProgressReportDto, { ...reportBody, studentId: '5f0c9a35-1d6b-4f8e-9c7a-2b1e3d4c5a6b', subjects: [{ subject: 'Physics', marks, maxMarks: 50 }] });
+    expect(validateSync(body(-12.5))).toEqual([]);
+    expect(validateSync(body(-50))).toEqual([]);
+    const service = new MarksService(prismaMock() as unknown as PrismaService);
+    await expect(service.saveProgress(admin, report({ subjects: [{ subject: 'Physics', marks: -51, maxMarks: 50 }] }))).rejects.toThrow("Physics: marks obtained can't be less than minus the total marks (-50)");
   });
 
   it("a new report goes in the student's batch; a teacher of another batch is refused before anything changes", async () => {
