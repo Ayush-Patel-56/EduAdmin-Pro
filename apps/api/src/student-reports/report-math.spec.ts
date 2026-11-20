@@ -10,6 +10,7 @@ import {
   gradeOf,
   percent,
   rankScores,
+  termMarks,
   topicKey,
   topicStrength,
   yearLabel,
@@ -136,5 +137,42 @@ describe('student report rules', () => {
     expect(REPORT_SUBJECTS).toEqual(['Physics', 'Chemistry', 'Mathematics', 'Biology', 'Botany', 'Zoology', 'English', 'Computer Science']);
     // Every assignment subject can have term marks too.
     for (const s of WORKSPACE_SUBJECTS) expect(REPORT_SUBJECTS).toContain(s);
+  });
+});
+
+describe('termMarks: the term marks (uploaded sheets and progress reports) on the 5-in-1 report', () => {
+  it('one card per term in term order, subjects by name, with totals, grades, sheet attendance and the remarks', () => {
+    const t = termMarks(
+      [
+        { term: 'TERM_1', subject: 'Physics', marks: 78, maxMarks: 100, attendance: 92, remarks: 'Good' },
+        { term: 'TERM_1', subject: 'Chemistry', marks: 64, maxMarks: 80, attendance: null, remarks: null },
+        { term: 'UNIT_TEST_1', subject: 'Physics', marks: 18, maxMarks: 25, attendance: 90, remarks: null },
+      ],
+      [{ term: 'TERM_1', teacherRemarks: 'Keep it up', principalRemarks: null }],
+    );
+    expect(t.terms.map((x) => x.term)).toEqual(['UNIT_TEST_1', 'TERM_1']);
+    expect(t.terms[1]).toEqual({
+      term: 'TERM_1',
+      label: 'Term 1',
+      subjects: [
+        { subject: 'Chemistry', marks: 64, maxMarks: 80, percent: 80, grade: 'A+', attendance: null, remarks: null },
+        { subject: 'Physics', marks: 78, maxMarks: 100, percent: 78, grade: 'A', attendance: 92, remarks: 'Good' },
+      ],
+      marks: 142,
+      maxMarks: 180,
+      percent: 78.89,
+      grade: 'A',
+      attendance: 92,
+      teacherRemarks: 'Keep it up',
+      principalRemarks: null,
+    });
+    expect(t.terms[0]).toMatchObject({ marks: 18, maxMarks: 25, percent: 72, teacherRemarks: null });
+    // The year: every mark of every term; attendance the mean of the sheets' percentages.
+    expect(t.overall).toEqual({ marks: 160, maxMarks: 205, percent: 78.05, grade: 'A' });
+    expect(t.attendance).toBe(91);
+  });
+
+  it('nothing entered: no terms and every figure null', () => {
+    expect(termMarks([], [{ term: 'TERM_1', teacherRemarks: 'x', principalRemarks: null }])).toEqual({ terms: [], overall: null, attendance: null });
   });
 });

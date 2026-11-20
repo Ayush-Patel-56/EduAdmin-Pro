@@ -52,6 +52,10 @@ export type StudentReport = {
     behaviourScore: number | null
     attendanceRate: number | null
     ptmMeetings: number
+    /** Tests first; with no tests this year, the term marks (report sheets, progress reports). */
+    overallFrom: 'TESTS' | 'TERM_MARKS' | null
+    /** Class attendance first; with none this year, the report sheets' attendance %. */
+    attendanceFrom: 'CLASSES' | 'REPORT_SHEETS' | null
   }
   performance: {
     subjects: { subject: string; marks: number; totalMarks: number; percent: number | null; grade: Grade | null; tests: number }[]
@@ -107,7 +111,33 @@ export type StudentReport = {
       notes: { date: string; teacherName: string; teacherLeft?: boolean; parentName: string | null; parentAttended: boolean; discussion: string; actionItems: string | null; followUpDate: string | null }[]
     }
   }
-  coverage: { tests: number; answers: number; gradedAssignments: number; ratings: number; classes: number; ptmNotes: number }
+  /** The year's term marks: uploaded report sheets and Generate Progress Report. */
+  termMarks: {
+    terms: TermCard[]
+    overall: { marks: number; maxMarks: number; percent: number | null; grade: Grade | null } | null
+    attendance: number | null
+  }
+  coverage: { tests: number; answers: number; gradedAssignments: number; ratings: number; classes: number; ptmNotes: number; termMarks: number }
+}
+
+export type TermCard = {
+  term: Term
+  label: string
+  subjects: { subject: string; marks: number; maxMarks: number; percent: number | null; grade: Grade | null; attendance: number | null; remarks: string | null }[]
+  marks: number
+  maxMarks: number
+  percent: number | null
+  grade: Grade | null
+  attendance: number | null
+  teacherRemarks: string | null
+  principalRemarks: string | null
+}
+
+/** Says where a headline figure came from when it isn't the usual source (tests, class attendance). */
+export function sourceNote(from: StudentReport['summary']['overallFrom'] | StudentReport['summary']['attendanceFrom']): string | null {
+  if (from === 'TERM_MARKS') return 'from term marks'
+  if (from === 'REPORT_SHEETS') return 'from report sheets'
+  return null
 }
 
 export type MarkSet = {

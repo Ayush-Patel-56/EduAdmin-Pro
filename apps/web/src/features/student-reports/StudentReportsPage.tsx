@@ -5,7 +5,7 @@ import { ErrorBanner } from '@/components/ui/form'
 import { Dialog } from '@/components/ui/Dialog'
 import { useDismiss } from '@/components/ui/useDismiss'
 import { assessmentsBase } from '@/features/assessments/api'
-import { pct, reportsBase, useReportOptions, useStudentReport, useStudentSearch, type StudentReport } from './api'
+import { pct, reportsBase, sourceNote, useReportOptions, useStudentReport, useStudentSearch, type StudentReport } from './api'
 import { ClassOverview } from './ClassOverview'
 import { exportReportCsv, exportReportPdf, exportReportXlsx } from './exportReport'
 import { ImportResultsDialog } from './ImportResultsDialog'
@@ -147,7 +147,7 @@ function Hub({ base, assessments, school }: { base: string; assessments: string;
           </div>
           <p className="mt-6 flex items-start gap-1.5 text-[11px] text-slate-400">
             <Info className="mt-px size-3.5 shrink-0" />
-            {r.year.label} ({r.year.from} to {r.year.to}). Worked out from {r.coverage.tests} test result{r.coverage.tests === 1 ? '' : 's'}, {r.coverage.answers} graded answer{r.coverage.answers === 1 ? '' : 's'}, {r.coverage.gradedAssignments} graded assignment{r.coverage.gradedAssignments === 1 ? '' : 's'}, {r.coverage.ratings} rating{r.coverage.ratings === 1 ? '' : 's'}, {r.coverage.classes} class{r.coverage.classes === 1 ? '' : 'es'} of attendance and {r.coverage.ptmNotes} PTM note{r.coverage.ptmNotes === 1 ? '' : 's'}. “—” means there isn’t enough data yet.
+            {r.year.label} ({r.year.from} to {r.year.to}). Worked out from {r.coverage.tests} test result{r.coverage.tests === 1 ? '' : 's'}, {r.coverage.answers} graded answer{r.coverage.answers === 1 ? '' : 's'}, {r.coverage.gradedAssignments} graded assignment{r.coverage.gradedAssignments === 1 ? '' : 's'}, {r.coverage.ratings} rating{r.coverage.ratings === 1 ? '' : 's'}, {r.coverage.classes} class{r.coverage.classes === 1 ? '' : 'es'} of attendance, {r.coverage.ptmNotes} PTM note{r.coverage.ptmNotes === 1 ? '' : 's'} and {r.coverage.termMarks} term mark{r.coverage.termMarks === 1 ? '' : 's'}. “—” means there isn’t enough data yet.
           </p>
         </>
       )}
@@ -175,21 +175,22 @@ function ReportHeader({ r }: { r: StudentReport }) {
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:flex lg:gap-3">
-          <HeadStat label="Overall Score" value={pct(s.overallPercent)} extra={<GradePill grade={s.grade} />} />
+          <HeadStat label="Overall Score" value={pct(s.overallPercent)} extra={<GradePill grade={s.grade} />} note={sourceNote(s.overallFrom)} />
           <HeadStat label="Batch Rank" value={s.batchRank ? `#${s.batchRank.rank}` : '—'} extra={s.batchRank && <span className="text-[11px] font-semibold text-emerald-700">Top {s.batchRank.topPercent}%</span>} />
           <HeadStat label="Behavior Score" value={s.behaviourScore === null ? '—' : `${s.behaviourScore}`} extra={<span className="text-[11px] text-slate-500">/ 5</span>} icon={<Star className="size-3.5 text-amber-500" />} />
-          <HeadStat label="Attendance" value={pct(s.attendanceRate)} extra={<span className="text-[11px] text-slate-500">{s.ptmMeetings} PTM</span>} icon={<ClipboardCheck className="size-3.5 text-sky-500" />} />
+          <HeadStat label="Attendance" value={pct(s.attendanceRate)} extra={<span className="text-[11px] text-slate-500">{s.ptmMeetings} PTM</span>} icon={<ClipboardCheck className="size-3.5 text-sky-500" />} note={sourceNote(s.attendanceFrom)} />
         </div>
       </div>
     </section>
   )
 }
 
-function HeadStat({ label, value, extra, icon }: { label: string; value: string; extra?: ReactNode; icon?: ReactNode }) {
+function HeadStat({ label, value, extra, icon, note }: { label: string; value: string; extra?: ReactNode; icon?: ReactNode; note?: string | null }) {
   return (
     <div className="min-w-0 rounded-xl bg-slate-50 px-4 py-3 lg:min-w-[128px]">
       <p className="flex items-center gap-1 text-[10px] font-bold tracking-wider text-slate-500 uppercase">{icon}{label}</p>
       <p className="mt-1 flex items-baseline gap-2 text-xl font-bold text-slate-900 tabular-nums">{value} {extra}</p>
+      {note && <p className="mt-0.5 text-[10px] text-slate-500">{note}</p>}
     </div>
   )
 }

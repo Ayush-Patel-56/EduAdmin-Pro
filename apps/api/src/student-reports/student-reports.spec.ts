@@ -519,6 +519,41 @@ describe('StudentReportService: the hub', () => {
     expect(p.ptmNote.findMany.mock.calls[1][0].where).not.toHaveProperty('facultyId');
   });
 
+  it('term marks (uploaded sheets, progress reports) reach the 5-in-1 report; with no tests or classes the header uses them, and says so', async () => {
+    const prisma = prismaMock();
+    prisma.student.findFirst.mockResolvedValue({ id: 'st-1', fullName: 'Aarav', rollNumber: 'R01', admissionNumber: null, classLevel: null, status: 'ACTIVE', batchId: 'b-mine', batch: { id: 'b-mine', name: 'JEE A' }, program: null });
+    Object.assign(prisma, {
+      testResult: { findMany: vi.fn().mockResolvedValue([]) },
+      assignmentSubmission: { findMany: vi.fn().mockResolvedValue([]) },
+      testAnswer: { findMany: vi.fn().mockResolvedValue([]) },
+      attendanceRecord: { groupBy: vi.fn().mockResolvedValue([]) },
+      ptmNote: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
+    });
+    Object.assign(prisma.dailyRating, { aggregate: vi.fn().mockResolvedValue({ _avg: {}, _count: { _all: 0 } }), groupBy: vi.fn().mockResolvedValue([]) });
+    prisma.studentMark.findMany.mockResolvedValue([
+      { term: 'TERM_1', subject: 'Physics', marks: '78.00', maxMarks: '100.00', attendance: '92.00', remarks: null },
+      { term: 'TERM_1', subject: 'Chemistry', marks: '64.00', maxMarks: '80.00', attendance: null, remarks: null },
+    ]);
+    prisma.progressReport.findMany.mockResolvedValue([{ term: 'TERM_1', teacherRemarks: 'Keep it up', principalRemarks: null }]);
+    const service = new StudentReportService(prisma as unknown as PrismaService);
+    const r = await service.report(admin, 'st-1');
+    const year = prisma.studentMark.findMany.mock.calls[0][0].where.academicYear;
+    expect(prisma.studentMark.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', studentId: 'st-1', academicYear: year });
+    expect(prisma.progressReport.findMany.mock.calls[0][0].where).toEqual({ schoolId: 'school-1', studentId: 'st-1', academicYear: year });
+    expect(r.termMarks.terms).toHaveLength(1);
+    expect(r.termMarks.terms[0]).toMatchObject({ label: 'Term 1', marks: 142, maxMarks: 180, percent: 78.89, teacherRemarks: 'Keep it up' });
+    expect(r.summary).toMatchObject({ overallPercent: 78.89, grade: 'A', overallFrom: 'TERM_MARKS', attendanceRate: 92, attendanceFrom: 'REPORT_SHEETS', testsTaken: 0 });
+    expect(r.coverage.termMarks).toBe(2);
+    // A teacher sees only the marks entered in their batches, as on Progress Reports.
+    await service.report(teacher(), 'st-1');
+    expect(prisma.studentMark.findMany.mock.calls[1][0].where).toMatchObject({ batchId: { in: ['b-mine'] } });
+    // Nothing anywhere: every figure null, and no source claimed.
+    prisma.studentMark.findMany.mockResolvedValue([]);
+    const empty = await service.report(admin, 'st-1');
+    expect(empty.summary).toMatchObject({ overallPercent: null, overallFrom: null, attendanceRate: null, attendanceFrom: null });
+    expect(empty.termMarks).toEqual({ terms: [], overall: null, attendance: null });
+  });
+
   it("a teacher searches only their batches; an inactive one (no batches) finds no one without a query", async () => {
     const prisma = prismaMock();
     const service = new StudentReportService(prisma as unknown as PrismaService);

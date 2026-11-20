@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { AlertTriangle, BookOpenCheck, CalendarCheck, ClipboardList, MessageSquareText, Star, Target, Users } from 'lucide-react'
-import { BAND_LABELS, DIFFICULTY_LABELS, TYPE_LABELS, dayLabel, num, pct, type StudentReport, type TopicStrength } from './api'
+import { BAND_LABELS, DIFFICULTY_LABELS, TYPE_LABELS, dayLabel, num, pct, sourceNote, type StudentReport, type TermCard, type TopicStrength } from './api'
 import { Card, Empty, GradePill, Meter } from './ui'
 import { toneOf } from './styles'
 
@@ -14,10 +14,11 @@ export function PerformanceSection({ r }: { r: StudentReport }) {
     <div className="space-y-5">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Total marks" value={s.marks === null ? '—' : `${num(s.marks)} / ${s.totalMarks}`} sub={`${s.testsTaken} test${s.testsTaken === 1 ? '' : 's'} sat${s.testsAbsent ? `, ${s.testsAbsent} absent (not counted)` : ''}`} />
-        <Stat label="Overall" value={pct(s.overallPercent, 2)} sub={<GradePill grade={s.grade} />} />
+        <Stat label="Overall" value={pct(s.overallPercent, 2)} sub={<span className="flex items-center gap-1.5"><GradePill grade={s.grade} />{sourceNote(s.overallFrom)}</span>} />
         <Stat label="Batch rank" value={s.batchRank ? `#${s.batchRank.rank} of ${s.batchRank.of}` : '—'} sub={s.batchRank ? `Top ${s.batchRank.topPercent}% · ${s.batchRank.percentile} percentile` : 'Active students of the batch with tests this year'} />
         <Stat label="Accuracy" value={pct(s.accuracy)} sub={`Attempt rate ${pct(s.attemptRate)}`} />
       </div>
+      {r.termMarks.terms.length > 0 && <TermMarksCard terms={r.termMarks.terms} />}
       <Card title="Subject-wise breakdown" sub="Tests sat this academic year, by the test's subject">
         {r.performance.subjects.length === 0 ? (
           <Empty icon={BookOpenCheck} title="No test results this year" sub="Results entered under Tests & Question Bank (or imported here) appear once the student has sat a test." />
@@ -60,6 +61,50 @@ export function PerformanceSection({ r }: { r: StudentReport }) {
         </Card>
       )}
     </div>
+  )
+}
+
+/** The year's term marks, from uploaded report sheets and Generate Progress Report. */
+function TermMarksCard({ terms }: { terms: TermCard[] }) {
+  return (
+    <Card title="Term marks" sub="From uploaded report sheets and progress reports this academic year">
+      <div className="space-y-5">
+        {terms.map((t) => (
+          <div key={t.term}>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-bold text-slate-800">{t.label}</p>
+              <p className="flex items-center gap-2 text-xs text-slate-500 tabular-nums">
+                {num(t.marks)} / {num(t.maxMarks)} · {pct(t.percent)} <GradePill grade={t.grade} />
+                {t.attendance !== null && <span>· Attendance {pct(t.attendance)}</span>}
+              </p>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-100">
+              <table className="w-full min-w-[520px] text-left text-sm">
+                <thead className="bg-slate-50"><tr><th className={th}>Subject</th><th className={th}>Marks</th><th className={th}>%</th><th className={th}>Grade</th><th className={th}>Attendance</th><th className={th}>Remarks</th></tr></thead>
+                <tbody className="divide-y divide-slate-100">
+                  {t.subjects.map((x) => (
+                    <tr key={x.subject}>
+                      <td className={`${td} font-semibold text-slate-800`}>{x.subject}</td>
+                      <td className={`${td} tabular-nums`}>{num(x.marks)} / {num(x.maxMarks)}</td>
+                      <td className={`${td} tabular-nums`}>{pct(x.percent)}</td>
+                      <td className={td}><GradePill grade={x.grade} /></td>
+                      <td className={`${td} tabular-nums`}>{pct(x.attendance)}</td>
+                      <td className={`${td} text-xs text-slate-600`}>{x.remarks ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {(t.teacherRemarks || t.principalRemarks) && (
+              <div className="mt-2 space-y-1 text-xs text-slate-600">
+                {t.teacherRemarks && <p><span className="font-semibold text-slate-700">Teacher’s remarks:</span> {t.teacherRemarks}</p>}
+                {t.principalRemarks && <p><span className="font-semibold text-slate-700">Principal’s remarks:</span> {t.principalRemarks}</p>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
   )
 }
 
