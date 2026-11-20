@@ -229,7 +229,7 @@ export function SchoolForm({ options, initial, onSubmit, submitLabel, submitting
           />
         </Field>
 
-        <Field id="school-address" label="Address (optional)">
+        <Field id="school-address" label="Address *" error={errors.address}>
           <textarea
             id="school-address"
             value={values.address}
@@ -237,7 +237,8 @@ export function SchoolForm({ options, initial, onSubmit, submitLabel, submitting
             placeholder="e.g. 123 Education St, City"
             rows={2}
             maxLength={500}
-            className={`resize-y py-2.5 ${inputClass()}`}
+            aria-required="true"
+            className={`resize-y py-2.5 ${inputClass(!!errors.address)}`}
           />
         </Field>
 

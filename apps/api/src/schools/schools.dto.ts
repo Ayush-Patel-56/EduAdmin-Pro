@@ -26,7 +26,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Creating or editing a school. Everything is required except the MOU end
- * date (blank for an ongoing MOU), the address and the GST number.
+ * date (blank for an ongoing MOU) and the GST number.
  */
 export class CreateSchoolDto {
   @Transform(trim)
@@ -92,11 +92,11 @@ export class CreateSchoolDto {
   @IsNotEmpty({ message: 'Email is required' })
   email: string;
 
-  @Transform(trimOrUndefined)
-  @IsOptional()
-  @IsString()
+  @Transform(trim)
   @MaxLength(500, { message: 'Address must be 500 characters or less' })
-  address?: string;
+  @IsString({ message: 'Address is required' })
+  @IsNotEmpty({ message: 'Address is required' })
+  address: string;
 
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.replace(/\s/g, '').toUpperCase() || undefined : value,

@@ -196,7 +196,7 @@ describe('SchoolsService.updateSchool: a program added concurrently is a 409', (
         board: 'CBSE',
         classes: ['11th'],
         programs: ['Olympiad'],
-        academicYearStartMonth: 4, mouStartDate: '2026-04-01', contactPerson: 'A', phone: '9876543210', email: 'a@s.example',
+        academicYearStartMonth: 4, mouStartDate: '2026-04-01', contactPerson: 'A', phone: '9876543210', email: 'a@s.example', address: '1 Main Road',
       } as CreateSchoolDto),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(tx.school.update).not.toHaveBeenCalled();

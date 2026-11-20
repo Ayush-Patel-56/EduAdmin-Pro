@@ -4,8 +4,8 @@ import type { SchoolFormValues } from './schoolOptions'
 export type SchoolErrors = Partial<Record<keyof SchoolFormValues, string>>
 
 /**
- * Every field is required except the MOU end date (blank for an ongoing MOU),
- * the address and the GST number; the API checks the same. Errors come in
+ * Every field is required except the MOU end date (blank for an ongoing MOU)
+ * and the GST number; the API checks the same. Errors come in
  * form order, so the first is the first one on screen.
  */
 export function validateSchool(v: SchoolFormValues): SchoolErrors {
@@ -23,6 +23,7 @@ export function validateSchool(v: SchoolFormValues): SchoolErrors {
   else if (!isValidIndianMobile(v.phone)) errors.phone = 'Enter a valid 10-digit mobile number'
   if (!v.email.trim()) errors.email = 'Email is required'
   else if (!EMAIL_PATTERN.test(v.email.trim())) errors.email = 'Enter a valid email address'
+  if (!v.address.trim()) errors.address = 'Address is required'
   const gst = v.gstNumber.replace(/\s/g, '').toUpperCase()
   if (gst && !isValidGstin(gst)) errors.gstNumber = 'Enter a valid 15-character GST number'
   return errors
