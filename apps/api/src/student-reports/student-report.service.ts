@@ -10,6 +10,7 @@ import {
   gradeOf,
   percent,
   rankScores,
+  termMarks,
   topicStrength,
   type AssignmentTopic,
   type TestTopic,
@@ -87,8 +88,11 @@ export class StudentReportService {
     const ptmWhere = { ...s, meetingDate: dayRange };
     // A teacher reads only the ratings and PTM notes they wrote; the totals and averages are everyone's (#50).
     const ownOnly = isTeacher(actor) ? { facultyId: actor.scope.facultyId ?? '' } : {};
+    // Term marks (uploaded report sheets, Generate Progress Report): a teacher reads only the marks entered
+    // in their batches, as on Progress Reports.
+    const termKey = { ...s, academicYear: ctx.year };
 
-    const [results, answerGroups, testTopics, assignments, recentMistakes, ratingAvg, ratingDays, recentRatings, attendance, ptmMeetings, ptmAttended, ptm] = await Promise.all([
+    const [results, answerGroups, testTopics, assignments, recentMistakes, ratingAvg, ratingDays, recentRatings, attendance, ptmMeetings, ptmAttended, ptm, marksRows, remarksRows] = await Promise.all([
       this.prisma.testResult.findMany({
         where: { ...s, test: testRange },
         select: { present: true, marks: true, correct: true, incorrect: true, unattempted: true, test: { select: { id: true, title: true, type: true, subject: true, startsAt: true, totalMarks: true } } },
@@ -149,7 +153,16 @@ export class StudentReportService {
         orderBy: [{ meetingDate: 'desc' }, { createdAt: 'desc' }],
         take: RECENT_LIMIT,
       }),
+      this.prisma.studentMark.findMany({
+        where: { ...termKey, ...(scope && { batchId: { in: scope } }) },
+        select: { term: true, subject: true, marks: true, maxMarks: true, attendance: true, remarks: true },
+      }),
+      this.prisma.progressReport.findMany({ where: termKey, select: { term: true, teacherRemarks: true, principalRemarks: true } }),
     ]);
+    const terms = termMarks(
+      marksRows.map((m) => ({ term: m.term, subject: m.subject, marks: Number(m.marks), maxMarks: Number(m.maxMarks), attendance: num(m.attendance), remarks: m.remarks })),
+      remarksRows,
+    );
 
     // Header and Performance Report: the tests sat this year (absent excluded).
     const sat = results.filter((r) => r.present && r.marks !== null);
@@ -221,6 +234,12 @@ export class StudentReportService {
       : null;
     const statusCount = (status: string) => attendance.find((a) => a.status === status)?._count._all ?? 0;
     const att = { present: statusCount('PRESENT'), late: statusCount('LATE'), absent: statusCount('ABSENT'), excused: statusCount('EXCUSED') };
+    // The header: tests and class attendance first; with none this year, the term marks and the sheets'
+    // attendance, so a student with only report sheets isn't blank. Each says where it came from.
+    const classRate = attendanceRate(att);
+    const headline = overall !== null ? overall : (terms.overall?.percent ?? null);
+    const overallFrom = overall !== null ? ('TESTS' as const) : terms.overall ? ('TERM_MARKS' as const) : null;
+    const attendanceFrom = classRate !== null ? ('CLASSES' as const) : terms.attendance !== null ? ('REPORT_SHEETS' as const) : null;
 
     return {
       generatedAt: new Date().toISOString(),
@@ -237,8 +256,9 @@ export class StudentReportService {
         program: student.program?.name ?? null,
       },
       summary: {
-        overallPercent: overall,
-        grade: gradeOf(overall),
+        overallPercent: headline,
+        grade: gradeOf(headline),
+        overallFrom,
         marks: sat.length ? Math.round(marks * 100) / 100 : null,
         totalMarks: sat.length ? totalMarks : null,
         testsTaken: sat.length,
@@ -247,7 +267,8 @@ export class StudentReportService {
         accuracy: percent(correct, attempted),
         attemptRate: percent(attempted, attempted + unattempted),
         behaviourScore: ratings?.score ?? null,
-        attendanceRate: attendanceRate(att),
+        attendanceRate: classRate ?? terms.attendance,
+        attendanceFrom,
         ptmMeetings,
       },
       performance: {
@@ -278,6 +299,7 @@ export class StudentReportService {
           };
         }),
       },
+      termMarks: terms,
       analysis: {
         questions: attempted + unattempted,
         attempted,
@@ -350,6 +372,7 @@ export class StudentReportService {
         ratings: ratingAvg._count._all,
         classes: att.present + att.late + att.absent + att.excused,
         ptmNotes: ptmMeetings,
+        termMarks: marksRows.length,
       },
     };
   }

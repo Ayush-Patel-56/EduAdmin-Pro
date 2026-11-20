@@ -214,3 +214,48 @@ export function rankScores(scores: { id: string; score: number }[]) {
   });
   return out;
 }
+
+export type TermMarkRow = { term: ReportTermKey; subject: string; marks: number; maxMarks: number; attendance: number | null; remarks: string | null };
+export type TermRemarks = { term: ReportTermKey; teacherRemarks: string | null; principalRemarks: string | null };
+
+/**
+ * The year's term marks (uploaded report sheets and Generate Progress
+ * Report) for the 5-in-1 report: a card per term with marks, in term order,
+ * subjects by name, each with its percentage and grade, the sheet's
+ * attendance and the progress report's remarks. `overall` adds up every
+ * mark of the year; `attendance` is the mean of the sheets' percentages.
+ */
+export function termMarks(rows: TermMarkRow[], remarks: TermRemarks[]) {
+  const mean = (xs: number[]) => (xs.length ? round2(xs.reduce((a, x) => a + x, 0) / xs.length) : null);
+  const sum = (xs: TermMarkRow[], key: 'marks' | 'maxMarks') => round2(xs.reduce((a, x) => a + x[key], 0));
+  const terms = REPORT_TERMS.filter((term) => rows.some((r) => r.term === term)).map((term) => {
+    const own = rows.filter((r) => r.term === term).sort((a, b) => a.subject.localeCompare(b.subject));
+    const marks = sum(own, 'marks');
+    const maxMarks = sum(own, 'maxMarks');
+    const p = percent(marks, maxMarks);
+    const note = remarks.find((r) => r.term === term);
+    return {
+      term,
+      label: TERM_LABELS[term],
+      subjects: own.map((r) => {
+        const sp = percent(r.marks, r.maxMarks);
+        return { subject: r.subject, marks: r.marks, maxMarks: r.maxMarks, percent: sp, grade: gradeOf(sp), attendance: r.attendance, remarks: r.remarks };
+      }),
+      marks,
+      maxMarks,
+      percent: p,
+      grade: gradeOf(p),
+      attendance: mean(own.flatMap((r) => (r.attendance === null ? [] : [r.attendance]))),
+      teacherRemarks: note?.teacherRemarks ?? null,
+      principalRemarks: note?.principalRemarks ?? null,
+    };
+  });
+  const marks = sum(rows, 'marks');
+  const maxMarks = sum(rows, 'maxMarks');
+  const p = percent(marks, maxMarks);
+  return {
+    terms,
+    overall: rows.length ? { marks, maxMarks, percent: p, grade: gradeOf(p) } : null,
+    attendance: mean(rows.flatMap((r) => (r.attendance === null ? [] : [r.attendance]))),
+  };
+}

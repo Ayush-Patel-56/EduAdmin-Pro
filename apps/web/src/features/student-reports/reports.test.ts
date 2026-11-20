@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PaperQuestion, ResultsView } from '@/features/assessments/api'
-import { pct } from './api'
+import { pct, sourceNote } from './api'
 import { reportSections } from './exportReport'
 import { checkResults, presentOf, resultHeader, resultTemplate } from './resultsSheet'
 import type { StudentReport } from './api'
@@ -81,22 +81,62 @@ describe('5-in-1 exports', () => {
     generatedAt: '2026-10-18T10:00:00Z',
     year: { year: 2026, label: '2026-27', from: '2026-04-01', to: '2027-03-31', current: 2026 },
     student: { id: 's1', fullName: 'Aarav Mehta', rollNumber: 'R01', admissionNumber: 'ADM1', classLevel: '11th', status: 'ACTIVE', batch: { id: 'b1', name: 'JEE A' }, program: 'JEE' },
-    summary: { overallPercent: 63.64, grade: 'B+', marks: 21, totalMarks: 33, testsTaken: 2, testsAbsent: 0, batchRank: { rank: 1, of: 3, percentile: 100, topPercent: 33 }, accuracy: null, attemptRate: null, behaviourScore: 4, attendanceRate: null, ptmMeetings: 0 },
+    summary: { overallPercent: 63.64, grade: 'B+', marks: 21, totalMarks: 33, testsTaken: 2, testsAbsent: 0, batchRank: { rank: 1, of: 3, percentile: 100, topPercent: 33 }, accuracy: null, attemptRate: null, behaviourScore: 4, attendanceRate: null, ptmMeetings: 0, overallFrom: 'TESTS', attendanceFrom: null },
     performance: { subjects: [], tests: [] },
+    termMarks: { terms: [], overall: null, attendance: null },
     analysis: { questions: 0, attempted: 0, correct: 0, incorrect: 0, unattempted: 0, accuracy: null, attemptRate: null, testsCounted: 0, answered: 0, byType: [], byDifficulty: [] },
     topics: { strong: [], average: [], weak: [] },
     mistakes: { incorrect: 0, partial: 0, unattempted: 0, bySubject: [], recent: [] },
     feedback: { ownOnly: false, ratings: null, recentRatings: [], attendance: { present: 0, late: 0, absent: 0, excused: 0, classes: 0, rate: null }, ptm: { meetings: 0, parentAttended: 0, parentAttendanceRate: null, notes: [] } },
-    coverage: { tests: 2, answers: 0, gradedAssignments: 0, ratings: 1, classes: 0, ptmNotes: 0 },
+    coverage: { tests: 2, answers: 0, gradedAssignments: 0, ratings: 1, classes: 0, ptmNotes: 0, termMarks: 0 },
   } as unknown as StudentReport
 
   it('every section is a table; missing figures stay empty (never 0), with coverage and generation time', () => {
     const sections = reportSections(report)
-    expect(sections.map((s) => s.name)).toEqual(['Summary', 'Performance', 'Tests', 'Test Analysis', 'Topic Strength', 'Error Log', 'Teacher Feedback', 'PTM Notes'])
+    expect(sections.map((s) => s.name)).toEqual(['Summary', 'Performance', 'Tests', 'Term Marks', 'Test Analysis', 'Topic Strength', 'Error Log', 'Teacher Feedback', 'PTM Notes'])
     const summary = Object.fromEntries(sections[0].rows.map(([k, v]) => [k, v]))
     expect(summary).toMatchObject({ 'Overall %': 63.64, Grade: 'B+', 'Batch rank': '1 of 3', 'Accuracy %': null, 'Attendance %': null, 'Behaviour score (/5)': 4 })
     expect(String(summary.Generated)).toContain('IST')
     expect(String(summary['Worked out from'])).toContain('2 test result(s)')
+    expect(String(summary['Worked out from'])).toContain('0 term mark(s)')
+    expect(summary['Overall from']).toBe('Tests')
+  })
+
+  it('term marks (report sheets, progress reports): a row per subject and a total per term with its remarks; the summary says the overall came from them', () => {
+    const term = {
+      term: 'TERM_1', label: 'Term 1', marks: 142, maxMarks: 180, percent: 78.89, grade: 'A', attendance: 92, teacherRemarks: 'Keep it up', principalRemarks: 'Well done',
+      subjects: [
+        { subject: 'Chemistry', marks: 64, maxMarks: 80, percent: 80, grade: 'A+', attendance: null, remarks: null },
+        { subject: 'Physics', marks: 78, maxMarks: 100, percent: 78, grade: 'A', attendance: 92, remarks: 'Good' },
+      ],
+    }
+    const withTerms = {
+      ...report,
+      summary: { ...report.summary, overallPercent: 78.89, grade: 'A', marks: null, totalMarks: null, testsTaken: 0, overallFrom: 'TERM_MARKS', attendanceRate: 92, attendanceFrom: 'REPORT_SHEETS' },
+      termMarks: { terms: [term], overall: { marks: 142, maxMarks: 180, percent: 78.89, grade: 'A' }, attendance: 92 },
+      coverage: { ...report.coverage, tests: 0, termMarks: 2 },
+    } as unknown as StudentReport
+    const sections = reportSections(withTerms)
+    expect(sections.find((x) => x.name === 'Term Marks')).toEqual({
+      name: 'Term Marks',
+      header: ['Term', 'Subject', 'Marks', 'Total', '%', 'Grade', 'Attendance %', 'Remarks'],
+      rows: [
+        ['Term 1', 'Chemistry', 64, 80, 80, 'A+', null, null],
+        ['Term 1', 'Physics', 78, 100, 78, 'A', 92, 'Good'],
+        ['Term 1', 'Total', 142, 180, 78.89, 'A', 92, 'Teacher: Keep it up · Principal: Well done'],
+      ],
+    })
+    const summary = Object.fromEntries(sections[0].rows.map(([k, v]) => [k, v]))
+    expect(summary).toMatchObject({ 'Overall %': 78.89, 'Overall from': 'Term marks', 'Attendance %': 92, 'Attendance from': 'Report sheets' })
+    expect(String(summary['Worked out from'])).toContain('2 term mark(s)')
+  })
+
+  it('a figure worked out from term marks or report sheets says so; tests and classes need no note', () => {
+    expect(sourceNote('TERM_MARKS')).toBe('from term marks')
+    expect(sourceNote('REPORT_SHEETS')).toBe('from report sheets')
+    expect(sourceNote('TESTS')).toBeNull()
+    expect(sourceNote('CLASSES')).toBeNull()
+    expect(sourceNote(null)).toBeNull()
   })
 
   it("says when a band lists fewer topics than it holds, and marks a departed teacher's PTM note (#55)", () => {

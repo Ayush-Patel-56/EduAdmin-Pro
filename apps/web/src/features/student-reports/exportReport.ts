@@ -29,6 +29,7 @@ export function reportSections(r: StudentReport): Section[] {
         ['Class', r.student.classLevel],
         ['Academic year', r.year.label],
         ['Overall %', v(s.overallPercent)],
+        ['Overall from', s.overallFrom === 'TERM_MARKS' ? 'Term marks' : s.overallFrom === 'TESTS' ? 'Tests' : null],
         ['Grade', s.grade],
         ['Total marks', s.marks === null ? null : `${v(s.marks)} / ${s.totalMarks}`],
         ['Tests sat', s.testsTaken],
@@ -39,9 +40,10 @@ export function reportSections(r: StudentReport): Section[] {
         ['Attempt rate %', v(s.attemptRate)],
         ['Behaviour score (/5)', s.behaviourScore],
         ['Attendance %', v(s.attendanceRate)],
+        ['Attendance from', s.attendanceFrom === 'REPORT_SHEETS' ? 'Report sheets' : s.attendanceFrom === 'CLASSES' ? 'Classes' : null],
         ['PTM meetings', s.ptmMeetings],
         ['Generated', generated(r.generatedAt)],
-        ['Worked out from', `${r.coverage.tests} test result(s), ${r.coverage.answers} graded answer(s), ${r.coverage.gradedAssignments} graded assignment(s), ${r.coverage.ratings} rating(s), ${r.coverage.classes} class(es) of attendance, ${r.coverage.ptmNotes} PTM note(s)`],
+        ['Worked out from', `${r.coverage.tests} test result(s), ${r.coverage.answers} graded answer(s), ${r.coverage.gradedAssignments} graded assignment(s), ${r.coverage.ratings} rating(s), ${r.coverage.classes} class(es) of attendance, ${r.coverage.ptmNotes} PTM note(s), ${r.coverage.termMarks} term mark(s)`],
       ],
     },
     {
@@ -53,6 +55,14 @@ export function reportSections(r: StudentReport): Section[] {
       name: 'Tests',
       header: ['Test', 'Subject', 'Date', 'Present', 'Marks', 'Total', '%', 'Grade', 'Rank', 'Of', 'Percentile'],
       rows: r.performance.tests.map((t) => [t.title, t.subject, t.date, t.present ? 'Yes' : 'Absent', v(t.marks), t.totalMarks, v(t.percent), t.grade, t.rank, t.of, t.percentile]),
+    },
+    {
+      name: 'Term Marks',
+      header: ['Term', 'Subject', 'Marks', 'Total', '%', 'Grade', 'Attendance %', 'Remarks'],
+      rows: r.termMarks.terms.flatMap((t): Cell[][] => [
+        ...t.subjects.map((x): Cell[] => [t.label, x.subject, v(x.marks), v(x.maxMarks), v(x.percent), x.grade, v(x.attendance), x.remarks]),
+        [t.label, 'Total', v(t.marks), v(t.maxMarks), v(t.percent), t.grade, v(t.attendance), [t.teacherRemarks && `Teacher: ${t.teacherRemarks}`, t.principalRemarks && `Principal: ${t.principalRemarks}`].filter(Boolean).join(' · ') || null],
+      ]),
     },
     {
       name: 'Test Analysis',
@@ -152,10 +162,10 @@ export async function exportReportPdf(r: StudentReport, school: string) {
     doc.setTextColor(15, 23, 42)
     doc.text(value, x + 9, 151)
   }
-  tile(40, 'Overall', s.overallPercent === null ? '—' : `${v(s.overallPercent)}% ${s.grade ?? ''}`)
+  tile(40, s.overallFrom === 'TERM_MARKS' ? 'Overall (term marks)' : 'Overall', s.overallPercent === null ? '—' : `${v(s.overallPercent)}% ${s.grade ?? ''}`)
   tile(170, 'Batch rank', s.batchRank ? `#${s.batchRank.rank} of ${s.batchRank.of}` : '—')
   tile(300, 'Behaviour', s.behaviourScore === null ? '—' : `${s.behaviourScore} / 5`)
-  tile(430, 'Attendance', s.attendanceRate === null ? '—' : `${v(s.attendanceRate)}%`)
+  tile(430, s.attendanceFrom === 'REPORT_SHEETS' ? 'Attendance (sheets)' : 'Attendance', s.attendanceRate === null ? '—' : `${v(s.attendanceRate)}%`)
   let y = 180
   for (const section of reportSections(r).slice(1)) {
     if (!section.rows.length) continue
@@ -175,7 +185,7 @@ export async function exportReportPdf(r: StudentReport, school: string) {
     doc.setPage(i)
     doc.setFontSize(7.5)
     doc.setTextColor(130)
-    doc.text(`Generated ${generated(r.generatedAt)} · ${r.coverage.tests} test result(s), ${r.coverage.gradedAssignments} graded assignment(s), ${r.coverage.ratings} rating(s), ${r.coverage.classes} class(es), ${r.coverage.ptmNotes} PTM note(s) · Page ${i} of ${pages}`, 40, doc.internal.pageSize.getHeight() - 24)
+    doc.text(`Generated ${generated(r.generatedAt)} · ${r.coverage.tests} test result(s), ${r.coverage.gradedAssignments} graded assignment(s), ${r.coverage.ratings} rating(s), ${r.coverage.classes} class(es), ${r.coverage.ptmNotes} PTM note(s), ${r.coverage.termMarks} term mark(s) · Page ${i} of ${pages}`, 40, doc.internal.pageSize.getHeight() - 24)
   }
   doc.save(fileName(r, 'pdf'))
 }
