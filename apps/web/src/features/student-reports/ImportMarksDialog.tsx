@@ -12,7 +12,7 @@ import { selectClass } from './styles'
 const RULES: [string, boolean, string][] = [
   ['Roll No', true, 'As on the roster of the class picked above'],
   ['Name', true, "The student's full name as on the roster, in any word order (letter case, accents, spacing and punctuation don't matter), checked against the roll number"],
-  ['Marks', true, 'Marks obtained, up to two decimals, not more than Max Marks'],
+  ['Marks', true, 'Marks obtained, up to two decimals, not more than Max Marks; can be negative (negative marking), down to minus Max Marks, e.g. -4'],
   ['Max Marks', true, 'The paper’s total, more than 0'],
   ['Attendance', false, 'Attendance % for the term, 0 to 100 (92 or 92%)'],
   ['Remarks', false, 'Up to 1,000 characters'],

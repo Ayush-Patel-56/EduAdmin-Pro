@@ -114,8 +114,9 @@ export class ProgressKeyQuery {
 export class SubjectMarkInput {
   @IsIn(REPORT_SUBJECTS, { message: 'Select each subject' }) subject: string;
 
+  /** Can be negative (negative marking), down to minus the total: the service checks that against maxMarks. */
   @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Marks obtained must be a number with up to two decimals' })
-  @Min(0, { message: "Marks obtained can't be negative" })
+  @Min(-MAX_MAX_MARKS, { message: `Marks obtained can't be less than -${MAX_MAX_MARKS}` })
   marks: number;
 
   @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Total marks must be a number with up to two decimals' })
