@@ -11,8 +11,8 @@ import { forgetPreviousUser } from './session'
 export function LoginPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const fromSignup = useLocation().state as { email?: string; signedUp?: boolean } | null
-  const [email, setEmail] = useState(fromSignup?.email ?? '')
+  const fromVerify = useLocation().state as { email?: string } | null
+  const [email, setEmail] = useState(fromVerify?.email ?? '')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -58,10 +58,6 @@ export function LoginPage() {
           <form onSubmit={handleSubmit} noValidate>
             <h1>Login</h1>
             <p className="au-sub mb-6">Welcome back. Sign in to your school.</p>
-
-            {fromSignup?.signedUp && (
-              <p className="au-ok">Account created. Log in to continue.</p>
-            )}
 
             <div className="space-y-3">
               <AuthInput

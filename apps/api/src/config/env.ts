@@ -6,7 +6,6 @@ import { parseOrigins } from '../common/http-guards.js';
 type Env = Record<string, unknown>;
 
 const NODE_ENVS = ['development', 'production', 'test'];
-const BOOLEANS = ['true', 'false'];
 export const R2_KEYS = [
   'R2_ACCOUNT_ID',
   'R2_ACCESS_KEY_ID',
@@ -39,12 +38,6 @@ export function validateEnv(env: Env): Env {
       errors.push('WEB_ORIGIN must be an http(s) URL (or a comma-separated list), e.g. http://localhost:5173');
     }
   }
-  if (
-    str('REQUIRE_EMAIL_VERIFICATION') &&
-    !BOOLEANS.includes(str('REQUIRE_EMAIL_VERIFICATION'))
-  ) {
-    errors.push('REQUIRE_EMAIL_VERIFICATION must be true or false');
-  }
   if (str('TRUST_PROXY') && !/^\d+$/.test(str('TRUST_PROXY'))) {
     errors.push(
       'TRUST_PROXY must be the number of proxy hops in front of the API, e.g. 1',
@@ -66,12 +59,6 @@ export function validateEnv(env: Env): Env {
   if (str('NODE_ENV') === 'production') {
     if (str('FILE_STORAGE') === 'local') {
       errors.push('FILE_STORAGE=local is for development only; use R2 in production');
-    }
-    // Production always verifies email; the flag may only be left unset or true.
-    if (str('REQUIRE_EMAIL_VERIFICATION') === 'false') {
-      errors.push(
-        'REQUIRE_EMAIL_VERIFICATION=false is not allowed in production',
-      );
     }
     if (!str('WEB_ORIGIN')) errors.push('WEB_ORIGIN is required in production');
     for (const key of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS']) {

@@ -15,12 +15,9 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...base, PORT: 'abc' })).toThrow('PORT must be');
     expect(() => validateEnv({ ...base, WEB_ORIGIN: 'localhost' })).toThrow('WEB_ORIGIN must be');
     expect(() => validateEnv({ ...base, TRUST_PROXY: 'yes' })).toThrow('TRUST_PROXY must be');
-    expect(() => validateEnv({ ...base, REQUIRE_EMAIL_VERIFICATION: '1' })).toThrow(
-      'REQUIRE_EMAIL_VERIFICATION must be',
-    );
   });
 
-  it('does not allow turning email verification off in production', () => {
+  it('accepts a complete production config', () => {
     const production = {
       ...base,
       NODE_ENV: 'production',
@@ -30,13 +27,7 @@ describe('validateEnv', () => {
       SMTP_PASS: 'p',
       CRON_SECRET: 'c'.repeat(64),
     };
-    expect(() => validateEnv({ ...production, REQUIRE_EMAIL_VERIFICATION: 'false' })).toThrow(
-      'REQUIRE_EMAIL_VERIFICATION=false is not allowed in production',
-    );
-    expect(validateEnv({ ...production, REQUIRE_EMAIL_VERIFICATION: 'true' })).toBeTruthy();
     expect(validateEnv(production)).toBeTruthy();
-    // Still fine to leave it off in development.
-    expect(validateEnv({ ...base, REQUIRE_EMAIL_VERIFICATION: 'false' })).toBeTruthy();
   });
 
   it('requires SMTP and WEB_ORIGIN in production', () => {

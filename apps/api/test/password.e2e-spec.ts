@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { HttpException } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import { AuthService, loginKeys } from '../src/auth/auth.service.js';
@@ -27,9 +26,8 @@ describe('passwords on the database (e2e)', () => {
     sendPasswordResetCode: async ({ to, code }: { to: string; code: string }) => void resetCodes.set(to, code),
     sendPasswordChanged: async ({ to }: { to: string }) => void changed.push(to),
   } as unknown as MailService;
-  const config = { get: (key: string) => ({ NODE_ENV: 'test', REQUIRE_EMAIL_VERIFICATION: 'true' })[key] } as unknown as ConfigService;
   const rateLimit = new RateLimitService(db);
-  const auth = new AuthService(db, new EmailVerificationService(db, mail), config, rateLimit);
+  const auth = new AuthService(db, new EmailVerificationService(db, mail), rateLimit);
   const passwords = new PasswordService(db, mail, rateLimit);
   const tag = randomUUID().slice(0, 8);
   const email = (name: string) => `e2e-pw-${name}-${tag}@example.com`;

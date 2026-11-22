@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { HttpException } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { AuthService, loginKeys } from '../src/auth/auth.service.js';
 import { EmailVerificationService } from '../src/auth/email-verification.service.js';
@@ -20,14 +19,13 @@ describe('accounts and verification on the database (e2e)', () => {
   const db = prisma as unknown as PrismaService;
   const codes = new Map<string, string>();
   const mail = { sendVerificationCode: async ({ to, code }: { to: string; code: string }) => void codes.set(to, code) } as unknown as MailService;
-  const config = { get: (key: string) => ({ NODE_ENV: 'test', REQUIRE_EMAIL_VERIFICATION: 'true' })[key] } as unknown as ConfigService;
   const rateLimit = new RateLimitService(db);
   const verification = new EmailVerificationService(db, mail);
-  const auth = new AuthService(db, verification, config, rateLimit);
+  const auth = new AuthService(db, verification, rateLimit);
   const tag = randomUUID().slice(0, 8);
   const email = (name: string) => `e2e-acct-${name}-${tag}@example.com`;
   const status = (e: unknown) => (e instanceof HttpException ? e.getStatus() : e);
-  const names = ['victim', 'verified', 'parallel', 'locked', 'spread', 'flood'];
+  const names = ['victim', 'verified', 'parallel', 'locked', 'spread', 'flood', 'admin'];
   const IPS = ['240.0.0.9', '240.0.1.1', '240.0.2.2'];
   const signup = (to: string, password: string, fullName = 'Real Teacher') => auth.signupTeacher({ email: to, password, fullName } as never);
 
@@ -101,4 +99,23 @@ describe('accounts and verification on the database (e2e)', () => {
     await signup(to, 'pw-flood-1');
     expect(status(await signup(to, 'pw-flood-2').catch((e: unknown) => e))).toBe(429);
   });
+
+  it('an admin verifies their email before signing in, like a teacher, in every environment', async () => {
+    // Admins used to skip this outside production unless REQUIRE_EMAIL_VERIFICATION=true.
+    const invite = await prisma.adminInviteCode.create({ data: { code: `E2E-ADMIN-${tag}`.toUpperCase(), maxUses: 1 } });
+    try {
+      const to = email('admin');
+      const signedUp = await auth.signupAdmin({ email: to, password: 'admin-password-1', fullName: 'New Admin', inviteCode: invite.code } as never);
+      expect(signedUp).toMatchObject({ email: to, emailSent: true });
+      expect(codes.get(to)).toMatch(/^\d{6}$/);
+      const refused = await auth.login({ email: to, password: 'admin-password-1' }, {}).catch((e: unknown) => e);
+      expect(status(refused)).toBe(403);
+      expect(await prisma.session.count({ where: { user: { email: to } } })).toBe(0);
+      await verification.verify(to, codes.get(to)!, 'admin-password-1');
+      await expect(auth.login({ email: to, password: 'admin-password-1' }, {})).resolves.toEqual(expect.any(String));
+    } finally {
+      await prisma.user.deleteMany({ where: { adminInviteCodeId: invite.id } });
+      await prisma.adminInviteCode.delete({ where: { id: invite.id } });
+    }
+  }, 20_000);
 });

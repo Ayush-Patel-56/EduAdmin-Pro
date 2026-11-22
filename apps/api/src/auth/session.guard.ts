@@ -32,9 +32,19 @@ export class SessionGuard implements CanActivate {
 
     const session = await this.prisma.session.findUnique({
       where: { tokenHash: hashToken(token) },
+      include: { user: { select: { emailVerified: true } } },
     });
     if (!session || session.expiresAt < new Date()) {
       throw new UnauthorizedException('Your session has expired, please log in again');
+    }
+    // Sign-in already needs a verified email; this also shuts out any session made before that rule.
+    if (!session.user.emailVerified) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        error: 'Unauthorized',
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email before signing in',
+      });
     }
 
     req.auth = {
