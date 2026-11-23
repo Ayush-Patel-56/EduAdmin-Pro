@@ -20,7 +20,7 @@ const adminFields: SignupField[] = [
 ]
 
 export function TeacherSignupPage() {
-  return <SignupForm title="Teacher Sign Up" endpoint="/auth/signup/teacher" fields={teacherFields} next="verify" />
+  return <SignupForm title="Teacher Sign Up" endpoint="/auth/signup/teacher" fields={teacherFields} />
 }
 
 export function AdminSignupPage() {

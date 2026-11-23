@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent, type InputHTMLAttributes } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { CircleCheck, type LucideIcon } from 'lucide-react'
+import { useState, type FormEvent, type InputHTMLAttributes } from 'react'
+import { Link } from 'react-router-dom'
+import type { LucideIcon } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { AuthInput, FormError, SubmitButton } from './AuthInput'
 import { AuthLayout } from './AuthLayout'
@@ -23,13 +23,10 @@ type SignupFormProps = {
   endpoint: string
   fields: SignupField[]
   hint?: string
-  /** 'verify': show the email code step after signup. 'login': confirm, then go to login. */
-  next?: 'verify' | 'login'
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MIN_PASSWORD_LENGTH = 8
-const REDIRECT_DELAY_MS = 1800
 
 function validate(fields: SignupField[], values: Record<string, string>): string | null {
   const missing = fields.find((f) => f.required && !values[f.name]?.trim())
@@ -46,25 +43,15 @@ function validate(fields: SignupField[], values: Record<string, string>): string
   return null
 }
 
-export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: SignupFormProps) {
-  const navigate = useNavigate()
+/** Every new account, admin or teacher, goes straight to the email code step: no one signs in unverified. */
+export function SignupForm({ title, endpoint, fields, hint }: SignupFormProps) {
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(fields.map((f) => [f.name, ''])),
   )
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [created, setCreated] = useState(false)
-  // Set once a teacher account exists and is waiting for its email code.
+  // Set once the account exists and is waiting for its email code.
   const [verifyEmail, setVerifyEmail] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!created) return
-    const timer = setTimeout(
-      () => navigate('/login', { replace: true, state: { email: values.email, signedUp: true } }),
-      REDIRECT_DELAY_MS,
-    )
-    return () => clearTimeout(timer)
-  }, [created, navigate, values.email])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -76,13 +63,11 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
     setError(null)
     setSubmitting(true)
     try {
-      const result = await api<{ email: string; verificationRequired?: boolean }>(endpoint, {
+      const result = await api<{ email: string }>(endpoint, {
         method: 'POST',
         body: JSON.stringify(values),
       })
-      // Admins verify too when the server requires it (always in production).
-      if (next === 'verify' || result.verificationRequired) setVerifyEmail(result.email)
-      else setCreated(true)
+      setVerifyEmail(result.email)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to reach the server')
     } finally {
@@ -102,15 +87,7 @@ export function SignupForm({ title, endpoint, fields, hint, next = 'login' }: Si
         />
 
         <AuthFormSide>
-          {created ? (
-            <div role="status" className="au-done">
-              <span className="badge">
-                <CircleCheck className="size-7" />
-              </span>
-              <h1 className="text-2xl">Account created successfully</h1>
-              <p className="au-sub">Redirecting you to login…</p>
-            </div>
-          ) : verifyEmail ? (
+          {verifyEmail ? (
             <div>
               <Link to="/signup" viewTransition className="au-back">
                 ← Back

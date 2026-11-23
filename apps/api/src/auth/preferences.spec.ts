@@ -91,7 +91,7 @@ describe('SessionGuard (protects PATCH /auth/preferences)', () => {
   });
 
   it('accepts a live session', async () => {
-    findUnique.mockResolvedValue({ id: 's', userId: 'u', activeSchoolId: null, expiresAt: new Date(Date.now() + 60_000) });
+    findUnique.mockResolvedValue({ id: 's', userId: 'u', activeSchoolId: null, expiresAt: new Date(Date.now() + 60_000), user: { emailVerified: true } });
     await expect(guard.canActivate(contextWith({ eduadmin_sid: 'x' }))).resolves.toBe(true);
   });
 });

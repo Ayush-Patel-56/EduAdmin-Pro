@@ -145,6 +145,18 @@ A new table only (`PasswordResetToken`), in a transaction with `lock_timeout = 1
 - **Sign out other devices** (same place): ends every session but the current one.
 - Every reset or change emails the owner that their password changed, so one they didn't make is noticed. The daily clean-up deletes reset codes a day after they expire.
 
+## Email verification for every account (no migration)
+
+- Every account, admin or teacher, must verify its email before it can sign in, in every environment. Admins used to skip this outside production unless `REQUIRE_EMAIL_VERIFICATION=true`; that setting is no longer read and can be removed from Vercel and `.env` files.
+- Every signed-in request also checks that the account is verified. A session that belongs to an unverified account gets a 401 (`EMAIL_NOT_VERIFIED`), which sends the user to sign in, then to the code step.
+- Production already required verification at sign-in, so nothing changes there for anyone who could sign in. To see how many accounts would still have to verify, run this on production (read only):
+
+  ```sql
+  SELECT "accountType", count(*) FROM "User" WHERE "emailVerified" = false GROUP BY 1;
+  ```
+
+  Each of those people can verify from **Verify email** on the sign-in page (it sends a new code), or reset their password, which also verifies the email.
+
 ## Negative marks (`20261120090000_student_mark_negative`)
 
 Only widens a check, in a transaction with `lock_timeout = 10s`: `StudentMark_marks_check` now allows marks from minus the paper's total up to the total (it was 0 up to the total). Every existing row already passes, so there is nothing to check before deploying.
@@ -555,7 +567,7 @@ A revoked member cannot rejoin with an invite code. Then rotate the school's cod
 
 ## Environment
 
-See `apps/api/.env.example`. Production refuses to start without `WEB_ORIGIN` and SMTP settings, and refuses `REQUIRE_EMAIL_VERIFICATION=false`. Set `TRUST_PROXY` to the number of proxies in front of the API.
+See `apps/api/.env.example`. Production refuses to start without `WEB_ORIGIN` and SMTP settings. Email verification is always on for every account; the old `REQUIRE_EMAIL_VERIFICATION` setting is no longer read and can be removed from the environment. Set `TRUST_PROXY` to the number of proxies in front of the API.
 
 ## CI
 

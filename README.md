@@ -61,7 +61,7 @@ Routes follow the PRD's navigation map (e.g. `/management/fee-management`, `/tea
 2. After entering the code, sign in. Teachers can't sign in until their email is verified.
 3. With a school code, the teacher is connected to that school immediately; without one, they can join later from the Faculty Portal. A teacher belongs to one school at a time.
 
-Admins don't need to verify their email in development unless `REQUIRE_EMAIL_VERIFICATION=true`. **In production everyone verifies**: the API refuses to start with `REQUIRE_EMAIL_VERIFICATION=false`, and admin signup sends a code too.
+**Everyone verifies, in every environment.** Admin signup sends a code too, and no account, admin or teacher, can sign in until its email is verified. A session that somehow belongs to an unverified account is refused, which sends the user back to sign in and verify. In development without SMTP, the codes are printed in the API log.
 
 ## Email (verification codes)
 

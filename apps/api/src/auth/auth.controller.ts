@@ -53,8 +53,8 @@ export class AuthController {
   @Post('signup/admin')
   @Throttle(STRICT)
   async signupAdmin(@Body() dto: AdminSignupDto) {
-    await this.auth.signupAdmin(dto);
-    return { message: 'Account created successfully' };
+    const result = await this.auth.signupAdmin(dto);
+    return { message: 'Account created. Enter the code sent to your email.', ...result };
   }
 
   @Post('login')

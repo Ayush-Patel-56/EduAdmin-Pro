@@ -8,7 +8,6 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import { createHash } from 'node:crypto';
 import { linkFacultyProfile } from '../academic/faculty-link.js';
@@ -62,7 +61,6 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly verification: EmailVerificationService,
-    private readonly config: ConfigService,
     private readonly rateLimit: RateLimitService,
   ) {}
 
@@ -155,17 +153,16 @@ export class AuthService {
           adminInviteCodeId: invite.id,
         },
       });
-      return this.requiresVerification('ADMIN') ? this.verification.issue(tx, user.id) : null;
+      return this.verification.issue(tx, user.id);
     });
-    if (code) {
-      // The account exists either way; if sending fails the user can press "Resend code".
-      try {
-        await this.verification.send(email, fullName, code);
-      } catch (err) {
-        this.logger.error('Could not send a verification email (the user can press Resend code)', err as Error);
-      }
+    // The account exists either way; if sending fails the user can press "Resend code".
+    try {
+      await this.verification.send(email, fullName, code);
+      return { email, emailSent: true };
+    } catch (err) {
+      this.logger.error('Could not send a verification email (the user can press Resend code)', err as Error);
+      return { email, emailSent: false };
     }
-    return { email, verificationRequired: code !== null };
   }
 
   async login(dto: LoginDto, client: ClientInfo) {
@@ -188,7 +185,8 @@ export class AuthService {
     if (!user || !valid) {
       throw new UnauthorizedException('Incorrect email or password');
     }
-    if (this.requiresVerification(user.accountType) && !user.emailVerified) {
+    // Every account, admin or teacher, verifies its email before it can sign in.
+    if (!user.emailVerified) {
       // `code` lets the web app send the user to the verification step.
       throw new ForbiddenException({
         statusCode: 403,
@@ -212,19 +210,6 @@ export class AuthService {
       },
     });
     return token;
-  }
-
-  /**
-   * Teachers always verify their email. Admins do too in production, or
-   * wherever REQUIRE_EMAIL_VERIFICATION=true (env validation refuses `false`
-   * in production).
-   */
-  requiresVerification(accountType: 'ADMIN' | 'TEACHER') {
-    return (
-      accountType === 'TEACHER' ||
-      this.config.get('NODE_ENV') === 'production' ||
-      this.config.get('REQUIRE_EMAIL_VERIFICATION') === 'true'
-    );
   }
 
   async logout(sessionId: string) {
@@ -325,9 +310,9 @@ export class AuthService {
     return existing;
   }
 
-  /** Never verified, needs to be, and has made nothing (an admin who created a school is kept). */
-  private isPending(user: { emailVerified: boolean; accountType: 'ADMIN' | 'TEACHER'; schoolsCreated: unknown[] }) {
-    return !user.emailVerified && this.requiresVerification(user.accountType) && user.schoolsCreated.length === 0;
+  /** Never verified and has made nothing (an admin who created a school is kept). */
+  private isPending(user: { emailVerified: boolean; schoolsCreated: unknown[] }) {
+    return !user.emailVerified && user.schoolsCreated.length === 0;
   }
 
   private async createUser<T>(steps: (tx: Tx) => Promise<T>): Promise<T> {
@@ -343,7 +328,7 @@ export class AuthService {
   }
 }
 
-const PENDING_SELECT = { emailVerified: true, accountType: true, schoolsCreated: { select: { id: true }, take: 1 } } as const;
+const PENDING_SELECT = { emailVerified: true, schoolsCreated: { select: { id: true }, take: 1 } } as const;
 
 function tooManyFailures(resetAt: Date) {
   const minutes = Math.max(1, Math.ceil((resetAt.getTime() - Date.now()) / 60_000));
